@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 15 | 2026-07-05 | "Open SSH in Terminal" ignoraba los saltos (hop)     | [Ver detalle](2026-07-05_fix_ssh_terminal_hop.md) |
 | 14 | 2026-07-05 | Release 1.16.4: identidad del fork y paquete .vsix   | [Ver detalle](2026-07-05_release_1_16_4.md) |
 | 13 | 2026-07-05 | main como única rama principal del fork              | [Ver detalle](2026-07-05_git_rama_principal_main.md) |
 | 12 | 2026-07-05 | Limpieza de violaciones tslint preexistentes         | [Ver detalle](2026-07-05_chore_tslint_limpieza.md) |
