@@ -8,6 +8,19 @@ import CustomError from '../customError';
 
 let MAX_OPEN_FD_NUM = 222;
 
+/**
+ * SSH/SFTP transport for the extension, wrapping an ssh2 Client.
+ *
+ * Owns the connection lifecycle: authentication (password, key, agent,
+ * keyboard-interactive), optional multi-hop tunneling through intermediate
+ * hosts, and the SFTP channel used by SFTPFileSystem. A channel or client
+ * closure must end the client so RemoteFs.invalid() reconnects lazily on
+ * the next operation.
+ *
+ * Key lifecycle methods:
+ * - {@link _doConnect} resolves hops/keys and opens the SFTP channel.
+ * - {@link end} tears down this client and any hopping clients.
+ */
 export default class SSHClient extends RemoteClient {
   private sftp: any;
   private hoppingClients: SSHClient[];
@@ -92,6 +105,13 @@ export default class SSHClient extends RemoteClient {
 
     await this._connectSSHClient(this._client, { ...lastOption, sock }, config);
     this.sftp = await this._getSftp(this._client);
+    // A server-side SFTP channel termination (e.g. killed sftp-server or idle
+    // timeout) doesn't emit any event on the ssh2 Client, so the extension
+    // would hang reusing a dead channel. Propagate it as a client end, which
+    // fires onDisconnected and lets the next operation reconnect.
+    this.sftp.on('close', () => {
+      this._client.end();
+    });
 
     if (lastOption.limitOpenFilesOnRemote) {
       if (typeof lastOption.limitOpenFilesOnRemote !== 'boolean') {
@@ -301,8 +321,6 @@ export default class SSHClient extends RemoteClient {
         .on('error', err => {
           reject(new Error(`[${option.host}]: ${err.message}`));
         })
-        .on('close', this.end())
-        .on('end', this.end())
         .connect({
           keepaliveInterval: 1000 * 30, // 30 secs, original
           // keepaliveInterval: 1000 * 600, // 10 mins
