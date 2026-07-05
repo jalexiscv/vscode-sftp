@@ -1,13 +1,12 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { URI } from 'vscode-uri';
 import { upath } from '../core';
 import { pathRelativeToWorkspace, getWorkspaceFolders } from '../host';
 
 // from https://github.com/microsoft/vscode-eslint/blob/d97a8b5e99ad30d2ce32ffa5646447202f873413/server/src/eslintServer.ts#L816
-function getFileSystemPath(uri: URI): string {
-	let result = uri.fsPath;
+function getFileSystemPath(fsPath: string): string {
+	let result = fsPath;
 	if (process.platform === 'win32' && result.length >= 2 && result[1] === ':') {
 		// Node by default uses an upper case drive letter and ESLint uses
 		// === to compare paths which results in the equal check failing
@@ -15,10 +14,15 @@ function getFileSystemPath(uri: URI): string {
 		result = result[0].toUpperCase() + result.substr(1);
 	}
 	if (process.platform === 'win32' || process.platform === 'darwin') {
-		const realpath = fs.realpathSync.native(result);
-		// Only use the real path if only the casing has changed.
-		if (realpath.toLowerCase() === result.toLowerCase()) {
-			result = realpath;
+		try {
+			const realpath = fs.realpathSync.native(result);
+			// Only use the real path if only the casing has changed.
+			if (realpath.toLowerCase() === result.toLowerCase()) {
+				result = realpath;
+			}
+		} catch (_error) {
+			// the path may not exist on disk (e.g. mapping a just-deleted file);
+			// fall back to the path as-is
 		}
 	}
 	return result;
