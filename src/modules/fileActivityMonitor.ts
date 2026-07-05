@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as debounce from 'lodash.debounce';
 import logger from '../logger';
 import { realpathSync } from 'fs';
 import app from '../app';
 import StatusBarItem from '../ui/statusBarItem';
 import { onDidOpenTextDocument, onDidSaveTextDocument, showConfirmMessage } from '../host';
-import { readConfigsFromFile } from './config';
+import { tryLoadConfigs } from './config';
+import { CONFIG_PATH } from '../constants';
 import {
   createFileService,
   getFileService,
@@ -14,7 +17,29 @@ import {
 import { reportError, isValidFile, isConfigFile, isInWorkspace } from '../helper';
 import { downloadFile, uploadFile } from '../fileHandlers';
 
+// vscode glob patterns always use forward slashes
+const CONFIG_GLOB = '**/' + CONFIG_PATH.split(path.sep).join('/');
+const CONFIG_RELOAD_DELAY = 500;
+
 let workspaceWatcher: vscode.Disposable;
+let configFileWatcher: vscode.FileSystemWatcher;
+
+// an in-editor save and the filesystem watcher can fire for the same change;
+// debounce per config file so the reload runs only once
+const debouncedConfigReloads = new Map<string, (uri: vscode.Uri) => void>();
+
+function requestConfigReload(uri: vscode.Uri, handler: (uri: vscode.Uri) => void) {
+  const key = uri.fsPath;
+  const existing = debouncedConfigReloads.get(key);
+  if (existing) {
+    existing(uri);
+    return;
+  }
+
+  const reload = debounce(handler, CONFIG_RELOAD_DELAY);
+  debouncedConfigReloads.set(key, reload);
+  reload(uri);
+}
 
 async function handleConfigSave(uri: vscode.Uri) {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
@@ -27,9 +52,10 @@ async function handleConfigSave(uri: vscode.Uri) {
   // dispose old service
   findAllFileService(service => service.workspace === workspacePath).forEach(disposeFileService);
 
-  // create new service
+  // create new service. tryLoadConfigs resolves to [] when the config file
+  // was removed (e.g. a git branch switch), leaving no stale services behind.
   try {
-    const configs = await readConfigsFromFile(uri.fsPath);
+    const configs = await tryLoadConfigs(workspacePath);
     configs.forEach(config => createFileService(config, workspacePath));
   } catch (error) {
     reportError(error);
@@ -92,6 +118,9 @@ function watchWorkspace({
   if (workspaceWatcher) {
     workspaceWatcher.dispose();
   }
+  if (configFileWatcher) {
+    configFileWatcher.dispose();
+  }
 
   workspaceWatcher = onDidSaveTextDocument((doc: vscode.TextDocument) => {
     const uri = doc.uri;
@@ -105,12 +134,23 @@ function watchWorkspace({
     }
 
     if (isConfigFile(uri)) {
-      onDidSaveSftpConfig(uri);
+      requestConfigReload(uri, onDidSaveSftpConfig);
       return;
     }
 
     onDidSaveFile(uri);
   });
+
+  // reload the config when sftp.json changes outside the editor too
+  // (e.g. a git branch switch or an external tool rewriting it)
+  configFileWatcher = vscode.workspace.createFileSystemWatcher(CONFIG_GLOB);
+  const onConfigFileEvent = (uri: vscode.Uri) => {
+    logger.info(`[config-watcher] ${uri.fsPath}`);
+    requestConfigReload(uri, onDidSaveSftpConfig);
+  };
+  configFileWatcher.onDidCreate(onConfigFileEvent);
+  configFileWatcher.onDidChange(onConfigFileEvent);
+  configFileWatcher.onDidDelete(onConfigFileEvent);
 }
 
 function init() {
@@ -131,6 +171,9 @@ function init() {
 function destory() {
   if (workspaceWatcher) {
     workspaceWatcher.dispose();
+  }
+  if (configFileWatcher) {
+    configFileWatcher.dispose();
   }
 }
 
