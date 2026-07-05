@@ -168,12 +168,12 @@ export default class SFTPFileSystem extends RemoteFileSystem {
     return new Promise((resolve, reject) => {
       this.sftp.chmod(path, mode, err => {
         if(err) {
-          reject(err)
-          return
+          reject(err);
+          return;
         }
         resolve();
       });
-    })
+    });
   }
 
   get(path, option?: FileOption): Promise<Readable> {
