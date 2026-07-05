@@ -154,6 +154,12 @@ export default class FTPFileSystem extends RemoteFileSystem {
 
   async put(input: Readable, path, _option?: FileOption): Promise<void> {
     let inputError: Error | undefined;
+    // node-ftp pauses the input and only pipes (resumes) it after the server
+    // accepts the STOR with a 150 reply, so until then a retry is safe
+    let transferStarted = false;
+    input.once('resume', () => {
+      transferStarted = true;
+    });
     input.once('error', err => {
       inputError = err;
       this.ftp.abort(abortErr => {
@@ -166,7 +172,27 @@ export default class FTPFileSystem extends RemoteFileSystem {
     try {
       await this.atomicPut(input, path);
     } catch (error) {
-      throw inputError || error;
+      const err = inputError || error;
+      // some servers (e.g. proftpd with mod_rename) reject a STOR over an
+      // existing file with 550. If the input wasn't consumed yet, delete the
+      // target and retry once.
+      if (inputError || transferStarted || (error as any).code !== 550) {
+        throw err;
+      }
+
+      let existing: FileStats | undefined;
+      try {
+        existing = await this.lstat(path);
+      } catch (_e) {
+        throw err;
+      }
+      if (existing.type !== FileType.File) {
+        throw err;
+      }
+
+      logger.info(`STOR rejected over existing file, deleting and retrying: ${path}`);
+      await this.atomicDeleteFile(path);
+      await this.atomicPut(input, path);
     }
   }
 
