@@ -24,6 +24,25 @@ export function onDidSaveTextDocument(listener: (e: vscode.TextDocument) => any,
   return vscode.workspace.onDidSaveTextDocument(listener, thisArgs);
 }
 
+// notebook documents (e.g. .ipynb) don't fire onDidSaveTextDocument.
+// The notebook api exists since vscode 1.67 and our engine allows 1.64,
+// so probe for it at runtime; on older hosts it returns a noop disposable.
+export function onDidSaveNotebookDocument(listener: (uri: vscode.Uri) => any, thisArgs?: any) {
+  const workspace = vscode.workspace as any;
+  if (typeof workspace.onDidSaveNotebookDocument !== 'function') {
+    return {
+      dispose() {
+        // noop: api not available on this vscode
+      },
+    } as vscode.Disposable;
+  }
+
+  return workspace.onDidSaveNotebookDocument(
+    notebook => listener(notebook.uri),
+    thisArgs
+  ) as vscode.Disposable;
+}
+
 export function onDidOpenTextDocument(listener: (e: vscode.TextDocument) => any, thisArgs?: any) {
   return vscode.workspace.onDidOpenTextDocument(listener, thisArgs);
 }

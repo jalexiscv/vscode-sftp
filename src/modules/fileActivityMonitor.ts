@@ -5,7 +5,12 @@ import logger from '../logger';
 import { realpathSync } from 'fs';
 import app from '../app';
 import StatusBarItem from '../ui/statusBarItem';
-import { onDidOpenTextDocument, onDidSaveTextDocument, showConfirmMessage } from '../host';
+import {
+  onDidOpenTextDocument,
+  onDidSaveTextDocument,
+  onDidSaveNotebookDocument,
+  showConfirmMessage,
+} from '../host';
 import { tryLoadConfigs } from './config';
 import { CONFIG_PATH } from '../constants';
 import {
@@ -22,6 +27,7 @@ const CONFIG_GLOB = '**/' + CONFIG_PATH.split(path.sep).join('/');
 const CONFIG_RELOAD_DELAY = 500;
 
 let workspaceWatcher: vscode.Disposable;
+let notebookWatcher: vscode.Disposable;
 let configFileWatcher: vscode.FileSystemWatcher;
 
 // an in-editor save and the filesystem watcher can fire for the same change;
@@ -120,12 +126,14 @@ function watchWorkspace({
   if (workspaceWatcher) {
     workspaceWatcher.dispose();
   }
+  if (notebookWatcher) {
+    notebookWatcher.dispose();
+  }
   if (configFileWatcher) {
     configFileWatcher.dispose();
   }
 
-  workspaceWatcher = onDidSaveTextDocument((doc: vscode.TextDocument) => {
-    const uri = doc.uri;
+  const handleSavedUri = (uri: vscode.Uri) => {
     if (!isValidFile(uri) || !isInWorkspace(uri.fsPath)) {
       return;
     }
@@ -141,7 +149,12 @@ function watchWorkspace({
     }
 
     onDidSaveFile(uri);
-  });
+  };
+
+  workspaceWatcher = onDidSaveTextDocument((doc: vscode.TextDocument) => handleSavedUri(doc.uri));
+  // notebooks (e.g. .ipynb) save through the notebook api, not
+  // onDidSaveTextDocument
+  notebookWatcher = onDidSaveNotebookDocument(handleSavedUri);
 
   // reload the config when sftp.json changes outside the editor too
   // (e.g. a git branch switch or an external tool rewriting it)
@@ -173,6 +186,9 @@ function init() {
 function destory() {
   if (workspaceWatcher) {
     workspaceWatcher.dispose();
+  }
+  if (notebookWatcher) {
+    notebookWatcher.dispose();
   }
   if (configFileWatcher) {
     configFileWatcher.dispose();

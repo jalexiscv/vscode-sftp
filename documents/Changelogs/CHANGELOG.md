@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 17 | 2026-07-05 | uploadOnSave al guardar notebooks (.ipynb)           | [Ver detalle](2026-07-05_fix_upload_on_save_notebooks.md) |
 | 16 | 2026-07-05 | Symlinks a directorios navegables en Remote Explorer | [Ver detalle](2026-07-05_fix_explorer_symlinks.md) |
 | 15 | 2026-07-05 | "Open SSH in Terminal" ignoraba los saltos (hop)     | [Ver detalle](2026-07-05_fix_ssh_terminal_hop.md) |
 | 14 | 2026-07-05 | Release 1.16.4: identidad del fork y paquete .vsix   | [Ver detalle](2026-07-05_release_1_16_4.md) |
