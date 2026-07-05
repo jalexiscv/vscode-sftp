@@ -24,11 +24,34 @@ function adaptPath(filepath) {
   return filepath.replace(/\\\\/g, '/').replace(/\\/g, '/');
 }
 
+// openssh -J destination syntax: [user@]host[:port]
+function toJumpDestination(hop: { host: string; port?: number; username?: string }) {
+  let dst = hop.username ? `${hop.username}@${hop.host}` : hop.host;
+  if (hop.port) {
+    dst += `:${hop.port}`;
+  }
+  return dst;
+}
+
+function getJumpOption(hop): string {
+  const hops = Array.isArray(hop) ? hop : [hop];
+  const destinations = hops.filter(h => h && h.host).map(toJumpDestination);
+  if (destinations.length <= 0) {
+    return '';
+  }
+
+  return `-J ${destinations.join(',')}`;
+}
+
 function getSshCommand(
-  config: { host: string; port: number; username: string },
+  config: { host: string; port: number; username: string; hop?: any },
   extraOption?: string
 ) {
   let sshStr = `ssh -t ${config.username}@${config.host} -p ${config.port}`;
+  const jumpOption = getJumpOption(config.hop);
+  if (jumpOption) {
+    sshStr += ` ${jumpOption}`;
+  }
   if (extraOption) {
     sshStr += ` ${extraOption}`;
   }
@@ -78,6 +101,7 @@ export default checkCommand({
       host: remoteConfig.host,
       port: remoteConfig.port,
       username: remoteConfig.username,
+      hop: remoteConfig.hop,
     };
     const terminal = vscode.window.createTerminal(remoteConfig.name);
     let sshCommand;
