@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as debounce from 'lodash.debounce';
 import logger from '../logger';
-import { isValidFile, fileDepth } from '../helper';
+import { isValidFile, fileDepth, isSamePath } from '../helper';
 import { upload, removeRemote } from '../fileHandlers';
 import { WatcherService, TransferDirection } from '../core';
 import app from '../app';
@@ -28,7 +28,7 @@ function doUpload() {
 
   files.forEach(async uri => {
     // current target is still in downloading, so don't upload it.
-    if (currentDownloadTasks.find(task => task.localFsPath === uri.fsPath)) {
+    if (currentDownloadTasks.find(task => isSamePath(task.localFsPath, uri.fsPath))) {
       return;
     }
 

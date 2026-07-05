@@ -55,6 +55,14 @@ function normalizePathForTrie(pathname) {
   return path.normalize(pathname);
 }
 
+// windows filesystems are case-insensitive: vscode may report a saved file
+// with a casing different from the configured workspace one, so casefold the
+// whole trie key there. Other platforms keep case-sensitive keys.
+function toTrieKey(pathname) {
+  const normalized = normalizePathForTrie(pathname);
+  return isWindows ? normalized.toLowerCase() : normalized;
+}
+
 export function getBasePath(context: string, workspace: string) {
   let dirpath;
   if (context) {
@@ -95,7 +103,7 @@ export function createFileService(config: any, workspace: string) {
 
   logger.info(`config at ${normalizedBasePath}`, maskConfig(config));
 
-  serviceManager.add(normalizedBasePath, service);
+  serviceManager.add(toTrieKey(normalizedBasePath), service);
   service.name = config.name;
   service.setConfigValidator(validateConfig);
   service.setWatcherService(watcherService);
@@ -135,14 +143,14 @@ export function getFileService(uri: Uri): FileService {
       fileService = remoteRoot.explorerContext.fileService;
     }
   } else {
-    fileService = serviceManager.findPrefix(normalizePathForTrie(uri.fsPath));
+    fileService = serviceManager.findPrefix(toTrieKey(uri.fsPath));
   }
 
   return fileService;
 }
 
 export function disposeFileService(fileService: FileService) {
-  serviceManager.remove(fileService.baseDir);
+  serviceManager.remove(toTrieKey(fileService.baseDir));
   fileService.dispose();
 }
 

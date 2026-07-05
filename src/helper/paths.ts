@@ -46,6 +46,15 @@ export function isSubpathOf(possiableParentPath: string, pathname: string) {
   return path.normalize(pathname).indexOf(path.normalize(possiableParentPath)) === 0;
 }
 
+export function isSamePath(a: string, b: string) {
+  if (a === b) {
+    return true;
+  }
+
+  // windows paths are case-insensitive
+  return process.platform === 'win32' && a.toLowerCase() === b.toLowerCase();
+}
+
 export function replaceHomePath(pathname: string) {
   return pathname.substr(0, 2) === '~/' ? path.join(os.homedir(), pathname.slice(2)) : pathname;
 }
