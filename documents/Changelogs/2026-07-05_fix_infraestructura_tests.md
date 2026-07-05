@@ -36,6 +36,9 @@ offset horario fallaba. Tres causas independientes:
 ### [MODIFICADO] `__mocks__/fs.js`
 - `createWriteStream` del mock neutraliza el cierre interno del stream cuando el llamador pasa `fd` con `autoClose: false`, replicando el contrato del `fs` real (el llamador conserva la propiedad del fd).
 
+### [MODIFICADO] `tsconfig.json`
+- Se excluyen `**/__tests__` y `__mocks__` del programa TypeScript: los `.d.ts` de memfs 4 usan sintaxis que TypeScript 3.9 no parsea y rompían `npm run compile` al entrar por el import de los tests. Jest transpila los tests con su propio preprocessor, por lo que no se ven afectados.
+
 ## Impacto
 
 - `npm test` vuelve a ser una señal fiable: 4/4 suites y 42/42 tests en verde.
