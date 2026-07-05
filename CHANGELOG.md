@@ -1,3 +1,8 @@
+## 1.16.5 - 2026-07-05 (fork jalexiscv/vscode-sftp)
+* Fix : `Open SSH in Terminal` now uses the configured `hop` chain via OpenSSH ProxyJump (`-J`) (upstream issue [#441](https://github.com/Natizyskunk/vscode-sftp/issues/441)).
+* Fix : Remote symlinks pointing to directories are now browsable in the Remote Explorer over SFTP (upstream issue [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)).
+* Fix : `uploadOnSave` now triggers when saving notebook documents such as `.ipynb` (notebook saves don't fire `onDidSaveTextDocument`).
+
 ## 1.16.4 - 2026-07-05 (fork jalexiscv/vscode-sftp)
 * Fix : Restore compilation of the develop codebase (missing constant imports from upstream PR [#408](https://github.com/Natizyskunk/vscode-sftp/pull/408), broken `vscode-uri` import).
 * Fix : Upgrade `ssh2` to v1.17.0, fixing "isDate is not a function" on recent VSCode/Node runtimes (upstream issues [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590), PR [#595](https://github.com/Natizyskunk/vscode-sftp/pull/595)).
