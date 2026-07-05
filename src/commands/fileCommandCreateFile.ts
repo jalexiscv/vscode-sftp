@@ -29,9 +29,9 @@ export default checkFileCommand({
         return Uri.parse(targets.toString() + '/' + result);
     }
 
-    
+
     return undefined;
-    
+
 /*
     const filename = Array.isArray(targets)
       ? targets.map(t => upath.basename(t.fsPath)).join(',')

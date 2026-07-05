@@ -5,5 +5,5 @@ import fileCommandUploadActiveFile from './fileCommandUploadActiveFile';
 
 export default checkFileCommand({
   ...fileCommandUploadActiveFile,
-  id: COMMAND_UPLOAD_ACTIVEFILE_TO_ALL_PROFILES
+  id: COMMAND_UPLOAD_ACTIVEFILE_TO_ALL_PROFILES,
 });

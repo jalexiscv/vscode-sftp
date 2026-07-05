@@ -28,8 +28,8 @@ interface FileHandlerOption<T> {
 export function handleCtxFromUri(uri: Uri): FileHandlerContext {
   const fileService = getFileService(uri);
   if (!fileService) {
-    if (uri.toString(true) == "file:///${command:sftp.sync.remoteToLocal}") {
-      throw '';
+    if (uri.toString(true) === 'file:///${command:sftp.sync.remoteToLocal}') {
+      throw new Error('');
     } else {
       throw new Error(`Config Not Found. (${uri.toString(true)})`);
     }
@@ -55,8 +55,8 @@ export function handleCtxFromUri(uri: Uri): FileHandlerContext {
 export function allHandleCtxFromUri(uri: Uri): Array<FileHandlerContext> {
   const fileService = getFileService(uri);
   if (!fileService) {
-    if (uri.toString(true) == "file:///${command:sftp.sync.remoteToLocal}") {
-      throw '';
+    if (uri.toString(true) === 'file:///${command:sftp.sync.remoteToLocal}') {
+      throw new Error('');
     } else {
       throw new Error(`Config Not Found. (${uri.toString(true)})`);
     }
@@ -80,7 +80,7 @@ export function allHandleCtxFromUri(uri: Uri): Array<FileHandlerContext> {
       config,
       target,
     };
-  })
+  });
 }
 
 export default function createFileHandler<T>(

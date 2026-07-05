@@ -72,7 +72,7 @@ export default class LocalFileSystem extends FileSystem {
 
   async chmod(path: string, mode: number): Promise<void> {
     return new Promise((resolve, reject) => {
-      fs.chmod(path, mode, (err) => {
+      fs.chmod(path, mode,err => {
         if (err) {
           reject(err);
           return;
