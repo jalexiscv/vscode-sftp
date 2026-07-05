@@ -80,6 +80,12 @@ export default abstract class FileSystem {
   abstract chmod(path: string, mode: number): Promise<void>;
   abstract list(dir: string, option?): Promise<FileEntry[]>;
   abstract lstat(path: string): Promise<FileStats>;
+
+  // stat follows symlinks; file systems without a native followed-stat
+  // fall back to lstat
+  stat(path: string): Promise<FileStats> {
+    return this.lstat(path);
+  }
   abstract readlink(path: string): Promise<string>;
   abstract symlink(targetPath: string, path: string): Promise<void>;
   abstract unlink(path: string): Promise<void>;

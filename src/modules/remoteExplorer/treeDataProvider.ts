@@ -154,10 +154,19 @@ export default class RemoteTreeData
       return !ignore.ignores(relativePath);
     }
 
-    return fileEntries
-      .filter(filterFile)
-      .map(file => {
-        const isDirectory = file.type === FileType.Directory;
+    const children = await Promise.all(
+      fileEntries.filter(filterFile).map(async file => {
+        let isDirectory = file.type === FileType.Directory;
+        // a symlink may point to a directory: follow it so the tree can
+        // expand it instead of rendering a dead leaf
+        if (file.type === FileType.SymbolicLink) {
+          try {
+            const followedStat = await remotefs.stat(file.fspath);
+            isDirectory = followedStat.type === FileType.Directory;
+          } catch (_error) {
+            // broken link: keep it as a leaf
+          }
+        }
         const newResource = UResource.updateResource(item.resource, {
           remotePath: file.fspath,
         });
@@ -175,7 +184,9 @@ export default class RemoteTreeData
           return newItem;
         }
       })
-      .sort(dirFirstSort);
+    );
+
+    return children.sort(dirFirstSort);
   }
 
   async getParent(item: ExplorerChild): Promise<ExplorerItem> {
