@@ -6,7 +6,7 @@ import app from '../app';
 import logger from '../logger';
 import { getUserSetting } from '../host';
 import { replaceHomePath, resolvePath } from '../helper';
-import { SETTING_KEY_REMOTE } from '../constants';
+import { SETTING_KEY_REMOTE, CONFIG_PATH } from '../constants';
 import upath from './upath';
 import Ignore from './ignore';
 import { FileSystem } from './fs';
@@ -119,10 +119,15 @@ type ConfigValidator = (x: any) => { message: string };
 
 const DEFAULT_SSHCONFIG_FILE = '~/.ssh/config';
 
+// root-anchored gitignore pattern for the extension config file
+const CONFIG_IGNORE_PATTERN = '/' + CONFIG_PATH.split(path.sep).join('/');
+
 function filesIgnoredFromConfig(config: FileServiceConfig): string[] {
   const cache = app.fsCache;
-  const ignore: string[] =
-    config.ignore && config.ignore.length ? config.ignore : [];
+  // the config file holds credentials; never let a sync/upload ship it
+  const ignore: string[] = [CONFIG_IGNORE_PATTERN].concat(
+    config.ignore && config.ignore.length ? config.ignore : []
+  );
 
   const ignoreFile = config.ignoreFile;
   if (!ignoreFile) {
@@ -598,17 +603,24 @@ export default class FileService {
     }
 
     const ignore = Ignore.from(ignoreConfig);
+    const isWindows = process.platform === 'win32';
     const ignoreFunc = fsPath => {
       // vscode will always return path with / as separator
       const normalizedPath = path.normalize(fsPath);
+      // windows paths are case-insensitive
+      const isLocal = isWindows
+        ? normalizedPath.toLowerCase().indexOf(localContext.toLowerCase()) === 0
+        : normalizedPath.indexOf(localContext) === 0;
       let relativePath;
-      if (normalizedPath.indexOf(localContext) === 0) {
-        // local path
+      if (isLocal) {
         relativePath = path.relative(localContext, fsPath);
       } else {
         // remote path
         relativePath = upath.relative(remoteContext, fsPath);
       }
+
+      // gitignore matching expects unix separators
+      relativePath = relativePath.split(path.sep).join('/');
 
       // skip root
       return relativePath !== '' && ignore.ignores(relativePath);
