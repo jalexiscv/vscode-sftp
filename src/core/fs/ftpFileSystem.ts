@@ -43,6 +43,19 @@ function decodeListingName(name: string): string {
   return Buffer.from(utf8, 'utf8').equals(bytes) ? utf8 : name;
 }
 
+/**
+ * Remote filesystem over plain FTP, backed by the `ftp` package client.
+ *
+ * All commands are serialized through a single-concurrency queue because an
+ * FTP control connection can only run one command at a time. Listings arrive
+ * latin1-decoded from the client, so names are re-decoded to utf8 when valid
+ * (see {@link decodeListingName}).
+ *
+ * Key lifecycle methods:
+ * - {@link list} lists and normalizes directory entries.
+ * - {@link put} uploads with a one-shot retry for servers that reject STOR
+ *   over an existing file (proftpd mod_rename).
+ */
 export default class FTPFileSystem extends RemoteFileSystem {
   private _supportMFMT: boolean = true;
 

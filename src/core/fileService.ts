@@ -372,6 +372,20 @@ enum Event {
 
 let id = 0;
 
+/**
+ * The unit that binds one sftp.json config entry to a local base directory.
+ *
+ * Owns everything derived from that config: profile resolution, the ignore
+ * matcher (which always excludes the config file itself), the file watcher,
+ * transfer schedulers and the lazily-created remote filesystem. Created by
+ * serviceManager, which indexes instances by base path to answer "which
+ * service handles this file?".
+ *
+ * Key lifecycle methods:
+ * - {@link getConfig} resolves the active profile into a ServiceConfig.
+ * - {@link beforeTransfer}/{@link afterTransfer} expose transfer hooks.
+ * - {@link dispose} tears down watcher, schedulers and remote fs.
+ */
 export default class FileService {
   private _eventEmitter: EventEmitter = new EventEmitter();
   private _name: string;
