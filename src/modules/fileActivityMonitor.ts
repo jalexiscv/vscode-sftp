@@ -72,13 +72,15 @@ async function handleFileSave(uri: vscode.Uri) {
 
   const config = fileService.getConfig();
   if (config.uploadOnSave) {
-    const fspath = await realpathSync.native(uri.fsPath);
-    uri = vscode.Uri.file(fspath);
-    logger.info(`[file-save] ${fspath}`);
+    let fspath = uri.fsPath;
     try {
+      // resolve the on-disk casing so the remote path matches it
+      fspath = realpathSync.native(uri.fsPath);
+      uri = vscode.Uri.file(fspath);
+      logger.info(`[file-save] ${fspath}`);
       await uploadFile(uri);
     } catch (error) {
-      logger.error(error, `download ${fspath}`);
+      logger.error(error, `upload ${fspath}`);
       app.sftpBarItem.updateStatus(StatusBarItem.Status.error);
     }
   }

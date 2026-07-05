@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 11 | 2026-07-05 | Robustez del handler de uploadOnSave                 | [Ver detalle](2026-07-05_fix_upload_on_save_robustez.md) |
 | 10 | 2026-07-05 | Sobrescritura FTP rechazada (mod_rename, error 550)  | [Ver detalle](2026-07-05_fix_ftp_sobrescritura.md) |
 | 9  | 2026-07-05 | Nombres no ASCII corruptos en listados FTP           | [Ver detalle](2026-07-05_fix_ftp_encoding.md) |
 | 8  | 2026-07-05 | Ignore: sftp.json nunca se sube; patrones en Windows | [Ver detalle](2026-07-05_fix_sistema_ignore.md) |
