@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 13 | 2026-07-05 | main como única rama principal del fork              | [Ver detalle](2026-07-05_git_rama_principal_main.md) |
 | 12 | 2026-07-05 | Limpieza de violaciones tslint preexistentes         | [Ver detalle](2026-07-05_chore_tslint_limpieza.md) |
 | 11 | 2026-07-05 | Robustez del handler de uploadOnSave                 | [Ver detalle](2026-07-05_fix_upload_on_save_robustez.md) |
 | 10 | 2026-07-05 | Sobrescritura FTP rechazada (mod_rename, error 550)  | [Ver detalle](2026-07-05_fix_ftp_sobrescritura.md) |

@@ -4,13 +4,13 @@ Este documento establece cómo gestionar ramas, commits y revisiones para el có
 
 ## 0. Contexto del Repositorio
 
-*   Este repositorio es un **clon del upstream** [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp). La rama por defecto del upstream es `develop`; las releases se publican desde `master`.
-*   El remoto `origin` apunta al upstream, sobre el cual **no tenemos permisos de escritura**. **Nunca hacer push a `origin`.** Cuando exista el fork propio, agregarlo como remoto (p. ej. `git remote add fork <url-del-fork>`) y hacer push únicamente allí.
-*   Las ramas `develop` y `master` se mantienen limpias como referencia del upstream; el trabajo del fork se hace en ramas propias.
+*   Este proyecto es un **fork** de [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), publicado en [jalexiscv/vscode-sftp](https://github.com/jalexiscv/vscode-sftp).
+*   La **rama principal del fork es `main`**: contiene la versión corregida (todas las ramas de trabajo se integran allí) y es la única rama de larga vida.
+*   Remotos: `fork` apunta a `jalexiscv/vscode-sftp` (aquí se hace push); `origin` apunta al upstream, **solo lectura** — sirve como referencia y para traer cambios futuros del upstream (`git fetch origin`). **Nunca hacer push a `origin`.**
 
 ## 1. Ramas
 
-*   **Nunca trabajar directamente sobre `develop` ni `master`.** Una rama por cambio.
+*   **Nunca trabajar directamente sobre `main`.** Una rama por cambio, que se integra a `main` con merge `--no-ff` y se **elimina** después de integrarse (local y remoto): solo `main` permanece.
 *   Nomenclatura: `tipo/descripcion-breve`, opcionalmente con el área de `src/` afectada.
     *   `fix/sftp-reconnect-timeout`
     *   `feat/remote-explorer-refresh`
@@ -45,7 +45,7 @@ Este documento establece cómo gestionar ramas, commits y revisiones para el có
 
 ## 4. Revisión (Pull Requests)
 
-*   Todo cambio no trivial entra por **PR** contra la rama de integración del fork, no push directo.
+*   Todo cambio no trivial entra por **PR** contra `main`, no push directo.
 *   La descripción del PR resume el qué y el porqué, y enlaza la entrada de changelog correspondiente en `documents/Changelogs/`.
 *   No hacer merge con la suite de pruebas en rojo (`npm test`) ni con el build roto (`npm run compile`).
 
