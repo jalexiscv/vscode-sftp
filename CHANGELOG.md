@@ -1,3 +1,16 @@
+## 1.16.4 - 2026-07-05 (fork jalexiscv/vscode-sftp)
+* Fix : Restore compilation of the develop codebase (missing constant imports from upstream PR [#408](https://github.com/Natizyskunk/vscode-sftp/pull/408), broken `vscode-uri` import).
+* Fix : Upgrade `ssh2` to v1.17.0, fixing "isDate is not a function" on recent VSCode/Node runtimes (upstream issues [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590), PR [#595](https://github.com/Natizyskunk/vscode-sftp/pull/595)).
+* Fix : Reconnect automatically after a server-side SFTP channel termination instead of hanging (upstream PR [#582](https://github.com/Natizyskunk/vscode-sftp/pull/582)).
+* Fix : "Error: Config Not Found" on save when the reported path casing differs from the workspace one on Windows (related to upstream PR [#447](https://github.com/Natizyskunk/vscode-sftp/pull/447)).
+* Fix : Reload configuration when sftp.json changes outside the editor, e.g. a git branch switch (upstream PR [#494](https://github.com/Natizyskunk/vscode-sftp/pull/494)).
+* Security : Never upload `.vscode/sftp.json` (credentials) to the server, regardless of the user ignore config.
+* Fix : Ignore patterns now work on Windows (gitignore matching received `\`-separated paths).
+* Fix : Recover UTF-8 file names in FTP listings decoded as latin1 (garbled non-ASCII directories, upstream PR [#443](https://github.com/Natizyskunk/vscode-sftp/pull/443)).
+* Fix : Retry STOR once after a 550 rejection over an existing file (proftpd mod_rename servers, upstream issue [#420](https://github.com/Natizyskunk/vscode-sftp/issues/420)).
+* Fix : uploadOnSave handler robustness (wrong "download" log label, unhandled ENOENT when the file disappears right after saving).
+* Chore : Repair the test infrastructure (Jest 29 transformer, memfs 4 on Node 22) and clean up all pre-existing tslint violations.
+
 ## 1.16.3 - 2023-06-16
 * [#356] New Feature : Upload to all profiles (Pull request [#313](https://github.com/Natizyskunk/vscode-sftp/pull/313) from @wewawa vscode-sftp:create_multi_command).
 * [#357] Fix : Correcting Typo 'avaliable' => 'available' (Pull request [#343](https://github.com/Natizyskunk/vscode-sftp/pull/343) from @kjo-sdds vscode-sftp:develop).
