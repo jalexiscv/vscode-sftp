@@ -1,7 +1,7 @@
 # sftp sync extension for VS Code
 
-New maintained and updated version by [@Natizyskunk](https://github.com/Natizyskunk/) 😀 <!-- and [@satiromarra](https://github.com/satiromarra) --> <br>
-(Forked from the no longer maintained [liximomo's SFTP plugin](https://github.com/liximomo/vscode-sftp.git))
+**Corrected fork by [@jalexiscv](https://github.com/jalexiscv)** — fixes the most-reported bugs of the original project (see [CHANGELOG](CHANGELOG.md), v1.16.4). <br>
+(Forked from [Natizyskunk's vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), itself forked from the no longer maintained [liximomo's SFTP plugin](https://github.com/liximomo/vscode-sftp.git))
 
 - VS Code marketplace : https://marketplace.visualstudio.com/items?itemName=Natizyskunk.sftp <br>
 - VSIX release : https://github.com/Natizyskunk/vscode-sftp/releases/
