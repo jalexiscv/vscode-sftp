@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 9  | 2026-07-05 | Nombres no ASCII corruptos en listados FTP           | [Ver detalle](2026-07-05_fix_ftp_encoding.md) |
 | 8  | 2026-07-05 | Ignore: sftp.json nunca se sube; patrones en Windows | [Ver detalle](2026-07-05_fix_sistema_ignore.md) |
 | 7  | 2026-07-05 | Recarga de sftp.json ante cambios externos (git)     | [Ver detalle](2026-07-05_fix_recarga_sftp_json.md) |
 | 6  | 2026-07-05 | "Config Not Found" por casing de rutas en Windows    | [Ver detalle](2026-07-05_fix_config_not_found_casing.md) |

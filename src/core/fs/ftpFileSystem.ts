@@ -34,6 +34,15 @@ function toNumMode(rightObj) {
   return parseInt(modeStr, 8);
 }
 
+// the ftp package decodes every listing as latin1, so utf8 names from the
+// server arrive mojibaked. Reinterpret them as utf8 when the byte sequence
+// is valid utf8; otherwise keep the original (a real latin1 server).
+function decodeListingName(name: string): string {
+  const bytes = Buffer.from(name, 'binary');
+  const utf8 = bytes.toString('utf8');
+  return Buffer.from(utf8, 'utf8').equals(bytes) ? utf8 : name;
+}
+
 export default class FTPFileSystem extends RemoteFileSystem {
   private _supportMFMT: boolean = true;
 
@@ -255,9 +264,13 @@ export default class FTPFileSystem extends RemoteFileSystem {
         // item will be a string if ftp fail to parse it (https://github.com/liximomo/vscode-sftp/issues/308)
         // we simply ignore it by check whether it has a name property
         .filter(item => item.name && item.name !== '.' && item.name !== '..')
-        .map(item =>
-          this.toFileEntry(this.pathResolver.join(dir, item.name), item)
-        )
+        .map(item => {
+          const name = decodeListingName(item.name);
+          return this.toFileEntry(this.pathResolver.join(dir, name), {
+            ...item,
+            name,
+          });
+        })
     );
   }
 
