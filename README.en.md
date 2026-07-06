@@ -76,6 +76,13 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 | **Security** | **Secure password saving** with VS Code SecretStorage (the OS keychain): after a successful connection the extension offers to remember the typed password, injects it automatically on later connections and forgets it if the server rejects it. New `SFTP: Forget Saved Passwords` command and `sftp.promptToSavePassword` setting |
 | **Quality** | GitHub Actions CI (lint, build and tests on every push/PR) and automated release packaging on tags |
 
+### [v1.18.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.18.0) — modern FTP
+
+| Area | Change |
+|------|--------|
+| **FTP** | **FTP backend migrated from the abandoned `ftp` package (~10 years unmaintained) to [`basic-ftp`](https://github.com/patrickjuchli/basic-ftp)**: native UTF-8, robust FTPS and reliable passive mode. Validated against a real FTPS server with a new integration test (`ftp` baseline: 7/8 with `read ECONNRESET`; `basic-ftp`: 8/8). Resolves the FTP bug cluster of the backlog (PASV, FTPS with FileZilla, non-ASCII names, ECONNRESET) |
+| **Note** | `basic-ftp` supports passive mode only; FTP active mode (`passive: false`) is no longer supported |
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -100,7 +107,7 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 Or from the command line:
 
 ```
-code --install-extension sftp-1.17.0.vsix
+code --install-extension sftp-1.18.0.vsix
 ```
 
 ## Documentation

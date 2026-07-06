@@ -1,3 +1,8 @@
+## 1.18.0 - 2026-07-05 (fork jalexiscv/vscode-sftp)
+* FTP : **Migrated the FTP backend from the abandoned `ftp` package (0.3.10, ~10 years unmaintained) to the actively maintained [`basic-ftp`](https://github.com/patrickjuchli/basic-ftp)**. Native UTF-8 negotiation, robust FTPS (explicit/implicit) and passive mode — validated against a real FTPS server with a new env-gated integration test (baseline `ftp`: 7/8 with a `read ECONNRESET`; `basic-ftp`: 8/8). Expected to resolve the FTP bug cluster of the upstream backlog ("unable to parse pasv server response", FTPS with FileZilla, garbled non-ASCII names, ECONNRESET).
+* Removed the abandoned `ftp` dependency.
+* Note : `basic-ftp` supports passive mode only; FTP active mode (`passive: false`) is no longer supported.
+
 ## 1.17.0 - 2026-07-05 (fork jalexiscv/vscode-sftp)
 * New Feature : **Securely save passwords** with VS Code SecretStorage (OS keychain). After a successful connection with a typed password the extension offers to remember it; stale passwords are forgotten automatically on auth failure. New command `SFTP: Forget Saved Passwords` and setting `sftp.promptToSavePassword` (most requested feature of the upstream backlog, replaces the discarded approach of upstream PR [#545](https://github.com/Natizyskunk/vscode-sftp/pull/545)).
 * CI : GitHub Actions workflow verifying lint, build and tests on every push/PR, plus automated release packaging on tags.
