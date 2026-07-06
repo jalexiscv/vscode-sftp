@@ -2,6 +2,13 @@ import upath from './upath';
 import { promptForPassword } from '../host';
 import logger from '../logger';
 import app from '../app';
+import {
+  passwordKey,
+  getSavedPassword,
+  removeSavedPassword,
+  offerToSavePassword,
+  isSavedPasswordsAvailable,
+} from '../modules/savedPasswords';
 import { ConnectOption } from './remote-client/remoteClient';
 import {
   FileSystem,
@@ -15,6 +22,23 @@ function hashOption(opiton) {
   return Object.keys(opiton)
     .map(key => opiton[key])
     .join('');
+}
+
+// mirror of the clients' _hasProvideAuth: a saved password only applies when
+// the config brings no authentication of its own
+function hasExplicitAuth(option: ConnectOption): boolean {
+  return (
+    option.password !== undefined ||
+    option.privateKeyPath !== undefined ||
+    option.privateKey !== undefined ||
+    option.agent !== undefined ||
+    option.interactiveAuth === true ||
+    (Array.isArray(option.interactiveAuth) && option.interactiveAuth.length > 0)
+  );
+}
+
+function isAuthFailure(error: Error): boolean {
+  return /auth|530|password|permission denied/i.test(error.message || '');
 }
 
 class KeepAliveRemoteFs {
@@ -77,23 +101,67 @@ class KeepAliveRemoteFs {
     });
     this.fs.onDisconnected(this.invalid.bind(this));
 
-    app.sftpBarItem.showMsg('connecting...', connectOption.connectTimeout);
-    this.pendingPromise = this.fs
-      .connect(connectOption, {
-        askForPasswd: promptForPassword,
-      })
-      .then(
-        () => {
-          app.sftpBarItem.reset();
-          this.isValid = true;
-          return this.fs;
-        },
-        err => {
-          this.fs.end();
-          this.invalid('error');
-          throw err;
+    // saved-password support: inject a stored password when the config
+    // brings no auth, and remember the one the user types to offer saving it
+    const secretKey = passwordKey(connectOption);
+    const passwordLabel = `${connectOption.username || ''}@${connectOption.host}`;
+    const canUseSavedPassword = isSavedPasswordsAvailable() && !hasExplicitAuth(connectOption);
+    let usedSavedPassword = false;
+    let typedPassword: string | undefined;
+
+    const connectConfig = {
+      askForPasswd: async (msg: string) => {
+        const anwser = await promptForPassword(msg);
+        if (canUseSavedPassword && anwser && msg.indexOf('Enter your password') !== -1) {
+          typedPassword = anwser;
         }
-      );
+        return anwser;
+      },
+    };
+
+    app.sftpBarItem.showMsg('connecting...', connectOption.connectTimeout);
+    const connectPromise = (async () => {
+      if (canUseSavedPassword) {
+        const saved = await getSavedPassword(secretKey);
+        if (saved !== undefined) {
+          connectOption.password = saved;
+          usedSavedPassword = true;
+        }
+      }
+
+      try {
+        await this.fs.connect(connectOption, connectConfig);
+      } catch (error) {
+        if (!usedSavedPassword || !isAuthFailure(error)) {
+          throw error;
+        }
+
+        // the saved password went stale: forget it and prompt again
+        logger.warn(`saved password rejected for ${passwordLabel}, prompting again`);
+        await removeSavedPassword(secretKey);
+        usedSavedPassword = false;
+        delete connectOption.password;
+        await this.fs.connect(connectOption, connectConfig);
+      }
+    })();
+
+    this.pendingPromise = connectPromise.then(
+      () => {
+        app.sftpBarItem.reset();
+        this.isValid = true;
+        if (typedPassword !== undefined) {
+          // fire and forget: don't block the connection on the toast
+          offerToSavePassword(secretKey, typedPassword, passwordLabel);
+          typedPassword = undefined;
+        }
+        return this.fs;
+      },
+      err => {
+        this.fs.end();
+        this.invalid('error');
+        throw err;
+      }
+    );
 
     return this.pendingPromise;
   }

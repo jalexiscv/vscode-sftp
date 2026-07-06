@@ -70,6 +70,11 @@
           "type": "boolean",
           "default": false,
           "description": "\"Download\" instead of \"View Content\" when open file in Remote Explorer"
+        },
+        "sftp.promptToSavePassword": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a successful connection with a typed password, offer to store it securely in the VS Code secret storage."
         }
       }
     },
@@ -92,6 +97,11 @@
       {
         "command": "sftp.cancelAllTransfer",
         "title": "Cancel All Transfers",
+        "category": "SFTP"
+      },
+      {
+        "command": "sftp.forgetSavedPasswords",
+        "title": "Forget Saved Passwords",
         "category": "SFTP"
       },
       {
