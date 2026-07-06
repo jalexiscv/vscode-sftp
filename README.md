@@ -1,66 +1,89 @@
-# sftp sync extension for VS Code
+# SFTP — sync extension for VS Code (corrected fork)
 
-**Corrected fork by [@jalexiscv](https://github.com/jalexiscv)** — fixes the most-reported bugs of the original project (see [CHANGELOG](CHANGELOG.md), v1.16.4). <br>
-(Forked from [Natizyskunk's vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), itself forked from the no longer maintained [liximomo's SFTP plugin](https://github.com/liximomo/vscode-sftp.git))
+**A maintained, corrected fork by [@jalexiscv](https://github.com/jalexiscv)** of the popular SFTP/FTP sync extension.<br>
+Lineage: forked from [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), itself a fork of the no longer maintained [liximomo's SFTP plugin](https://github.com/liximomo/vscode-sftp.git).
 
-- VS Code marketplace : https://marketplace.visualstudio.com/items?itemName=Natizyskunk.sftp <br>
-- VSIX release : https://github.com/Natizyskunk/vscode-sftp/releases/
+- 📦 **Install (VSIX releases):** https://github.com/jalexiscv/vscode-sftp/releases
+- 🐛 **Report issues:** https://github.com/jalexiscv/vscode-sftp/issues
+- 📄 **Full change history:** [CHANGELOG.md](CHANGELOG.md)
 
-✳ I would be more than happy to have you participate in one way or another to this project. You can do so by simply following the [templates](https://github.com/Natizyskunk/vscode-sftp/issues/new/choose) when you open a new issue or a new pull request.
-
-## ℹ INFOS - 2025/03/13
-I've tried to keep this extension up-to-date as much as I can and added a lot of new relevant features. Saddly, for the last year and a half I wasn't really able to work on the project because of personal reasons and I'm really not sure if and when I'll be able to get more time to work on it again. So for now consider the [v1.16.3](https://github.com/Natizyskunk/vscode-sftp/releases/tag/v1.16.3) as the latest official stable release available.
-
-## ℹ INFOS - 2023/06/23
-This is the main repository for the SFTP extension since [@liximomo](https://github.com/liximomo) has set his own to deprecated in favor of this one in the VSCode marketplace.
-There are also other forks that are available. Feel free to try them.
-
-A lot of work as been brought to fix bugs, add new features and more than 50 updates have been released with a lot of improvements and stability fixes for almost two years now. 😎
-
-I've been working hard to fix a lot of things and I've updated more than 50 new releases with a lot of improvements and stability fixes and I've brought new features for almost three years now. 
+VSCode-SFTP enables you to add, edit or delete files within a local directory and have it sync to a remote server directory using different transfer protocols like FTP or SSH. The most basic setup requires only a few lines of configuration, with a wide array of specific settings also available to meet the needs of any user. Both powerful and fast, it helps developers save time by allowing the use of a familiar editor and environment.
 
 ---
 
-VSCode-SFTP enables you to add, edit or delete files within a local directory and have it sync to a remote server directory using different transfer protocols like FTP or SSH. The most basic setup requires only a few lines of configuration with a wide array of specific settings also available to meet the needs of any user. Both powerful and fast, it helps developers save time by allowing the use of a familiar editor and environment.
+## Why this fork exists
 
-- Features
-  - [Browser remote with Remote Explorer](#remote-explorer)
-  - Diff local and remote
-  - Sync directory
-  - Upload/Download
-  - Upload on save
-  - File Watcher
-  - Multiple configurations
-  - Switchable profiles
-  - Temp File support
-- [Commands](https://github.com/Natizyskunk/vscode-sftp/wiki/Commands)
-- [Debug](#debug)
-- [FAQ](#FAQ)
+We launched this version because the original project, while excellent, reached a point where it could no longer serve its users:
+
+1. **The upstream project is effectively unmaintained.** Its maintainer stated in March 2025 that he could not keep working on it and that [v1.16.3 (June 2023)](https://github.com/Natizyskunk/vscode-sftp/releases/tag/v1.16.3) should be considered the last stable release. Since then, ~600 issues have accumulated without fixes.
+2. **The extension broke on modern VS Code.** Recent VS Code builds ship a Node.js runtime where the bundled `ssh2` 1.13 dependency crashes with `TypeError: isDate is not a function`, making every SFTP operation fail — the single most-reported bug of the project (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590)).
+3. **The upstream development branch could not even be built.** Its `develop` branch had TypeScript compilation errors and a broken test suite, which meant community fixes (several of them submitted as pull requests years ago) had no path to being released.
+4. **There was an unresolved security problem.** With the default configuration, syncing a project could upload `.vscode/sftp.json` — containing the server host, username and password — to the remote server, often inside a public web root.
+
+Rather than letting a tool used by thousands of developers decay, we forked it, repaired its foundations (build, tests, linter), fixed the most-reported bugs, and committed to keeping it working.
+
+## What we updated
+
+Every fix was verified (clean webpack build, 42/42 tests, lint) before release. Full details per change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+
+### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
+
+| Area | Fix |
+|------|-----|
+| **Compatibility** | Upgraded `ssh2` to 1.17.0: fixes *"isDate is not a function"* on modern VS Code, adds modern OpenSSH key formats and rsa-sha2 algorithms (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590), PR [#595](https://github.com/Natizyskunk/vscode-sftp/pull/595)) |
+| **Security** | `.vscode/sftp.json` (credentials) can never be uploaded to the server, regardless of the `ignore` configuration |
+| **Reliability** | Automatic reconnection after a server-side SFTP channel termination instead of hanging forever (upstream PR [#582](https://github.com/Natizyskunk/vscode-sftp/pull/582)) |
+| **Windows** | Fixed *"Error: Config Not Found"* / `uploadOnSave` not working when the reported path casing differs from the workspace one (upstream PR [#447](https://github.com/Natizyskunk/vscode-sftp/pull/447)) |
+| **Windows** | `ignore` patterns now actually work (gitignore matching received `\`-separated paths) |
+| **Config** | `sftp.json` is reloaded when it changes outside the editor — e.g. a git branch switch (upstream PR [#494](https://github.com/Natizyskunk/vscode-sftp/pull/494)) |
+| **FTP** | Non-ASCII file names (Chinese, accents) no longer garbled in listings (upstream PR [#443](https://github.com/Natizyskunk/vscode-sftp/pull/443), without its SFTP regression) |
+| **FTP** | Overwrites rejected with 550 by proftpd `mod_rename` servers are retried safely (upstream [#420](https://github.com/Natizyskunk/vscode-sftp/issues/420)) |
+| **Build** | Restored compilation of the codebase, repaired the test infrastructure (Jest 29, Node 22) and cleaned all pre-existing lint violations |
+
+### [v1.16.5](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.5) — second round
+
+| Area | Fix |
+|------|-----|
+| **SSH** | `Open SSH in Terminal` now uses the configured `hop` chain via OpenSSH ProxyJump (`-J`) (upstream [#441](https://github.com/Natizyskunk/vscode-sftp/issues/441)) |
+| **Remote Explorer** | Remote symlinks pointing to directories are browsable over SFTP — e.g. `current -> releases/N` deployment layouts (upstream [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)) |
+| **Notebooks** | `uploadOnSave` now triggers when saving notebook documents such as `.ipynb` |
+
+## What we expect from this version
+
+- **A drop-in replacement.** Same `sftp.json` format, same commands, same workflows — existing configurations work without any migration.
+- **Stability on current tooling.** The extension must keep working on up-to-date VS Code and Node.js runtimes, which is where the original broke.
+- **Safe by default.** Your credentials never leave your machine as part of a sync, even with a custom or empty `ignore` list.
+- **A living project.** We will keep triaging the upstream backlog (feature requests like SOCKS5 proxies, `.ppk` keys or folder diffing are candidates for future rounds), and issues/PRs on [our tracker](https://github.com/jalexiscv/vscode-sftp/issues) are welcome.
+- **Verifiable quality.** No release ships without a clean build, a green test suite and a clean linter; every change is documented in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+
+---
 
 ## Installation
 
-### Method 1 (Recommended : Auto update)
-1. Select Extensions (Ctrl + Shift + X).
-2. Uninstall current sftp extension from @liximomo.
-3. Install new extension directly from VS Code Marketplace : https://marketplace.visualstudio.com/items?itemName=Natizyskunk.sftp.
-4. Voilà!
+> ⚠️ **Uninstall or disable any other SFTP extension first** (liximomo's or Natizyskunk's): they register the same `sftp.*` commands and will conflict with this one.
 
-### Method 2 (Manual update)
-To install just follow these steps from within VSCode:
-1. Select Extensions (Ctrl + Shift + X).
-2. Uninstall current sftp extension from @liximomo.
-3. Open "More Action" menu(ellipsis on the top) and click "Install from VSIX…".
-4. Locate VSIX file and select.
-5. Reload VSCode.
+1. Download the latest `sftp-x.y.z.vsix` from the [Releases page](https://github.com/jalexiscv/vscode-sftp/releases).
+2. In VS Code, select Extensions (Ctrl + Shift + X).
+3. Open the "More Actions" menu (ellipsis on the top) and click "Install from VSIX…".
+4. Locate the VSIX file and select it.
+5. Reload VS Code.
 6. Voilà!
+
+Or from the command line:
+
+```
+code --install-extension sftp-1.16.5.vsix
+```
 
 ## Documentation
 - [Home](https://github.com/Natizyskunk/vscode-sftp/wiki)
 - [Settings](https://github.com/Natizyskunk/vscode-sftp/wiki/Setting)
 - [Common configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/Common-Configuration)
 - [SFTP configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/SFTP-only-Configuration)
-- [FTP confriguration](https://github.com/Natizyskunk/vscode-sftp/wiki/FTP(s)-only-Configuration)
+- [FTP configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/FTP(s)-only-Configuration)
 - [Commands](https://github.com/Natizyskunk/vscode-sftp/wiki/Commands)
+
+> The upstream wiki remains the reference for settings and commands: this fork keeps full configuration compatibility.
 
 ## Usage
 If the latest files are already on a remote server, you can start with an empty local folder,
@@ -100,28 +123,11 @@ For detailed explanations please go to [wiki](https://github.com/Natizyskunk/vsc
 ## Example configurations
 You can see the full list of configuration options [here](https://github.com/Natizyskunk/vscode-sftp/wiki/configuration).
 
-- [sftp sync extension for VS Code](#sftp-sync-extension-for-vs-code)
-  - [Installation](#installation)
-    - [Method 1 (Recommended : Auto update)](#method-1-recommended--auto-update)
-    - [Method 2 (Manual update)](#method-2-manual-update)
-  - [Documentation](#documentation)
-  - [Usage](#usage)
-  - [Example configurations](#example-configurations)
-    - [Simple](#simple)
-    - [Profiles](#profiles)
-    - [Multiple Context](#multiple-context)
-    - [Connection Hopping](#connection-hopping)
-      - [Single Hop](#single-hop)
-      - [Multiple Hop](#multiple-hop)
-    - [Configuration in User Setting](#configuration-in-user-setting)
-  - [Remote Explorer](#remote-explorer)
-    - [Multiple Select](#multiple-select)
-    - [Order](#order)
-  - [Debug](#debug)
-  - [FAQ](#faq)
-  - [Donation](#donation)
-    - [Buy Me a Coffee](#buy-me-a-coffee)
-    - [PayPal](#paypal)
+- [Simple](#simple)
+- [Profiles](#profiles)
+- [Multiple Context](#multiple-context)
+- [Connection Hopping](#connection-hopping)
+- [Configuration in User Setting](#configuration-in-user-setting)
 
 ### Simple
 ```json
@@ -276,7 +282,7 @@ In sftp.json:
 ```
 
 ## Remote Explorer
-![remote-explorer-preview](https://raw.githubusercontent.com/Natizyskunk/vscode-sftp/master/assets/showcase/remote-explorer.png)
+![remote-explorer-preview](assets/showcase/remote-explorer.png)
 
 Remote Explorer lets you explore files in remote. You can open Remote Explorer by:
 
@@ -284,6 +290,8 @@ Remote Explorer lets you explore files in remote. You can open Remote Explorer b
 2. Click SFTP view in Activity Bar.
 
 You can only view a files content with Remote Explorer. Run command `SFTP: Edit in Local` to edit it in local.
+
+Since v1.16.5, symlinked directories on the remote are browsable too.
 
 ### Multiple Select
 You are able to select multiple files/folders at once on the remote server to download and upload. You can do it simply by holding down Ctrl or Shift while selecting all desired files, just like on the regular explorer view.
@@ -312,13 +320,8 @@ In sftp.json:
 ## FAQ
 You can see all the Frequently Asked Questions [here](./FAQ.md).
 
-## Donation
-If this project helped you reduce development time and you wish to contribute financially
+## Credits and support for the original authors
+This fork stands on the work of [@liximomo](https://github.com/liximomo) (original author) and [@Natizyskunk](https://github.com/Natizyskunk) (maintainer of the fork this one derives from). If this extension helped you over the years, consider supporting them:
 
-### Buy Me a Coffee
-[![Buy Me A Coffee](https://bmc-cdn.nyc3.digitaloceanspaces.com/BMC-button-images/custom_images/orange_img.png)](https://www.buymeacoffee.com/Natizyskunk)
-
-### PayPal
-<!-- [![PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=BY89QD47D7MPS&source=url) -->
-[![PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/donate?business=DELD7APHHM3BC&no_recurring=0&currency_code=EUR)
-[![PayPal Me](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/natanfourie)
+- Buy Natizyskunk a coffee: https://www.buymeacoffee.com/Natizyskunk
+- PayPal: https://www.paypal.com/donate?business=DELD7APHHM3BC&no_recurring=0&currency_code=EUR
