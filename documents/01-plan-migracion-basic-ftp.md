@@ -28,4 +28,27 @@ Migrar `src/core/fs/ftpFileSystem.ts` y `src/core/remote-client/ftpClient.ts` a 
 - Cambio de comportamiento en servidores exóticos (parsers de listado distintos): basic-ftp cubre Unix/DOS/MLSD, más formatos que `ftp`.
 - El modo activo NO está soportado por basic-ftp (solo pasivo): hay usuarios del backlog pidiendo modo activo — decidir si se mantiene `ftp` como fallback `passive: false` o se documenta la limitación.
 
+## Estado: COMPLETADO (2026-07-05, v1.18.0)
+
+La migración se ejecutó en la rama `feat/basic-ftp`:
+
+- **Test de integración previo** (`test/integration/ftpFs.integration.spec.js`),
+  gateado por variables de entorno (`FTP_TEST_HOST/USER/PASSWORD/...`), que
+  ejercita ensureDir → put → list → download → MFMT → rename → unlink → rmdir
+  contra un servidor FTPS real y limpia solo su propio directorio aislado.
+  Baseline con el paquete `ftp`: 7/8 (fallo `read ECONNRESET` en FTPS). Con
+  `basic-ftp`: **8/8**.
+- `FTPClient` reescrito sobre `basic-ftp` (`Client.access` con `secure`/
+  `secureOptions`, keepalive por NOOP con `unref`, desconexión propagada por
+  EventEmitter → `onDisconnected`).
+- `FTPFileSystem` reescrito: `list` sobre `FileInfo`, `get` vía `downloadTo`
+  + PassThrough, `put` vía `uploadFrom`, `MFMT`/`SITE CHMOD`/`MKD`/`RMD` por
+  `send`, `removeDir` recursivo. Se eliminó `decodeListingName` (basic-ftp
+  negocia UTF-8) y el monkey-patch de `_send` del paquete viejo.
+- Dependencia `ftp` **eliminada** de `package.json`.
+
+**Limitación asumida** (modo activo): documentada; basic-ftp usa pasivo. El
+config del backlog que pedía modo activo queda pendiente si aparece demanda
+real (requeriría un cliente FTP alternativo solo para ese caso).
+
 _Origen: iteración de mejoras 2026-07-05 (documents/Changelogs)._
