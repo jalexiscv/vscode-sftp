@@ -1,6 +1,5 @@
 import { Readable, Writable, PassThrough } from 'stream';
 import { Client, FileInfo, FileType as BasicFtpFileType } from 'basic-ftp';
-import * as PQueue from 'p-queue';
 import logger from '../../logger';
 import { FileEntry, FileType, FileStats, FileOption } from './fileSystem';
 import RemoteFileSystem from './remoteFileSystem';
@@ -42,10 +41,12 @@ function toNumMode(permissions): number {
 /**
  * Remote filesystem over FTP, backed by the maintained `basic-ftp` package.
  *
- * All commands are serialized through a single-concurrency queue because an
- * FTP control connection can only run one command at a time. basic-ftp
- * negotiates UTF-8 automatically, so listing names no longer need the
- * latin1→utf8 repair the old `ftp` package required.
+ * All commands are serialized through the client's single-concurrency queue
+ * (see FTPClient.run) because an FTP control connection can only run one
+ * command at a time — the queue lives in the client so the keepalive NOOP is
+ * serialized against file operations too. basic-ftp negotiates UTF-8
+ * automatically, so listing names no longer need the latin1→utf8 repair the
+ * old `ftp` package required.
  *
  * Key lifecycle methods:
  * - {@link list} lists and normalizes directory entries.
@@ -67,10 +68,12 @@ export default class FTPFileSystem extends RemoteFileSystem {
     }
   }
 
-  private queue: any = new PQueue({ concurrency: 1 });
-
   get ftp(): Client {
     return this.getClient().getFsClient();
+  }
+
+  private run<T>(task: () => Promise<T>): Promise<T> {
+    return (this.getClient() as FTPClient).run(task);
   }
 
   toFileStat(info: FileInfo): FileStats {
@@ -285,11 +288,11 @@ export default class FTPFileSystem extends RemoteFileSystem {
   }
 
   async renameAtomic(srcPath: string, destPath: string): Promise<void> {
-    return this.queue.add(() => this.ftp.rename(srcPath, destPath));
+    return this.run(() => this.ftp.rename(srcPath, destPath).then(() => undefined));
   }
 
   private atomicList(path: string): Promise<FileInfo[]> {
-    return this.queue.add(() => this.ftp.list(path));
+    return this.run(() => this.ftp.list(path));
   }
 
   private atomicGet(path: string): Promise<Readable> {
@@ -302,21 +305,21 @@ export default class FTPFileSystem extends RemoteFileSystem {
         throw error;
       }).then(() => stream as Readable);
     };
-    return this.queue.add(task);
+    return this.run(task);
   }
 
   private atomicPut(input: Readable, path: string): Promise<void> {
-    return this.queue.add(() => this.ftp.uploadFrom(input, path).then(() => undefined));
+    return this.run(() => this.ftp.uploadFrom(input, path).then(() => undefined));
   }
 
   private atomicDeleteFile(path: string): Promise<void> {
-    return this.queue.add(() => this.ftp.remove(path));
+    return this.run(() => this.ftp.remove(path).then(() => undefined));
   }
 
   private atomicMakeDir(path: string): Promise<void> {
     // send MKD directly so we get the raw error code (ensureDir does its own
     // existence handling); basic-ftp's ensureDir would swallow the 550
-    return this.queue.add(() => this.ftp.send('MKD ' + path).then(() => undefined));
+    return this.run(() => this.ftp.send('MKD ' + path).then(() => undefined));
   }
 
   private atomicRemoveDir(path: string, recursive: boolean): Promise<void> {
@@ -324,11 +327,11 @@ export default class FTPFileSystem extends RemoteFileSystem {
       recursive
         ? this.ftp.removeDir(path)
         : this.ftp.send('RMD ' + path).then(() => undefined);
-    return this.queue.add(task);
+    return this.run(task);
   }
 
   private atomicSite(command: string): Promise<void> {
-    return this.queue.add(() => this.ftp.send('SITE ' + command).then(() => undefined));
+    return this.run(() => this.ftp.send('SITE ' + command).then(() => undefined));
   }
 
   private atomicSetLastMod(path: string, date: Date): Promise<void> {
@@ -340,7 +343,7 @@ export default class FTPFileSystem extends RemoteFileSystem {
       ('00' + date.getUTCMinutes()).slice(-2) +
       ('00' + date.getUTCSeconds()).slice(-2);
 
-    return this.queue.add(() =>
+    return this.run(() =>
       this.ftp.send(`MFMT ${dateStr} ${path}`).then(() => undefined)
     );
   }

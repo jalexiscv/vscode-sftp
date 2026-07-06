@@ -1,5 +1,6 @@
 import { Client, FTPResponse } from 'basic-ftp';
 import { EventEmitter } from 'events';
+import * as PQueue from 'p-queue';
 import RemoteClient, { ConnectOption } from './remoteClient';
 
 const KEEPALIVE_INTERVAL = 1000 * 10; // 10 secs
@@ -9,7 +10,12 @@ const KEEPALIVE_INTERVAL = 1000 * 10; // 10 secs
  * abandoned `ftp` package). UTF-8 is negotiated automatically, FTPS
  * (explicit/implicit) works out of the box and passive mode is robust.
  *
- * basic-ftp brings no keepalive, so a NOOP is sent on an interval while idle.
+ * basic-ftp allows a single task at a time on the control connection —
+ * launching a second one throws and closes the client. Every command is
+ * therefore serialized through {@link run}, including the keepalive NOOP
+ * (basic-ftp brings no keepalive of its own), which is skipped entirely
+ * while real work is queued or running.
+ *
  * A disconnected/errored control socket is surfaced through an EventEmitter so
  * KeepAliveRemoteFs.invalid() can reconnect lazily, matching the old contract.
  */
@@ -17,6 +23,7 @@ export default class FTPClient extends RemoteClient {
   private connected: boolean = false;
   private keepaliveTimer: NodeJS.Timer | undefined;
   private events: EventEmitter = new EventEmitter();
+  private taskQueue: any = new PQueue({ concurrency: 1 });
 
   _initClient() {
     // verbose logging goes through our own debug hook, set in _doConnect
@@ -72,6 +79,11 @@ export default class FTPClient extends RemoteClient {
     return this._client;
   }
 
+  // single-concurrency executor every FTP command must go through
+  run<T>(task: () => Promise<T>): Promise<T> {
+    return this.taskQueue.add(task);
+  }
+
   onDisconnected(cb) {
     this.events.on('disconnected', cb);
   }
@@ -93,17 +105,18 @@ export default class FTPClient extends RemoteClient {
         this._emitDisconnected('close');
         return;
       }
-      // send NOOP only when the client is idle to avoid interleaving commands
-      // with an in-flight transfer
-      client
-        .send('NOOP')
-        .catch((error: Error) => {
-          // ignore "already sending" style races; surface real socket drops
-          if (/closed|reset|EPIPE|not connected/i.test(error.message || '')) {
-            this._stopKeepAlive();
-            this._emitDisconnected('error');
-          }
-        });
+      // any queued or running command already keeps the connection alive, and
+      // basic-ftp closes the whole client when tasks overlap
+      if (this.taskQueue.size > 0 || this.taskQueue.pending > 0) {
+        return;
+      }
+      this.run(() => client.send('NOOP')).catch((error: Error) => {
+        // surface real socket drops so KeepAliveRemoteFs reconnects
+        if (/closed|reset|EPIPE|not connected/i.test(error.message || '')) {
+          this._stopKeepAlive();
+          this._emitDisconnected('error');
+        }
+      });
     }, KEEPALIVE_INTERVAL);
     // don't keep the event loop alive just for the keepalive
     if (this.keepaliveTimer.unref) {
