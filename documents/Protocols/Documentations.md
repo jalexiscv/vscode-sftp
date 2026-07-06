@@ -57,7 +57,7 @@ Si la documentación afecta la visión general del proyecto, actualiza también 
 
 ## 4. Convenciones de Estilo
 
-*   **Idioma**: Español (técnico y formal) para la documentación interna en `documents/` y para el `README.md` raíz (decisión del proyecto, 2026-07-05). Los demás archivos heredados del upstream (`docs/`, `FAQ.md`, wiki) permanecen en inglés mientras no se traduzcan expresamente. El `CHANGELOG.md` raíz se mantiene en inglés por continuidad con el formato del upstream.
+*   **Idioma**: Español (técnico y formal) para la documentación interna en `documents/`. El `README.md` raíz es la **versión base en español** (decisión del proyecto, 2026-07-05) y se ofrece traducido en la raíz como `README.<lang>.md` (en, zh-CN, pt-BR, fr, de), todos enlazados entre sí mediante la barra de idiomas del encabezado. **Al modificar el README base hay que actualizar las traducciones en el mismo cambio.** Los demás archivos heredados del upstream (`docs/`, `FAQ.md`, wiki) permanecen en inglés mientras no se traduzcan expresamente. El `CHANGELOG.md` raíz se mantiene en inglés por continuidad con el formato del upstream.
 *   **Formato**: Markdown estándar (GitHub Flavored).
 *   **Código**: Usa bloques de código con resaltado de sintaxis (```ts, ```json, ```bash).
 *   **Enlaces**: Usa rutas relativas (p. ej. `[Ver tema](01-tema.md)` dentro de `documents/`, o `[documents/01-tema.md](documents/01-tema.md)` desde la raíz del proyecto). Para referenciar código, enlaza el archivo fuente (p. ej. `[src/modules/remoteExplorer.ts](../src/modules/remoteExplorer.ts)`).
