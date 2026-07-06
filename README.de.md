@@ -69,6 +69,13 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Remote-Explorer** | Remote-Symlinks, die auf Verzeichnisse zeigen, sind über SFTP navigierbar — z. B. Deployments wie `current -> releases/N` (upstream [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)) |
 | **Notebooks** | `uploadOnSave` wird jetzt beim Speichern von Notebook-Dokumenten wie `.ipynb` ausgelöst |
 
+### [v1.17.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.17.0) — sichere Passwörter und CI
+
+| Bereich | Änderung |
+|---------|----------|
+| **Sicherheit** | **Sicheres Speichern von Passwörtern** mit dem SecretStorage von VS Code (dem Schlüsselbund des Systems): Nach einer erfolgreichen Verbindung bietet die Erweiterung an, das eingegebene Passwort zu merken, injiziert es bei späteren Verbindungen automatisch und vergisst es, wenn der Server es ablehnt. Neuer Befehl `SFTP: Forget Saved Passwords` und Einstellung `sftp.promptToSavePassword` |
+| **Qualität** | GitHub-Actions-CI (Lint, Build und Tests bei jedem Push/PR) und automatisierte Releases beim Setzen eines Tags |
+
 ## Was wir von dieser Version erwarten
 
 - **Ein direkter Ersatz (drop-in).** Dasselbe `sftp.json`-Format, dieselben Befehle, dieselben Arbeitsabläufe — bestehende Konfigurationen funktionieren ohne jegliche Migration.
@@ -93,7 +100,7 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.16.5.vsix
+code --install-extension sftp-1.17.0.vsix
 ```
 
 ## Dokumentation
