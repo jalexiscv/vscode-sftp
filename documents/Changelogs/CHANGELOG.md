@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 22 | 2026-07-05 | README multiidioma: español base + 5 traducciones    | [Ver detalle](2026-07-05_docs_readme_multiidioma.md) |
 | 21 | 2026-07-05 | README: Comunidad, Licencia, Autor y Donaciones      | [Ver detalle](2026-07-05_docs_readme_comunidad.md) |
 | 20 | 2026-07-05 | README raíz traducido íntegramente al español        | [Ver detalle](2026-07-05_docs_readme_espanol.md) |
 | 19 | 2026-07-05 | README del fork: motivación, cambios y expectativas  | [Ver detalle](2026-07-05_docs_readme_fork.md) |

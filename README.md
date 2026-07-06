@@ -1,5 +1,11 @@
 # SFTP — extensión de sincronización para VS Code (fork corregido)
 
+🌍 **Español** (base) · [English](README.en.md) · [中文（简体）](README.zh-CN.md) · [Português (BR)](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
+[![Release](https://img.shields.io/github/v/release/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/releases)
+[![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-yellow.svg)](LICENSE)
+[![Issues](https://img.shields.io/github/issues/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/issues)
+
 **Fork corregido y mantenido por [@jalexiscv](https://github.com/jalexiscv)** de la popular extensión de sincronización SFTP/FTP.<br>
 Linaje: fork de [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), a su vez fork del ya no mantenido [plugin SFTP de liximomo](https://github.com/liximomo/vscode-sftp.git).
 
@@ -8,6 +14,21 @@ Linaje: fork de [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-
 - 📄 **Historial completo de cambios:** [CHANGELOG.md](CHANGELOG.md)
 
 VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio local y sincronizarlos con un directorio de un servidor remoto usando distintos protocolos de transferencia como FTP o SSH. La configuración más básica requiere solo unas pocas líneas, con un amplio abanico de opciones específicas disponibles para cubrir las necesidades de cualquier usuario. Potente y rápida a la vez, ayuda a los desarrolladores a ahorrar tiempo al permitirles usar un editor y un entorno familiares.
+
+## 📑 Índice
+
+- [Por qué existe este fork](#por-qué-existe-este-fork)
+- [Qué actualizamos](#qué-actualizamos)
+- [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
+- [Instalación](#instalación)
+- [Documentación](#documentación)
+- [Uso](#uso)
+- [Configuraciones de ejemplo](#configuraciones-de-ejemplo)
+- [Explorador Remoto](#explorador-remoto)
+- [Depuración](#depuración)
+- [FAQ](#faq)
+- [Créditos y apoyo a los autores originales](#créditos-y-apoyo-a-los-autores-originales)
+- [Licencia](#-licencia) · [Autor](#-autor) · [Donaciones](#%EF%B8%8F-donaciones)
 
 ---
 
