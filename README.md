@@ -323,3 +323,52 @@ Este fork se apoya en el trabajo de [@liximomo](https://github.com/liximomo) (au
 
 - Invítale un café a Natizyskunk: https://www.buymeacoffee.com/Natizyskunk
 - PayPal: https://www.paypal.com/donate?business=DELD7APHHM3BC&no_recurring=0&currency_code=EUR
+
+### Comunidad
+
+- **Discusiones**: Únete a las conversaciones en [GitHub Discussions](https://github.com/jalexiscv/vscode-sftp/discussions)
+- **Contribuciones**: Revisa los [issues etiquetados como "good first issue"](https://github.com/jalexiscv/vscode-sftp/labels/good%20first%20issue)
+
+---
+
+## 📜 Licencia
+
+Distribuido bajo la Licencia **MIT**. Ver [LICENSE](LICENSE) para más información.
+
+> La licencia MIT te permite usar, copiar, modificar, fusionar, publicar, distribuir, sublicenciar y/o vender copias del software sin restricciones, siempre que se incluya el aviso de copyright.
+
+---
+
+## 👨‍💻 Autor
+
+**Jose Alexis Correa Valencia**
+*Full Stack Developer & Software Architect*
+
+Con más de 25 años de experiencia en desarrollo de software empresarial, especializado en arquitecturas escalables y soluciones PHP modernas.
+
+- **GitHub**: [@jalexiscv](https://github.com/jalexiscv)
+- **LinkedIn**: [Jose Alexis Correa Valencia](https://www.linkedin.com/in/jalexiscv/)
+- **Email**: jalexiscv@gmail.com
+- **Ubicación**: Colombia 🇨🇴
+
+---
+
+## ❤️ Donaciones
+
+Si esta extensión te ha ayudado a ti o a tu negocio, considera apoyar su desarrollo y mantenimiento continuo.
+
+| Método | Detalles |
+|--------|----------|
+| **PayPal** | [jalexiscv@gmail.com](https://www.paypal.com/paypalme/anssible) |
+| **Nequi (Colombia)** | `3117977281` |
+
+### Beneficios de tu Soporte
+
+Tu donación ayuda a:
+- ⚡ Acelerar el desarrollo de nuevas funcionalidades
+- 📚 Crear más documentación y ejemplos
+- 🧪 Mejorar la cobertura de tests
+- 🐛 Atender más correcciones del backlog de issues
+- 🌍 Mantener el proyecto activo y actualizado
+
+*¡Gracias por tu apoyo!* 🙏
