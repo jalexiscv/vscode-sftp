@@ -1,148 +1,146 @@
-# SFTP — sync extension for VS Code (corrected fork)
+# SFTP — extensión de sincronización para VS Code (fork corregido)
 
-**A maintained, corrected fork by [@jalexiscv](https://github.com/jalexiscv)** of the popular SFTP/FTP sync extension.<br>
-Lineage: forked from [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), itself a fork of the no longer maintained [liximomo's SFTP plugin](https://github.com/liximomo/vscode-sftp.git).
+**Fork corregido y mantenido por [@jalexiscv](https://github.com/jalexiscv)** de la popular extensión de sincronización SFTP/FTP.<br>
+Linaje: fork de [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), a su vez fork del ya no mantenido [plugin SFTP de liximomo](https://github.com/liximomo/vscode-sftp.git).
 
-- 📦 **Install (VSIX releases):** https://github.com/jalexiscv/vscode-sftp/releases
-- 🐛 **Report issues:** https://github.com/jalexiscv/vscode-sftp/issues
-- 📄 **Full change history:** [CHANGELOG.md](CHANGELOG.md)
+- 📦 **Instalación (releases VSIX):** https://github.com/jalexiscv/vscode-sftp/releases
+- 🐛 **Reportar problemas:** https://github.com/jalexiscv/vscode-sftp/issues
+- 📄 **Historial completo de cambios:** [CHANGELOG.md](CHANGELOG.md)
 
-VSCode-SFTP enables you to add, edit or delete files within a local directory and have it sync to a remote server directory using different transfer protocols like FTP or SSH. The most basic setup requires only a few lines of configuration, with a wide array of specific settings also available to meet the needs of any user. Both powerful and fast, it helps developers save time by allowing the use of a familiar editor and environment.
-
----
-
-## Why this fork exists
-
-We launched this version because the original project, while excellent, reached a point where it could no longer serve its users:
-
-1. **The upstream project is effectively unmaintained.** Its maintainer stated in March 2025 that he could not keep working on it and that [v1.16.3 (June 2023)](https://github.com/Natizyskunk/vscode-sftp/releases/tag/v1.16.3) should be considered the last stable release. Since then, ~600 issues have accumulated without fixes.
-2. **The extension broke on modern VS Code.** Recent VS Code builds ship a Node.js runtime where the bundled `ssh2` 1.13 dependency crashes with `TypeError: isDate is not a function`, making every SFTP operation fail — the single most-reported bug of the project (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590)).
-3. **The upstream development branch could not even be built.** Its `develop` branch had TypeScript compilation errors and a broken test suite, which meant community fixes (several of them submitted as pull requests years ago) had no path to being released.
-4. **There was an unresolved security problem.** With the default configuration, syncing a project could upload `.vscode/sftp.json` — containing the server host, username and password — to the remote server, often inside a public web root.
-
-Rather than letting a tool used by thousands of developers decay, we forked it, repaired its foundations (build, tests, linter), fixed the most-reported bugs, and committed to keeping it working.
-
-## What we updated
-
-Every fix was verified (clean webpack build, 42/42 tests, lint) before release. Full details per change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
-
-### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
-
-| Area | Fix |
-|------|-----|
-| **Compatibility** | Upgraded `ssh2` to 1.17.0: fixes *"isDate is not a function"* on modern VS Code, adds modern OpenSSH key formats and rsa-sha2 algorithms (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590), PR [#595](https://github.com/Natizyskunk/vscode-sftp/pull/595)) |
-| **Security** | `.vscode/sftp.json` (credentials) can never be uploaded to the server, regardless of the `ignore` configuration |
-| **Reliability** | Automatic reconnection after a server-side SFTP channel termination instead of hanging forever (upstream PR [#582](https://github.com/Natizyskunk/vscode-sftp/pull/582)) |
-| **Windows** | Fixed *"Error: Config Not Found"* / `uploadOnSave` not working when the reported path casing differs from the workspace one (upstream PR [#447](https://github.com/Natizyskunk/vscode-sftp/pull/447)) |
-| **Windows** | `ignore` patterns now actually work (gitignore matching received `\`-separated paths) |
-| **Config** | `sftp.json` is reloaded when it changes outside the editor — e.g. a git branch switch (upstream PR [#494](https://github.com/Natizyskunk/vscode-sftp/pull/494)) |
-| **FTP** | Non-ASCII file names (Chinese, accents) no longer garbled in listings (upstream PR [#443](https://github.com/Natizyskunk/vscode-sftp/pull/443), without its SFTP regression) |
-| **FTP** | Overwrites rejected with 550 by proftpd `mod_rename` servers are retried safely (upstream [#420](https://github.com/Natizyskunk/vscode-sftp/issues/420)) |
-| **Build** | Restored compilation of the codebase, repaired the test infrastructure (Jest 29, Node 22) and cleaned all pre-existing lint violations |
-
-### [v1.16.5](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.5) — second round
-
-| Area | Fix |
-|------|-----|
-| **SSH** | `Open SSH in Terminal` now uses the configured `hop` chain via OpenSSH ProxyJump (`-J`) (upstream [#441](https://github.com/Natizyskunk/vscode-sftp/issues/441)) |
-| **Remote Explorer** | Remote symlinks pointing to directories are browsable over SFTP — e.g. `current -> releases/N` deployment layouts (upstream [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)) |
-| **Notebooks** | `uploadOnSave` now triggers when saving notebook documents such as `.ipynb` |
-
-## What we expect from this version
-
-- **A drop-in replacement.** Same `sftp.json` format, same commands, same workflows — existing configurations work without any migration.
-- **Stability on current tooling.** The extension must keep working on up-to-date VS Code and Node.js runtimes, which is where the original broke.
-- **Safe by default.** Your credentials never leave your machine as part of a sync, even with a custom or empty `ignore` list.
-- **A living project.** We will keep triaging the upstream backlog (feature requests like SOCKS5 proxies, `.ppk` keys or folder diffing are candidates for future rounds), and issues/PRs on [our tracker](https://github.com/jalexiscv/vscode-sftp/issues) are welcome.
-- **Verifiable quality.** No release ships without a clean build, a green test suite and a clean linter; every change is documented in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio local y sincronizarlos con un directorio de un servidor remoto usando distintos protocolos de transferencia como FTP o SSH. La configuración más básica requiere solo unas pocas líneas, con un amplio abanico de opciones específicas disponibles para cubrir las necesidades de cualquier usuario. Potente y rápida a la vez, ayuda a los desarrolladores a ahorrar tiempo al permitirles usar un editor y un entorno familiares.
 
 ---
 
-## Installation
+## Por qué existe este fork
 
-> ⚠️ **Uninstall or disable any other SFTP extension first** (liximomo's or Natizyskunk's): they register the same `sftp.*` commands and will conflict with this one.
+Lanzamos esta versión porque el proyecto original, siendo excelente, llegó a un punto en el que ya no podía servir a sus usuarios:
 
-1. Download the latest `sftp-x.y.z.vsix` from the [Releases page](https://github.com/jalexiscv/vscode-sftp/releases).
-2. In VS Code, select Extensions (Ctrl + Shift + X).
-3. Open the "More Actions" menu (ellipsis on the top) and click "Install from VSIX…".
-4. Locate the VSIX file and select it.
-5. Reload VS Code.
-6. Voilà!
+1. **El proyecto upstream está efectivamente sin mantenimiento.** Su mantenedor declaró en marzo de 2025 que no podía seguir trabajando en él y que la [v1.16.3 (junio de 2023)](https://github.com/Natizyskunk/vscode-sftp/releases/tag/v1.16.3) debía considerarse la última versión estable. Desde entonces se han acumulado ~600 issues sin corrección.
+2. **La extensión se rompió en los VS Code modernos.** Los VS Code recientes incluyen un runtime de Node.js en el que la dependencia empaquetada `ssh2` 1.13 falla con `TypeError: isDate is not a function`, haciendo fallar toda operación SFTP — el bug más reportado del proyecto (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590)).
+3. **La rama de desarrollo del upstream ni siquiera compilaba.** Su rama `develop` tenía errores de compilación de TypeScript y la suite de tests rota, de modo que las correcciones de la comunidad (varias enviadas como pull requests hace años) no tenían camino para publicarse.
+4. **Existía un problema de seguridad sin resolver.** Con la configuración por defecto, sincronizar un proyecto podía subir `.vscode/sftp.json` — con el host, el usuario y la contraseña del servidor — al servidor remoto, a menudo dentro de un docroot público.
 
-Or from the command line:
+En lugar de dejar que una herramienta usada por miles de desarrolladores se degradara, la bifurcamos, reparamos sus cimientos (build, tests, linter), corregimos los bugs más reportados y nos comprometimos a mantenerla funcionando.
+
+## Qué actualizamos
+
+Cada corrección fue verificada (build de webpack limpio, 42/42 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+
+### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
+
+| Área | Corrección |
+|------|------------|
+| **Compatibilidad** | `ssh2` actualizado a 1.17.0: corrige *"isDate is not a function"* en VS Code modernos y habilita formatos de clave OpenSSH modernos y algoritmos rsa-sha2 (upstream [#586](https://github.com/Natizyskunk/vscode-sftp/issues/586), [#590](https://github.com/Natizyskunk/vscode-sftp/issues/590), PR [#595](https://github.com/Natizyskunk/vscode-sftp/pull/595)) |
+| **Seguridad** | `.vscode/sftp.json` (credenciales) ya no puede subirse nunca al servidor, sin importar la configuración de `ignore` |
+| **Fiabilidad** | Reconexión automática tras un cierre del canal SFTP del lado del servidor, en vez de colgarse indefinidamente (upstream PR [#582](https://github.com/Natizyskunk/vscode-sftp/pull/582)) |
+| **Windows** | Corregido *"Error: Config Not Found"* / `uploadOnSave` que no funcionaba cuando el casing de la ruta reportada difería del workspace (upstream PR [#447](https://github.com/Natizyskunk/vscode-sftp/pull/447)) |
+| **Windows** | Los patrones de `ignore` ahora funcionan de verdad (el matcher gitignore recibía rutas con separadores `\`) |
+| **Configuración** | `sftp.json` se recarga cuando cambia fuera del editor — p. ej. un cambio de rama git (upstream PR [#494](https://github.com/Natizyskunk/vscode-sftp/pull/494)) |
+| **FTP** | Los nombres de archivo no ASCII (chino, acentos) ya no llegan corruptos en los listados (upstream PR [#443](https://github.com/Natizyskunk/vscode-sftp/pull/443), sin su regresión en SFTP) |
+| **FTP** | Las sobrescrituras rechazadas con 550 por servidores proftpd con `mod_rename` se reintentan de forma segura (upstream [#420](https://github.com/Natizyskunk/vscode-sftp/issues/420)) |
+| **Build** | Se restauró la compilación del código, se reparó la infraestructura de tests (Jest 29, Node 22) y se limpiaron todas las violaciones de lint preexistentes |
+
+### [v1.16.5](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.5) — segunda ronda
+
+| Área | Corrección |
+|------|------------|
+| **SSH** | `Open SSH in Terminal` ahora usa la cadena de `hop` configurada vía ProxyJump de OpenSSH (`-J`) (upstream [#441](https://github.com/Natizyskunk/vscode-sftp/issues/441)) |
+| **Explorador Remoto** | Los symlinks remotos que apuntan a directorios son navegables sobre SFTP — p. ej. despliegues tipo `current -> releases/N` (upstream [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)) |
+| **Notebooks** | `uploadOnSave` ahora se dispara al guardar documentos notebook como `.ipynb` |
+
+## Qué esperamos de esta versión
+
+- **Un reemplazo directo (drop-in).** El mismo formato de `sftp.json`, los mismos comandos, los mismos flujos de trabajo — las configuraciones existentes funcionan sin ninguna migración.
+- **Estabilidad sobre el tooling actual.** La extensión debe seguir funcionando en los VS Code y runtimes de Node.js al día, que es justo donde el original se rompió.
+- **Seguridad por defecto.** Tus credenciales nunca salen de tu máquina como parte de una sincronización, incluso con una lista `ignore` personalizada o vacía.
+- **Un proyecto vivo.** Seguiremos triando el backlog del upstream (peticiones como proxies SOCKS5, claves `.ppk` o diff de carpetas son candidatas para próximas rondas), y los issues/PRs en [nuestro tracker](https://github.com/jalexiscv/vscode-sftp/issues) son bienvenidos.
+- **Calidad verificable.** Ninguna release se publica sin build limpio, suite de tests en verde y linter sin errores; cada cambio queda documentado en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+
+---
+
+## Instalación
+
+> ⚠️ **Desinstala o deshabilita primero cualquier otra extensión SFTP** (la de liximomo o la de Natizyskunk): registran los mismos comandos `sftp.*` y entrarán en conflicto con esta.
+
+1. Descarga el `sftp-x.y.z.vsix` más reciente desde la [página de Releases](https://github.com/jalexiscv/vscode-sftp/releases).
+2. En VS Code, abre Extensiones (Ctrl + Shift + X).
+3. Abre el menú "Más acciones" (los puntos suspensivos arriba) y elige "Instalar desde VSIX…".
+4. Localiza el archivo VSIX y selecciónalo.
+5. Recarga VS Code.
+6. ¡Listo!
+
+O desde la línea de comandos:
 
 ```
 code --install-extension sftp-1.16.5.vsix
 ```
 
-## Documentation
-- [Home](https://github.com/Natizyskunk/vscode-sftp/wiki)
-- [Settings](https://github.com/Natizyskunk/vscode-sftp/wiki/Setting)
-- [Common configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/Common-Configuration)
-- [SFTP configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/SFTP-only-Configuration)
-- [FTP configuration](https://github.com/Natizyskunk/vscode-sftp/wiki/FTP(s)-only-Configuration)
-- [Commands](https://github.com/Natizyskunk/vscode-sftp/wiki/Commands)
+## Documentación
+- [Inicio](https://github.com/Natizyskunk/vscode-sftp/wiki)
+- [Ajustes](https://github.com/Natizyskunk/vscode-sftp/wiki/Setting)
+- [Configuración común](https://github.com/Natizyskunk/vscode-sftp/wiki/Common-Configuration)
+- [Configuración SFTP](https://github.com/Natizyskunk/vscode-sftp/wiki/SFTP-only-Configuration)
+- [Configuración FTP](https://github.com/Natizyskunk/vscode-sftp/wiki/FTP(s)-only-Configuration)
+- [Comandos](https://github.com/Natizyskunk/vscode-sftp/wiki/Commands)
 
-> The upstream wiki remains the reference for settings and commands: this fork keeps full configuration compatibility.
+> El wiki del upstream (en inglés) sigue siendo la referencia para ajustes y comandos: este fork mantiene compatibilidad total de configuración.
 
-## Usage
-If the latest files are already on a remote server, you can start with an empty local folder,
-then download your project, and from that point sync.
+## Uso
+Si los archivos más recientes ya están en un servidor remoto, puedes empezar con una carpeta local vacía, descargar el proyecto y, a partir de ahí, sincronizar.
 
-1. In `VS Code`, open a local directory you wish to sync to the remote server (or create an empty directory
-that you wish to first download the contents of a remote server folder in order to edit locally).
-2. `Ctrl+Shift+P` on Windows/Linux or `Cmd+Shift+P` on Mac open command palette, run `SFTP: config` command.
-3. A basic configuration file will appear named `sftp.json` under the `.vscode` directory, open and edit the configuration parameters with your remote server information.
+1. En `VS Code`, abre el directorio local que quieras sincronizar con el servidor remoto (o crea un directorio vacío donde descargar primero el contenido de una carpeta del servidor para editarla localmente).
+2. Pulsa `Ctrl+Shift+P` en Windows/Linux o `Cmd+Shift+P` en Mac para abrir la paleta de comandos y ejecuta el comando `SFTP: config`.
+3. Aparecerá un archivo de configuración básico llamado `sftp.json` dentro del directorio `.vscode`; ábrelo y edita los parámetros con la información de tu servidor remoto.
 
-For instance:
+Por ejemplo:
 ```json
 {
-    "name": "Profile Name",
-    "host": "name_of_remote_host",
+    "name": "Nombre del perfil",
+    "host": "host_del_servidor_remoto",
     "protocol": "ftp",
     "port": 21,
     "secure": true,
-    "username": "username",
-    "remotePath": "/public_html/project", // <--- This is the path which will be downloaded if you "Download Project"
-    "password": "password",
+    "username": "usuario",
+    "remotePath": "/public_html/project", // <--- Esta es la ruta que se descargará con "Download Project"
+    "password": "contraseña",
     "uploadOnSave": false
 }
 ```
-The password parameter in `sftp.json` is optional, if left out you will be prompted for a password on sync.
-_Note：_ backslashes and other special characters must be escaped with a backslash.
+El parámetro `password` de `sftp.json` es opcional; si lo omites, se te pedirá la contraseña al sincronizar.
+_Nota:_ las barras invertidas y otros caracteres especiales deben escaparse con una barra invertida.
 
-4. Save and close the `sftp.json` file.
-5. `Ctrl+Shift+P` on Windows/Linux or `Cmd+Shift+P` on Mac open command palette.
-6. Type `sftp` and you'll now see a number of other commands. You can also access many of the commands from the project's file explorer context menus.
-7. A good one to start with if you want to sync with a remote folder is `SFTP: Download Project`.  This will download the directory shown in the `remotePath` setting in `sftp.json` to your local open directory.
-8. Done - you can now edit locally and after each save it will upload to sync your remote file with the local copy.
-9. Enjoy!
+4. Guarda y cierra el archivo `sftp.json`.
+5. Pulsa `Ctrl+Shift+P` en Windows/Linux o `Cmd+Shift+P` en Mac para abrir la paleta de comandos.
+6. Escribe `sftp` y verás el resto de comandos disponibles. Muchos de ellos también están en los menús contextuales del explorador de archivos del proyecto.
+7. Uno bueno para empezar, si quieres sincronizar con una carpeta remota, es `SFTP: Download Project`: descarga el directorio indicado en `remotePath` de `sftp.json` a tu directorio local abierto.
+8. Hecho — ya puedes editar localmente y, tras cada guardado, se subirá el archivo para mantener sincronizada la copia remota con la local.
+9. ¡A disfrutar!
 
-For detailed explanations please go to [wiki](https://github.com/Natizyskunk/vscode-sftp/wiki).
+Para explicaciones detalladas visita el [wiki](https://github.com/Natizyskunk/vscode-sftp/wiki).
 
-## Example configurations
-You can see the full list of configuration options [here](https://github.com/Natizyskunk/vscode-sftp/wiki/configuration).
+## Configuraciones de ejemplo
+Puedes ver la lista completa de opciones de configuración [aquí](https://github.com/Natizyskunk/vscode-sftp/wiki/configuration).
 
 - [Simple](#simple)
-- [Profiles](#profiles)
-- [Multiple Context](#multiple-context)
-- [Connection Hopping](#connection-hopping)
-- [Configuration in User Setting](#configuration-in-user-setting)
+- [Perfiles](#perfiles)
+- [Contextos múltiples](#contextos-múltiples)
+- [Conexión con saltos (hopping)](#conexión-con-saltos-hopping)
+- [Configuración en los ajustes de usuario](#configuración-en-los-ajustes-de-usuario)
 
 ### Simple
 ```json
 {
   "host": "host",
-  "username": "username",
+  "username": "usuario",
   "remotePath": "/remote/workspace"
 }
 ```
 
-### Profiles
+### Perfiles
 ```json
 {
-  "username": "username",
-  "password": "password",
+  "username": "usuario",
+  "password": "contraseña",
   "remotePath": "/remote/workspace/a",
   "watcher": {
     "files": "dist/*.{js,css}",
@@ -164,114 +162,114 @@ You can see the full list of configuration options [here](https://github.com/Nat
 }
 ```
 
-_Note：_ `context` and `watcher` are only available at root level.
+_Nota:_ `context` y `watcher` solo están disponibles en el nivel raíz.
 
-Use `SFTP: Set Profile` to switch profile.
+Usa `SFTP: Set Profile` para cambiar de perfil.
 
-### Multiple Context
-The context must **not be same**.
+### Contextos múltiples
+Los contextos **no deben ser iguales**.
 ```json
 [
   {
     "name": "server1",
     "context": "project/build",
     "host": "host",
-    "username": "username",
-    "password": "password",
+    "username": "usuario",
+    "password": "contraseña",
     "remotePath": "/remote/project/build"
   },
   {
     "name": "server2",
     "context": "project/src",
     "host": "host",
-    "username": "username",
-    "password": "password",
+    "username": "usuario",
+    "password": "contraseña",
     "remotePath": "/remote/project/src"
   }
 ]
 ```
 
-_Note：_ `name` is required in this mode.
+_Nota:_ `name` es obligatorio en este modo.
 
-### Connection Hopping
-You can connect to a target server through a proxy with ssh protocol.
+### Conexión con saltos (hopping)
+Puedes conectarte a un servidor destino a través de un proxy con el protocolo ssh.
 
-_Note：_ Variable substitution is not working in a hop configuration.
+_Nota:_ la sustitución de variables no funciona dentro de una configuración `hop`.
 
-#### Single Hop
-local -> hop -> target
+#### Salto único
+local -> salto -> destino
 ```json
 {
   "name": "target",
   "remotePath": "/path/in/target",
 
-  // hop
+  // salto
   "host": "hopHost",
   "username": "hopUsername",
-  "privateKeyPath": "/Users/localUser/.ssh/id_rsa", // <-- The key file is assumed on the local.
+  "privateKeyPath": "/Users/localUser/.ssh/id_rsa", // <-- El archivo de clave se asume en la máquina local.
 
   "hop": {
-    // target
+    // destino
     "host": "targetHost",
     "username": "targetUsername",
-    "privateKeyPath": "/Users/hopUser/.ssh/id_rsa", // <-- The key file is assumed on the hop.
+    "privateKeyPath": "/Users/hopUser/.ssh/id_rsa", // <-- El archivo de clave se asume en el salto.
   }
 }
 ```
 
-#### Multiple Hop
-local -> hopa -> hopb -> target
+#### Saltos múltiples
+local -> saltoA -> saltoB -> destino
 ```json
 {
   "name": "target",
   "remotePath": "/path/in/target",
 
-  // hopa
+  // saltoA
   "host": "hopAHost",
   "username": "hopAUsername",
-  "privateKeyPath": "/Users/hopAUsername/.ssh/id_rsa" // <-- The key file is assumed on the local.
+  "privateKeyPath": "/Users/hopAUsername/.ssh/id_rsa" // <-- El archivo de clave se asume en la máquina local.
 
   "hop": [
-    // hopb
+    // saltoB
     {
       "host": "hopBHost",
       "username": "hopBUsername",
-      "privateKeyPath": "/Users/hopaUser/.ssh/id_rsa" // <-- The key file is assumed on the hopa.
+      "privateKeyPath": "/Users/hopaUser/.ssh/id_rsa" // <-- El archivo de clave se asume en el saltoA.
     },
 
-    // target
+    // destino
     {
       "host": "targetHost",
       "username": "targetUsername",
-      "privateKeyPath": "/Users/hopbUser/.ssh/id_rsa", // <-- The key file is assumed on the hopb.
+      "privateKeyPath": "/Users/hopbUser/.ssh/id_rsa", // <-- El archivo de clave se asume en el saltoB.
     }
   ]
 }
 ```
 
-### Configuration in User Setting
-You can use `remote` to tell sftp to get the configuration from [remote-fs](https://github.com/liximomo/vscode-remote-fs).
+### Configuración en los ajustes de usuario
+Puedes usar `remote` para indicarle a sftp que tome la configuración de [remote-fs](https://github.com/liximomo/vscode-remote-fs).
 
-In User Setting:
+En los ajustes de usuario:
 ```json
 "remotefs.remote": {
   "dev": {
     "scheme": "sftp",
     "host": "host",
-    "username": "username",
+    "username": "usuario",
     "rootPath": "/path/to/somewhere"
   },
   "projectX": {
     "scheme": "sftp",
     "host": "host",
-    "username": "username",
+    "username": "usuario",
     "privateKeyPath": "/Users/xx/.ssh/id_rsa",
     "rootPath": "/home/foo/some/projectx"
   }
 }
 ```
 
-In sftp.json:
+En sftp.json:
 ```json
 {
   "remote": "dev",
@@ -281,47 +279,47 @@ In sftp.json:
 }
 ```
 
-## Remote Explorer
-![remote-explorer-preview](assets/showcase/remote-explorer.png)
+## Explorador Remoto
+![vista-previa-explorador-remoto](assets/showcase/remote-explorer.png)
 
-Remote Explorer lets you explore files in remote. You can open Remote Explorer by:
+El Explorador Remoto te permite explorar los archivos del servidor. Puedes abrirlo así:
 
-1. Run Command `View: Show SFTP`.
-2. Click SFTP view in Activity Bar.
+1. Ejecuta el comando `View: Show SFTP`.
+2. Haz clic en la vista SFTP de la barra de actividades.
 
-You can only view a files content with Remote Explorer. Run command `SFTP: Edit in Local` to edit it in local.
+Con el Explorador Remoto solo puedes ver el contenido de los archivos. Ejecuta el comando `SFTP: Edit in Local` para editarlos en local.
 
-Since v1.16.5, symlinked directories on the remote are browsable too.
+Desde la v1.16.5, los directorios enlazados simbólicamente en el remoto también son navegables.
 
-### Multiple Select
-You are able to select multiple files/folders at once on the remote server to download and upload. You can do it simply by holding down Ctrl or Shift while selecting all desired files, just like on the regular explorer view.
+### Selección múltiple
+Puedes seleccionar varios archivos/carpetas a la vez en el servidor remoto para descargarlos o subirlos. Simplemente mantén pulsado Ctrl o Shift mientras seleccionas los archivos deseados, igual que en el explorador normal.
 
-_Note：_ You need to manually refresh the parent folder after you **delete** a file if the explorer isn't correctly updated.
+_Nota:_ si el explorador no se actualiza correctamente tras **eliminar** un archivo, refresca manualmente la carpeta padre.
 
-### Order
-You can order the remote Explorer by adding the `remoteExplorer.order` parameter inside your `sftp.json` config file.
+### Orden
+Puedes ordenar el Explorador Remoto agregando el parámetro `remoteExplorer.order` dentro de tu archivo de configuración `sftp.json`.
 
-In sftp.json:
+En sftp.json:
 ```json
 {
   "remoteExplorer": {
-    "order": 1 // <-- Default value is 0.
+    "order": 1 // <-- El valor por defecto es 0.
   }
 }
 ```
 
-## Debug
-1. Open User Settings.
-  - On Windows/Linux - `File > Preferences > Settings`
-  - On macOS - `Code > Preferences > Settings`
-2. Set `sftp.debug` to `true` and reload vscode.
-3. View the logs in `View > Output > sftp`.
+## Depuración
+1. Abre los ajustes de usuario.
+  - En Windows/Linux: `File > Preferences > Settings`
+  - En macOS: `Code > Preferences > Settings`
+2. Activa `sftp.debug` (`true`) y recarga VS Code.
+3. Consulta los logs en `View > Output > sftp`.
 
 ## FAQ
-You can see all the Frequently Asked Questions [here](./FAQ.md).
+Puedes ver todas las preguntas frecuentes (en inglés) [aquí](./FAQ.md).
 
-## Credits and support for the original authors
-This fork stands on the work of [@liximomo](https://github.com/liximomo) (original author) and [@Natizyskunk](https://github.com/Natizyskunk) (maintainer of the fork this one derives from). If this extension helped you over the years, consider supporting them:
+## Créditos y apoyo a los autores originales
+Este fork se apoya en el trabajo de [@liximomo](https://github.com/liximomo) (autor original) y [@Natizyskunk](https://github.com/Natizyskunk) (mantenedor del fork del que este deriva). Si esta extensión te ha ayudado durante estos años, considera apoyarlos:
 
-- Buy Natizyskunk a coffee: https://www.buymeacoffee.com/Natizyskunk
+- Invítale un café a Natizyskunk: https://www.buymeacoffee.com/Natizyskunk
 - PayPal: https://www.paypal.com/donate?business=DELD7APHHM3BC&no_recurring=0&currency_code=EUR

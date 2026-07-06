@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 20 | 2026-07-05 | README raíz traducido íntegramente al español        | [Ver detalle](2026-07-05_docs_readme_espanol.md) |
 | 19 | 2026-07-05 | README del fork: motivación, cambios y expectativas  | [Ver detalle](2026-07-05_docs_readme_fork.md) |
 | 18 | 2026-07-05 | Release 1.16.5: segunda iteración de correcciones    | [Ver detalle](2026-07-05_release_1_16_5.md) |
 | 17 | 2026-07-05 | uploadOnSave al guardar notebooks (.ipynb)           | [Ver detalle](2026-07-05_fix_upload_on_save_notebooks.md) |
