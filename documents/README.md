@@ -6,7 +6,7 @@ Fork correctivo de la extensión [Natizyskunk/vscode-sftp](https://github.com/Na
 
 | Documento | Descripción |
 |-----------|-------------|
-| *(aún no hay documentos temáticos; se crearán como `NN-tema.md` según [Documentations.md](Protocols/Documentations.md))* | |
+| [01-plan-migracion-basic-ftp.md](01-plan-migracion-basic-ftp.md) | Plan técnico para reemplazar el paquete `ftp` abandonado por `basic-ftp` (bugs FTP del backlog, pasos, riesgos) |
 
 ## Protocolos
 
