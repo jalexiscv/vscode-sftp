@@ -1,3 +1,8 @@
+## 1.17.0 - 2026-07-05 (fork jalexiscv/vscode-sftp)
+* New Feature : **Securely save passwords** with VS Code SecretStorage (OS keychain). After a successful connection with a typed password the extension offers to remember it; stale passwords are forgotten automatically on auth failure. New command `SFTP: Forget Saved Passwords` and setting `sftp.promptToSavePassword` (most requested feature of the upstream backlog, replaces the discarded approach of upstream PR [#545](https://github.com/Natizyskunk/vscode-sftp/pull/545)).
+* CI : GitHub Actions workflow verifying lint, build and tests on every push/PR, plus automated release packaging on tags.
+* The README ships in six languages (Spanish base, English, 简体中文, Português-BR, Français, Deutsch).
+
 ## 1.16.5 - 2026-07-05 (fork jalexiscv/vscode-sftp)
 * Fix : `Open SSH in Terminal` now uses the configured `hop` chain via OpenSSH ProxyJump (`-J`) (upstream issue [#441](https://github.com/Natizyskunk/vscode-sftp/issues/441)).
 * Fix : Remote symlinks pointing to directories are now browsable in the Remote Explorer over SFTP (upstream issue [#283](https://github.com/Natizyskunk/vscode-sftp/issues/283)).

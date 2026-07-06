@@ -2,7 +2,7 @@
   "name": "sftp",
   "displayName": "SFTP",
   "description": "SFTP/FTP sync",
-  "version": "1.16.5",
+  "version": "1.17.0",
   "publisher": "jalexiscv",
   "author": "jalexiscv <jalexiscv@utede.edu.co> (https://github.com/jalexiscv)",
   "engines": {

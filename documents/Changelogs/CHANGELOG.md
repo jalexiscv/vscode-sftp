@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 25 | 2026-07-05 | Release 1.17.0: contraseñas seguras + CI             | [Ver detalle](2026-07-05_release_1_17_0.md) |
 | 24 | 2026-07-05 | Guardado seguro de contraseñas (SecretStorage)       | [Ver detalle](2026-07-05_feat_guardar_contrasenas.md) |
 | 23 | 2026-07-05 | CI y release automatizada con GitHub Actions         | [Ver detalle](2026-07-05_chore_ci_github_actions.md) |
 | 22 | 2026-07-05 | README multiidioma: español base + 5 traducciones    | [Ver detalle](2026-07-05_docs_readme_multiidioma.md) |
