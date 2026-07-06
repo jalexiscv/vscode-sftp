@@ -1,5 +1,6 @@
+import { Readable, Writable, PassThrough } from 'stream';
+import { Client, FileInfo, FileType as BasicFtpFileType } from 'basic-ftp';
 import * as PQueue from 'p-queue';
-import { Readable } from 'stream';
 import logger from '../../logger';
 import { FileEntry, FileType, FileStats, FileOption } from './fileSystem';
 import RemoteFileSystem from './remoteFileSystem';
@@ -17,39 +18,34 @@ const numMap = {
   x: 1,
 };
 
-function toNumMode(rightObj) {
-  // some ftp server would reusult rightObj undefined.
-  if (!rightObj) return 0o666;
+// basic-ftp exposes unix permissions as { user, group, world } with 'rwx'
+// strings; convert to an octal number, defaulting to 0o666 when unavailable.
+function toNumMode(permissions): number {
+  if (!permissions) return 0o666;
 
-  // tslint:disable-next-line:no-shadowed-variable
-  const modeStr = Object.keys(rightObj).reduce((modeStr, key) => {
-    const rightStr = rightObj[key];
-    let cur = 0;
-    for (const char of rightStr) {
-      cur += numMap[char];
+  const parts = [permissions.user, permissions.group, permissions.world];
+  let modeStr = '';
+  for (const part of parts) {
+    if (typeof part !== 'string') {
+      return 0o666;
     }
-    return modeStr + cur;
-  }, '');
+    let cur = 0;
+    for (const char of part) {
+      cur += numMap[char] || 0;
+    }
+    modeStr += cur;
+  }
 
   return parseInt(modeStr, 8);
 }
 
-// the ftp package decodes every listing as latin1, so utf8 names from the
-// server arrive mojibaked. Reinterpret them as utf8 when the byte sequence
-// is valid utf8; otherwise keep the original (a real latin1 server).
-function decodeListingName(name: string): string {
-  const bytes = Buffer.from(name, 'binary');
-  const utf8 = bytes.toString('utf8');
-  return Buffer.from(utf8, 'utf8').equals(bytes) ? utf8 : name;
-}
-
 /**
- * Remote filesystem over plain FTP, backed by the `ftp` package client.
+ * Remote filesystem over FTP, backed by the maintained `basic-ftp` package.
  *
  * All commands are serialized through a single-concurrency queue because an
- * FTP control connection can only run one command at a time. Listings arrive
- * latin1-decoded from the client, so names are re-decoded to utf8 when valid
- * (see {@link decodeListingName}).
+ * FTP control connection can only run one command at a time. basic-ftp
+ * negotiates UTF-8 automatically, so listing names no longer need the
+ * latin1→utf8 repair the old `ftp` package required.
  *
  * Key lifecycle methods:
  * - {@link list} lists and normalizes directory entries.
@@ -59,12 +55,12 @@ function decodeListingName(name: string): string {
 export default class FTPFileSystem extends RemoteFileSystem {
   private _supportMFMT: boolean = true;
 
-  static getFileType(type) {
-    if (type === 'd') {
+  static getFileType(type: BasicFtpFileType): FileType {
+    if (type === BasicFtpFileType.Directory) {
       return FileType.Directory;
-    } else if (type === '-') {
+    } else if (type === BasicFtpFileType.File) {
       return FileType.File;
-    } else if (type === 'l') {
+    } else if (type === BasicFtpFileType.SymbolicLink) {
       return FileType.SymbolicLink;
     } else {
       return FileType.Unknown;
@@ -73,27 +69,29 @@ export default class FTPFileSystem extends RemoteFileSystem {
 
   private queue: any = new PQueue({ concurrency: 1 });
 
-  get ftp() {
+  get ftp(): Client {
     return this.getClient().getFsClient();
   }
 
-  toFileStat(stat): FileStats {
-    const mtime = this.toLocalTime(stat.date.getTime());
+  toFileStat(info: FileInfo): FileStats {
+    const mtime = info.modifiedAt
+      ? this.toLocalTime(info.modifiedAt.getTime())
+      : 0;
     return {
-      type: FTPFileSystem.getFileType(stat.type),
-      mode: toNumMode(stat.rights), // Caution: windows will always get 0o666
-      size: stat.size,
+      type: FTPFileSystem.getFileType(info.type),
+      mode: toNumMode(info.permissions), // Caution: windows will always get 0o666
+      size: info.size,
       mtime,
       atime: mtime,
-      target: stat.target,
+      target: info.link || undefined,
     };
   }
 
-  toFileEntry(fullPath, stat): FileEntry {
+  toFileEntry(fullPath: string, info: FileInfo): FileEntry {
     return {
       fspath: fullPath,
-      name: stat.name,
-      ...this.toFileStat(stat),
+      name: info.name,
+      ...this.toFileStat(info),
     };
   }
 
@@ -151,56 +149,31 @@ export default class FTPFileSystem extends RemoteFileSystem {
   }
 
   async get(path, _option?: FileOption): Promise<Readable> {
-    const stream = await this.atomicGet(path);
-
-    if (!stream) {
-      throw new Error('create ReadStream failed');
-    }
-
-    return stream;
+    return this.atomicGet(path);
   }
 
   async chmod(path: string, mode: number): Promise<void> {
-    const command = `CHMOD ${mode.toString(8)} ${path}`;
-    return await this.atomicSite(command);
+    await this.atomicSite(`CHMOD ${mode.toString(8)} ${path}`);
   }
 
   async put(input: Readable, path, _option?: FileOption): Promise<void> {
-    let inputError: Error | undefined;
-    // node-ftp pauses the input and only pipes (resumes) it after the server
-    // accepts the STOR with a 150 reply, so until then a retry is safe
-    let transferStarted = false;
-    input.once('resume', () => {
-      transferStarted = true;
-    });
-    input.once('error', err => {
-      inputError = err;
-      this.ftp.abort(abortErr => {
-        if (abortErr) {
-          logger.error(abortErr, 'fail to abort');
-        }
-      });
-    });
-
     try {
       await this.atomicPut(input, path);
     } catch (error) {
-      const err = inputError || error;
       // some servers (e.g. proftpd with mod_rename) reject a STOR over an
-      // existing file with 550. If the input wasn't consumed yet, delete the
-      // target and retry once.
-      if (inputError || transferStarted || (error as any).code !== 550) {
-        throw err;
+      // existing file with 550. Delete the target and retry once.
+      if (!isPermanentNegative(error)) {
+        throw error;
       }
 
       let existing: FileStats | undefined;
       try {
         existing = await this.lstat(path);
       } catch (_e) {
-        throw err;
+        throw error;
       }
       if (existing.type !== FileType.File) {
-        throw err;
+        throw error;
       }
 
       logger.info(`STOR rejected over existing file, deleting and retrying: ${path}`);
@@ -257,7 +230,7 @@ export default class FTPFileSystem extends RemoteFileSystem {
       err = error;
     }
 
-    switch (err.code) {
+    switch (ftpCode(err)) {
       case 550:
         // Hooray, exists!
         if (err.message.toLowerCase().indexOf('file exists') >= 0) {
@@ -291,26 +264,12 @@ export default class FTPFileSystem extends RemoteFileSystem {
     }
   }
 
-  async list(
-    dir: string,
-    { showHiddenFiles = false } = {}
-  ): Promise<FileEntry[]> {
-    // -al flag only get partially support
-    const stats = await this.atomicList(dir);
+  async list(dir: string): Promise<FileEntry[]> {
+    const infos = await this.atomicList(dir);
 
-    return (
-      stats
-        // item will be a string if ftp fail to parse it (https://github.com/liximomo/vscode-sftp/issues/308)
-        // we simply ignore it by check whether it has a name property
-        .filter(item => item.name && item.name !== '.' && item.name !== '..')
-        .map(item => {
-          const name = decodeListingName(item.name);
-          return this.toFileEntry(this.pathResolver.join(dir, name), {
-            ...item,
-            name,
-          });
-        })
-    );
+    return infos
+      .filter(info => info.name && info.name !== '.' && info.name !== '..')
+      .map(info => this.toFileEntry(this.pathResolver.join(dir, info.name), info));
   }
 
   async unlink(path: string): Promise<void> {
@@ -326,140 +285,73 @@ export default class FTPFileSystem extends RemoteFileSystem {
   }
 
   async renameAtomic(srcPath: string, destPath: string): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.rename(srcPath, destPath, err => {
-          if (err) {
-            return reject(err);
-          }
+    return this.queue.add(() => this.ftp.rename(srcPath, destPath));
+  }
 
-          resolve();
-        });
-      });
+  private atomicList(path: string): Promise<FileInfo[]> {
+    return this.queue.add(() => this.ftp.list(path));
+  }
 
+  private atomicGet(path: string): Promise<Readable> {
+    // basic-ftp writes into a Writable; bridge it to the Readable the
+    // transfer layer expects via a PassThrough.
+    const task = () => {
+      const stream = new PassThrough();
+      return this.ftp.downloadTo(stream as Writable, path).then(() => undefined, error => {
+        stream.destroy(error);
+        throw error;
+      }).then(() => stream as Readable);
+    };
     return this.queue.add(task);
   }
 
-  private async atomicList(path: string): Promise<any[]> {
+  private atomicPut(input: Readable, path: string): Promise<void> {
+    return this.queue.add(() => this.ftp.uploadFrom(input, path).then(() => undefined));
+  }
+
+  private atomicDeleteFile(path: string): Promise<void> {
+    return this.queue.add(() => this.ftp.remove(path));
+  }
+
+  private atomicMakeDir(path: string): Promise<void> {
+    // send MKD directly so we get the raw error code (ensureDir does its own
+    // existence handling); basic-ftp's ensureDir would swallow the 550
+    return this.queue.add(() => this.ftp.send('MKD ' + path).then(() => undefined));
+  }
+
+  private atomicRemoveDir(path: string, recursive: boolean): Promise<void> {
     const task = () =>
-      new Promise<any[]>((resolve, reject) => {
-        this.ftp.list(path, (err, stats) => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve(stats || []);
-        });
-      });
-
+      recursive
+        ? this.ftp.removeDir(path)
+        : this.ftp.send('RMD ' + path).then(() => undefined);
     return this.queue.add(task);
   }
 
-  private async atomicGet(path: string): Promise<Readable> {
-    const task = () =>
-      new Promise<Readable>((resolve, reject) => {
-        this.ftp.get(path, (err, stream) => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve(stream);
-        });
-      });
-
-    return this.queue.add(task);
+  private atomicSite(command: string): Promise<void> {
+    return this.queue.add(() => this.ftp.send('SITE ' + command).then(() => undefined));
   }
 
-  private async atomicPut(input: Readable, path: string): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.put(input, path, err => {
-          if (err) {
-            return reject(err);
-          }
+  private atomicSetLastMod(path: string, date: Date): Promise<void> {
+    const dateStr =
+      date.getUTCFullYear() +
+      ('00' + (date.getUTCMonth() + 1)).slice(-2) +
+      ('00' + date.getUTCDate()).slice(-2) +
+      ('00' + date.getUTCHours()).slice(-2) +
+      ('00' + date.getUTCMinutes()).slice(-2) +
+      ('00' + date.getUTCSeconds()).slice(-2);
 
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
+    return this.queue.add(() =>
+      this.ftp.send(`MFMT ${dateStr} ${path}`).then(() => undefined)
+    );
   }
+}
 
-  private async atomicDeleteFile(path: string): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.delete(path, err => {
-          if (err) {
-            return reject(err);
-          }
+// basic-ftp throws FTPError with a numeric `code`; normalize access to it
+function ftpCode(error): number | undefined {
+  return error && typeof error.code === 'number' ? error.code : undefined;
+}
 
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
-  }
-
-  private async atomicMakeDir(path: string): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.mkdir(path, err => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
-  }
-
-  private async atomicRemoveDir(
-    path: string,
-    recursive: boolean
-  ): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.rmdir(path, recursive, err => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
-  }
-
-  private async atomicSite(command: string): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.site(command, err => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
-  }
-
-  private async atomicSetLastMod(path: string, date: Date): Promise<void> {
-    const task = () =>
-      new Promise<void>((resolve, reject) => {
-        this.ftp.setLastMod(path, date, err => {
-          if (err) {
-            return reject(err);
-          }
-
-          resolve();
-        });
-      });
-
-    return this.queue.add(task);
-  }
+function isPermanentNegative(error): boolean {
+  const code = ftpCode(error);
+  return code !== undefined && code >= 500 && code < 600;
 }

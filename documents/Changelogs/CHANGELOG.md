@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 27 | 2026-07-05 | Migración del soporte FTP a basic-ftp                | [Ver detalle](2026-07-05_feat_migracion_basic_ftp.md) |
 | 26 | 2026-07-05 | Sincronización de los READMEs con la v1.17.0         | [Ver detalle](2026-07-05_docs_readme_v1170.md) |
 | 25 | 2026-07-05 | Release 1.17.0: contraseñas seguras + CI             | [Ver detalle](2026-07-05_release_1_17_0.md) |
 | 24 | 2026-07-05 | Guardado seguro de contraseñas (SecretStorage)       | [Ver detalle](2026-07-05_feat_guardar_contrasenas.md) |
