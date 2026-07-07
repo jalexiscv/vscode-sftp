@@ -2,6 +2,9 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 31 | 2026-07-07 | Release 1.19.0: administrador de conexiones          | [Ver detalle](2026-07-07_release_1_19_0.md) |
+| 30 | 2026-07-07 | Modo strict de TypeScript activado                   | [Ver detalle](2026-07-07_chore_strict_typescript.md) |
+| 29 | 2026-07-07 | Administrador gráfico de conexiones (webview)        | [Ver detalle](2026-07-07_feat_administrador_conexiones.md) |
 | 28 | 2026-07-05 | Release 1.18.0: FTP moderno (basic-ftp)              | [Ver detalle](2026-07-05_release_1_18_0.md) |
 | 27 | 2026-07-05 | Migración del soporte FTP a basic-ftp                | [Ver detalle](2026-07-05_feat_migracion_basic_ftp.md) |
 | 26 | 2026-07-05 | Sincronización de los READMEs con la v1.17.0         | [Ver detalle](2026-07-05_docs_readme_v1170.md) |

@@ -83,6 +83,13 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 | **FTP** | **FTP backend migrated from the abandoned `ftp` package (~10 years unmaintained) to [`basic-ftp`](https://github.com/patrickjuchli/basic-ftp)**: native UTF-8, robust FTPS and reliable passive mode. Validated against a real FTPS server with a new integration test (`ftp` baseline: 7/8 with `read ECONNRESET`; `basic-ftp`: 8/8). Resolves the FTP bug cluster of the backlog (PASV, FTPS with FileZilla, non-ASCII names, ECONNRESET) |
 | **Note** | `basic-ftp` supports passive mode only; FTP active mode (`passive: false`) is no longer supported |
 
+### [v1.19.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.19.0) — connection manager
+
+| Area | Change |
+|------|--------|
+| **UI** | **New Connection Manager** (`SFTP: Open Connection Manager`, also via the gear button of the Remote Explorer view): a graphical panel to create, edit, duplicate, delete, test and activate the connections/profiles of `sftp.json` without editing the JSON by hand. Saving reloads the services automatically; "Test connection" reuses the real connection machinery (including saved passwords) |
+| **Quality** | TypeScript `strict` mode enabled (`noImplicitAny` deferred) and 26 real type errors fixed, including a latent crash in the profile state observer |
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -107,7 +114,7 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 Or from the command line:
 
 ```
-code --install-extension sftp-1.18.0.vsix
+code --install-extension sftp-1.19.0.vsix
 ```
 
 ## Documentation

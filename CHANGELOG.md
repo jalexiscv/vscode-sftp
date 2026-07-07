@@ -1,3 +1,7 @@
+## 1.19.0 - 2026-07-07 (fork jalexiscv/vscode-sftp)
+* New Feature : **Graphical Connection Manager** — the new `SFTP: Open Connection Manager` command (also reachable from the gear button of the Remote Explorer view) opens a webview panel to create, edit, duplicate, delete, test and activate the connections/profiles of `.vscode/sftp.json` without editing the JSON by hand. Saving reloads the services automatically and "Test connection" reuses the real connection machinery (including securely saved passwords) without touching connections in use.
+* Quality : TypeScript `strict` mode enabled (`noImplicitAny` deferred to an incremental follow-up) and 26 real type errors fixed, including a latent crash in the profile state observer.
+
 ## 1.18.0 - 2026-07-05 (fork jalexiscv/vscode-sftp)
 * FTP : **Migrated the FTP backend from the abandoned `ftp` package (0.3.10, ~10 years unmaintained) to the actively maintained [`basic-ftp`](https://github.com/patrickjuchli/basic-ftp)**. Native UTF-8 negotiation, robust FTPS (explicit/implicit) and passive mode — validated against a real FTPS server with a new env-gated integration test (baseline `ftp`: 7/8 with a `read ECONNRESET`; `basic-ftp`: 8/8). Expected to resolve the FTP bug cluster of the upstream backlog ("unable to parse pasv server response", FTPS with FileZilla, garbled non-ASCII names, ECONNRESET).
 * Removed the abandoned `ftp` dependency.
