@@ -1,6 +1,6 @@
 class AppState {
   private _profile: string | null = null;
-  private _observer: (x: any) => void;
+  private _observer: ((x: any) => void) | null = null;
 
   get profile(): string | null {
     return this._profile;
@@ -12,7 +12,9 @@ class AppState {
     }
 
     this._profile = newProfile;
-    this._observer(this.getStateSnapshot());
+    if (this._observer) {
+      this._observer(this.getStateSnapshot());
+    }
   }
 
   getStateSnapshot() {

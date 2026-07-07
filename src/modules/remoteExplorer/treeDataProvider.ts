@@ -65,9 +65,9 @@ function dirFirstSort(fileA: ExplorerItem, fileB: ExplorerItem) {
 
 export default class RemoteTreeData
   implements vscode.TreeDataProvider<ExplorerItem>, vscode.TextDocumentContentProvider {
-  private _roots: ExplorerRoot[] | null;
-  private _rootsMap: Map<Id, ExplorerRoot> | null;
-  private _map: Map<vscode.Uri['query'], ExplorerItem>;
+  private _roots: ExplorerRoot[] | null = null;
+  private _rootsMap: Map<Id, ExplorerRoot> | null = null;
+  private _map: Map<vscode.Uri['query'], ExplorerItem> = new Map();
 
   private _onDidChangeFolder: vscode.EventEmitter<ExplorerItem> = new vscode.EventEmitter<
     ExplorerItem

@@ -23,7 +23,7 @@ let MAX_OPEN_FD_NUM = 222;
  */
 export default class SSHClient extends RemoteClient {
   private sftp: any;
-  private hoppingClients: SSHClient[];
+  private hoppingClients!: SSHClient[];
   private _opendFdNum: number = 0;
   private _queuedFdRequireCall: Array<(...args: any[]) => any> = [];
 
@@ -210,11 +210,11 @@ export default class SSHClient extends RemoteClient {
 
   private _hookCallForReleaseFileDescriptor(fn) {
     const self = this;
-    return function releaseFileDescriptor() {
+    return function releaseFileDescriptor(this: any) {
       const last = arguments.length - 1;
       const args = Array.prototype.slice.call(arguments, 0, last);
       const cb = arguments[last];
-      function wrapped() {
+      function wrapped(this: any) {
         // 队列到下一周期执行, 确保 cb 先执行.
         Promise.resolve().then(() => {
           if (self._queuedFdRequireCall.length > 0) {
@@ -232,11 +232,11 @@ export default class SSHClient extends RemoteClient {
 
   private _hookCallForRequestFileDescriptor(fn) {
     const self = this;
-    return function requestFileDescriptor() {
+    return function requestFileDescriptor(this: any) {
       const last = arguments.length - 1;
       const args = Array.prototype.slice.call(arguments, 0, last);
       const cb = arguments[last];
-      function wrapped() {
+      function wrapped(this: any) {
         self._opendFdNum += 1;
         cb.apply(this, arguments);
       }

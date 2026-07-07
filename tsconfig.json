@@ -9,7 +9,11 @@
         "sourceMap": true,
         "rootDir": ".",
         "noUnusedLocals": true,
-        "strictNullChecks": true,
+        "strict": true,
+        // pendiente: ~180 parámetros sin tipo por anotar antes de poder activarlo
+        "noImplicitAny": false,
+        // los @types instalados no tipan limpio con esta versión de TypeScript
+        "skipLibCheck": true,
         "plugins": [
           {
             "name": "typescript-tslint-plugin",

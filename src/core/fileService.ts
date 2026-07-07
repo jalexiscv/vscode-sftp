@@ -388,13 +388,13 @@ let id = 0;
  */
 export default class FileService {
   private _eventEmitter: EventEmitter = new EventEmitter();
-  private _name: string;
+  private _name!: string;
   private _watcherConfig: WatcherConfig;
-  private _profiles: string[];
+  private _profiles!: string[];
   private _pendingTransferTasks: Set<TransferTask> = new Set();
   private _transferSchedulers: TransferScheduler[] = [];
   private _config: FileServiceConfig;
-  private _configValidator: ConfigValidator;
+  private _configValidator!: ConfigValidator;
   private _watcherService: WatcherService = {
     create() {
       /* do nothing  */
