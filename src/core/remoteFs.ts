@@ -44,9 +44,9 @@ function isAuthFailure(error: Error): boolean {
 class KeepAliveRemoteFs {
   private isValid: boolean = false;
 
-  private pendingPromise: Promise<RemoteFileSystem> | null;
+  private pendingPromise: Promise<RemoteFileSystem> | null = null;
 
-  private fs: RemoteFileSystem;
+  private fs!: RemoteFileSystem;
 
   async getFs(
     option: ConnectOption & {
@@ -207,5 +207,24 @@ export function removeRemoteFs(option) {
   if (fs !== undefined) {
     fs.end();
     delete fsTable[identity];
+  }
+}
+
+// connect once to verify the credentials, closing the connection afterwards
+// unless an equivalent one was already alive (in that case it is shared with
+// running file services and must be kept open)
+export async function testRemoteConnection(option): Promise<void> {
+  if (option.protocol === 'local') {
+    return;
+  }
+
+  const identity = hashOption(option);
+  const alreadyExists = fsTable[identity] !== undefined;
+  try {
+    await createRemoteIfNoneExist(option);
+  } finally {
+    if (!alreadyExists) {
+      removeRemoteFs(option);
+    }
   }
 }
