@@ -29,6 +29,7 @@
   ],
   "activationEvents": [
     "onCommand:sftp.config",
+    "onCommand:sftp.openConnectionManager",
     "workspaceContains:.vscode/sftp.json"
   ],
   "icon": "resources/icon.png",
@@ -83,6 +84,12 @@
         "command": "sftp.config",
         "title": "Config",
         "category": "SFTP"
+      },
+      {
+        "command": "sftp.openConnectionManager",
+        "title": "Open Connection Manager",
+        "category": "SFTP",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "sftp.setProfile",
@@ -568,6 +575,11 @@
       "view/title": [
         {
           "command": "sftp.remoteExplorer.refresh",
+          "when": "view == remoteExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "sftp.openConnectionManager",
           "when": "view == remoteExplorer",
           "group": "navigation"
         }

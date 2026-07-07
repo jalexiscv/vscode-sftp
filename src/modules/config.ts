@@ -114,7 +114,7 @@ const defaultConfig = {
   },
 };
 
-function mergedDefault(config) {
+export function mergedDefault(config) {
   return {
     ...defaultConfig,
     ...config,
