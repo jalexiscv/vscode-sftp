@@ -10,7 +10,7 @@ export interface CommandOption {
 }
 
 export default abstract class Command {
-  id: string;
+  id!: string;
   name!: string;
   private _commandDoneListeners: Array<(...args: any[]) => void>;
 

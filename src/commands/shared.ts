@@ -76,7 +76,7 @@ export function selectContext(): Promise<Uri | undefined> {
 }
 
 export function applySelector<T>(...selectors: ((...args: any[]) => T | Promise<T>)[]) {
-  return function combinedSelector(...args: any[]): T | Promise<T> {
+  return function combinedSelector(this: any, ...args: any[]): T | Promise<T> {
     let result;
     for (const selector of selectors) {
       result = selector.apply(this, args);

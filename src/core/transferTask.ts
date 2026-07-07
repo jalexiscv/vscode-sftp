@@ -36,8 +36,8 @@ export default class TransferTask implements Task {
   private readonly _targetFs: FileSystem;
   private readonly _transferDirection: TransferDirection;
   private readonly _TransferOption: TransferOption;
-  private _handle: Readable;
-  private _cancelled: boolean;
+  private _handle!: Readable;
+  private _cancelled: boolean = false;
   // private _fileStatus: FileStatus;
 
   constructor(
