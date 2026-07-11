@@ -94,8 +94,16 @@ export function getBasePath(context: string, workspace: string) {
 }
 
 export function createFileService(config: any, workspace: string) {
+  // defaultProfile es un valor inicial, no una imposición: solo aplica cuando
+  // no hay perfil activo o cuando el activo ya no existe en esta configuración,
+  // para que una recarga de sftp.json no pise la selección del usuario
   if (config.defaultProfile) {
-    app.state.profile = config.defaultProfile;
+    const current = app.state.profile;
+    const currentIsValid =
+      current !== null && config.profiles && config.profiles[current] !== undefined;
+    if (!currentIsValid) {
+      app.state.profile = config.defaultProfile;
+    }
   }
 
   const normalizedBasePath = getBasePath(config.context, workspace);
