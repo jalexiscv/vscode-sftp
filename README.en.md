@@ -90,6 +90,13 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 | **UI** | **New Connection Manager** (`SFTP: Open Connection Manager`, also via the gear button of the Remote Explorer view): a graphical panel to create, edit, duplicate, delete, test and activate the connections/profiles of `sftp.json` without editing the JSON by hand. Saving reloads the services automatically; "Test connection" reuses the real connection machinery (including saved passwords) |
 | **Quality** | TypeScript `strict` mode enabled (`noImplicitAny` deferred) and 26 real type errors fixed, including a latent crash in the profile state observer |
 
+### [v1.20.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.20.0) — stable active profile and temp-file exclusion
+
+| Area | Change |
+|------|--------|
+| **Transfers** | Any file or folder whose name contains `.tmp` is now permanently excluded from transfers (uploads, `uploadOnSave` and sync), on every server and without any `ignore` configuration |
+| **Profiles** | The profile activated with `SFTP: Set Profile` or the Connection Manager no longer "switches by itself": reloads of `sftp.json` stop resetting it to `defaultProfile`, and the selection persists across VSCode restarts. `defaultProfile` becomes just the initial value and the fallback when the active profile disappears |
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -114,7 +121,7 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 Or from the command line:
 
 ```
-code --install-extension sftp-1.19.0.vsix
+code --install-extension sftp-1.20.0.vsix
 ```
 
 ## Documentation

@@ -90,6 +90,13 @@ Cada correção foi verificada (build do webpack limpo, 42/42 testes, linter sem
 | **UI** | **Novo Gerenciador de Conexões** (`SFTP: Open Connection Manager`, também pela engrenagem da visão Remote Explorer): painel gráfico para criar, editar, duplicar, excluir, testar e ativar as conexões/perfis do `sftp.json` sem editar o JSON à mão. Ao salvar, os serviços recarregam sozinhos; "Testar conexão" reutiliza a mecânica real de conexão (incluindo senhas salvas) |
 | **Qualidade** | Modo `strict` do TypeScript ativado (`noImplicitAny` adiado) e 26 erros reais de tipos corrigidos, incluindo um crash latente do observer de estado dos perfis |
 
+### [v1.20.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.20.0) — perfil ativo estável e exclusão de temporários
+
+| Área | Mudança |
+|------|---------|
+| **Transferências** | Todo arquivo ou pasta cujo nome contenha `.tmp` fica permanentemente excluído das transferências (uploads, `uploadOnSave` e sync), em todos os servidores e sem configurar nada no `ignore` |
+| **Perfis** | O perfil ativado com `SFTP: Set Profile` ou com o Gerenciador de Conexões não "muda mais sozinho": os recarregamentos do `sftp.json` deixam de restaurá-lo ao `defaultProfile`, e a seleção persiste entre reinicializações do VSCode. O `defaultProfile` passa a ser apenas o valor inicial e o recurso quando o perfil ativo desaparece |
+
 ## O que esperamos desta versão
 
 - **Um substituto direto (drop-in).** O mesmo formato de `sftp.json`, os mesmos comandos, os mesmos fluxos de trabalho — as configurações existentes funcionam sem nenhuma migração.
@@ -114,7 +121,7 @@ Cada correção foi verificada (build do webpack limpo, 42/42 testes, linter sem
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.19.0.vsix
+code --install-extension sftp-1.20.0.vsix
 ```
 
 ## Documentação
