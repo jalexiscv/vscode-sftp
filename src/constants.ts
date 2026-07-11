@@ -10,6 +10,9 @@ export const REMOTE_SCHEME = 'remote';
 export const CONGIF_FILENAME = 'sftp.json';
 export const CONFIG_PATH = path.join(VENDOR_FOLDER, CONGIF_FILENAME);
 
+// clave de workspaceState donde se persiste el perfil activo entre sesiones
+export const STATE_KEY_ACTIVE_PROFILE = 'sftp.state.activeProfile';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 

@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 33 | 2026-07-10 | El perfil activo se respeta y persiste entre sesiones | [Ver detalle](2026-07-10_fix_perfil_activo_estable.md) |
 | 32 | 2026-07-10 | Los archivos temporales `.tmp` nunca se transfieren  | [Ver detalle](2026-07-10_feat_ignorar_archivos_tmp.md) |
 | 31 | 2026-07-07 | Release 1.19.0: administrador de conexiones          | [Ver detalle](2026-07-07_release_1_19_0.md) |
 | 30 | 2026-07-07 | Modo strict de TypeScript activado                   | [Ver detalle](2026-07-07_chore_strict_typescript.md) |

@@ -4,6 +4,7 @@
 import * as vscode from 'vscode';
 import app from './app';
 import initCommands from './initCommands';
+import { STATE_KEY_ACTIVE_PROFILE } from './constants';
 import { reportError } from './helper';
 import fileActivityMonitor from './modules/fileActivityMonitor';
 import { tryLoadConfigs } from './modules/config';
@@ -45,6 +46,8 @@ export async function activate(context: vscode.ExtensionContext) {
   setContextValue('enabled', true);
   app.sftpBarItem.show();
   app.state.subscribe(_ => {
+    // persistir la selección para que sobreviva a reinicios de la ventana
+    context.workspaceState.update(STATE_KEY_ACTIVE_PROFILE, app.state.profile);
     const currentText = app.sftpBarItem.getText();
     // current is showing profile
     if (currentText.startsWith('SFTP')) {
@@ -54,6 +57,14 @@ export async function activate(context: vscode.ExtensionContext) {
       app.remoteExplorer.refresh();
     }
   });
+
+  // restaurar el perfil de la sesión anterior antes de crear los servicios,
+  // para que createFileService respete la selección en lugar del defaultProfile
+  const savedProfile = context.workspaceState.get<string | null>(STATE_KEY_ACTIVE_PROFILE, null);
+  if (savedProfile) {
+    app.state.profile = savedProfile;
+  }
+
   try {
     await setup(workspaceFolders);
     app.remoteExplorer = new RemoteExplorer(context);
