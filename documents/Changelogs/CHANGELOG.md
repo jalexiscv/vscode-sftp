@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 32 | 2026-07-10 | Los archivos temporales `.tmp` nunca se transfieren  | [Ver detalle](2026-07-10_feat_ignorar_archivos_tmp.md) |
 | 31 | 2026-07-07 | Release 1.19.0: administrador de conexiones          | [Ver detalle](2026-07-07_release_1_19_0.md) |
 | 30 | 2026-07-07 | Modo strict de TypeScript activado                   | [Ver detalle](2026-07-07_chore_strict_typescript.md) |
 | 29 | 2026-07-07 | Administrador gráfico de conexiones (webview)        | [Ver detalle](2026-07-07_feat_administrador_conexiones.md) |

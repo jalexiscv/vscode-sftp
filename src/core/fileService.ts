@@ -122,10 +122,14 @@ const DEFAULT_SSHCONFIG_FILE = '~/.ssh/config';
 // root-anchored gitignore pattern for the extension config file
 const CONFIG_IGNORE_PATTERN = '/' + CONFIG_PATH.split(path.sep).join('/');
 
+// any file or directory whose name contains ".tmp" is a temp artifact
+const TMP_FILES_IGNORE_PATTERN = '*.tmp*';
+
 function filesIgnoredFromConfig(config: FileServiceConfig): string[] {
   const cache = app.fsCache;
-  // the config file holds credentials; never let a sync/upload ship it
-  const ignore: string[] = [CONFIG_IGNORE_PATTERN].concat(
+  // the config file holds credentials; never let a sync/upload ship it.
+  // temp files (".tmp" in the name) must never reach the remote either
+  const ignore: string[] = [CONFIG_IGNORE_PATTERN, TMP_FILES_IGNORE_PATTERN].concat(
     config.ignore && config.ignore.length ? config.ignore : []
   );
 
