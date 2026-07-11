@@ -1,3 +1,7 @@
+## 1.20.0 - 2026-07-10 (fork jalexiscv/vscode-sftp)
+* New Feature : **Temporary files are never transferred** — any file or folder whose name contains `.tmp` is excluded from uploads, `uploadOnSave` and sync on every server, without any `ignore` configuration.
+* Fix : **The active profile no longer switches by itself** — reloading `sftp.json` (editor save, git branch switch, Connection Manager save) stops resetting the selection to `defaultProfile`, and the selected profile now persists across VSCode restarts. `defaultProfile` becomes just the initial value and the fallback when the active profile disappears from the configuration.
+
 ## 1.19.0 - 2026-07-07 (fork jalexiscv/vscode-sftp)
 * New Feature : **Graphical Connection Manager** — the new `SFTP: Open Connection Manager` command (also reachable from the gear button of the Remote Explorer view) opens a webview panel to create, edit, duplicate, delete, test and activate the connections/profiles of `.vscode/sftp.json` without editing the JSON by hand. Saving reloads the services automatically and "Test connection" reuses the real connection machinery (including securely saved passwords) without touching connections in use.
 * Quality : TypeScript `strict` mode enabled (`noImplicitAny` deferred to an incremental follow-up) and 26 real type errors fixed, including a latent crash in the profile state observer.
