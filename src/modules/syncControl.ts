@@ -101,10 +101,26 @@ export async function suppressAutoSync<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await task();
   } finally {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      pendingReleases.delete(timer);
       suppressionDepth = Math.max(0, suppressionDepth - 1);
     }, SUPPRESSION_TAIL_MS);
+
+    // unref'd so a pending release never holds the process open — it is what
+    // made jest report a worker that failed to exit gracefully
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    pendingReleases.add(timer);
   }
+}
+
+const pendingReleases = new Set<any>();
+
+/** Drops every pending release. Called on deactivate and between tests. */
+export function cancelPendingSuppression() {
+  pendingReleases.forEach(timer => clearTimeout(timer));
+  pendingReleases.clear();
 }
 
 // long enough to cover the watcher debounce (550ms) plus event delivery
@@ -216,6 +232,9 @@ function findGitDir(startDir: string): string | null {
 
 // test seam: the module keeps process-wide state
 export function __resetForTest() {
+  // before zeroing the depth: a timer left over from the previous test would
+  // otherwise fire mid-test and lift a suppression it never took
+  cancelPendingSuppression();
   extensionContext = null;
   paused = false;
   suppressionDepth = 0;

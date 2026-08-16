@@ -67,8 +67,13 @@ const disposables: vscode.Disposable[] = [];
 const recentlyRenamedAway = new Map<string, number>();
 const RENAME_SUPPRESSION_MS = 5000;
 
+// windows and macOS both default to case-insensitive filesystems, so an event
+// whose casing differs from the queued parent must still match it
+const CASE_INSENSITIVE_FS =
+  process.platform === 'win32' || process.platform === 'darwin';
+
 function queueKey(fsPath: string): string {
-  return process.platform === 'win32' ? fsPath.toLowerCase() : fsPath;
+  return CASE_INSENSITIVE_FS ? fsPath.toLowerCase() : fsPath;
 }
 
 function markRenamedAway(fsPath: string) {
@@ -116,7 +121,7 @@ function collapseDescendants(paths: string[]): string[] {
   for (const candidate of sorted) {
     const isCovered = kept.some(parent => {
       const prefix = parent.endsWith(path.sep) ? parent : parent + path.sep;
-      return process.platform === 'win32'
+      return CASE_INSENSITIVE_FS
         ? candidate.toLowerCase().indexOf(prefix.toLowerCase()) === 0
         : candidate.indexOf(prefix) === 0;
     });
@@ -304,7 +309,10 @@ async function processDeletions() {
       // still needs to know the remote was left untouched — otherwise the two
       // sides silently drift apart.
       app.sftpBarItem.setDetail('$(warning) deletions not mirrored (git)');
-      setTimeout(() => app.sftpBarItem.setDetail(null), GIT_NOTICE_MS);
+      const notice = setTimeout(() => app.sftpBarItem.setDetail(null), GIT_NOTICE_MS);
+      if (typeof notice.unref === 'function') {
+        notice.unref();
+      }
       // skip this one only: a multi-root workspace can have an unrelated
       // service whose deletions are the user's own
       continue;
