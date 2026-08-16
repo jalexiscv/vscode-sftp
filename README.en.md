@@ -19,7 +19,7 @@ VSCode-SFTP lets you add, edit, or delete files in a local directory and sync th
 
 - [Why this fork exists](#why-this-fork-exists)
 - [What we updated](#what-we-updated)
-- [What's new in v1.21.0](#whats-new-in-v1210)
+- [What's new in v1.22.0](#whats-new-in-v1220)
 - [What we expect from this release](#what-we-expect-from-this-release)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 184/184 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 187/187 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -98,9 +98,9 @@ Every fix was verified (clean webpack build, 184/184 tests, linter with no error
 | **Transfers** | Any file or folder whose name contains `.tmp` is now permanently excluded from transfers (uploads, `uploadOnSave` and sync), on every server and without any `ignore` configuration |
 | **Profiles** | The profile activated with `SFTP: Set Profile` or the Connection Manager no longer "switches by itself": reloads of `sftp.json` stop resetting it to `defaultProfile`, and the selection persists across VSCode restarts. `defaultProfile` becomes just the initial value and the fallback when the active profile disappears |
 
-## What's new in v1.21.0
+## What's new in v1.22.0
 
-v1.21.0 is about making the server truly mirror what happens locally — and about keeping on your machine what should never have left it.
+v1.22.0 is about making the server truly mirror what happens locally — and about keeping on your machine what should never have left it.
 
 | Feature | What it gives you |
 |---------|-------------------|
@@ -144,7 +144,7 @@ v1.21.0 is about making the server truly mirror what happens locally — and abo
 Or from the command line:
 
 ```
-code --install-extension sftp-1.21.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Documentation

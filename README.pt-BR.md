@@ -19,7 +19,7 @@ O VSCode-SFTP permite adicionar, editar ou excluir arquivos em um diretório loc
 
 - [Por que este fork existe](#por-que-este-fork-existe)
 - [O que atualizamos](#o-que-atualizamos)
-- [Novidades da v1.21.0](#novidades-da-v1210)
+- [Novidades da v1.22.0](#novidades-da-v1220)
 - [O que esperamos desta versão](#o-que-esperamos-desta-versão)
 - [Instalação](#instalação)
 - [Documentação](#documentação)
@@ -46,7 +46,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 184/184 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 187/187 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -98,9 +98,9 @@ Cada correção foi verificada (build do webpack limpo, 184/184 testes, linter s
 | **Transferências** | Todo arquivo ou pasta cujo nome contenha `.tmp` fica permanentemente excluído das transferências (uploads, `uploadOnSave` e sync), em todos os servidores e sem configurar nada no `ignore` |
 | **Perfis** | O perfil ativado com `SFTP: Set Profile` ou com o Gerenciador de Conexões não "muda mais sozinho": os recarregamentos do `sftp.json` deixam de restaurá-lo ao `defaultProfile`, e a seleção persiste entre reinicializações do VSCode. O `defaultProfile` passa a ser apenas o valor inicial e o recurso quando o perfil ativo desaparece |
 
-## Novidades da v1.21.0
+## Novidades da v1.22.0
 
-A v1.21.0 trata de fazer o servidor refletir de verdade o que acontece no local — e de manter na sua máquina aquilo que nunca deveria ter saído dela.
+A v1.22.0 trata de fazer o servidor refletir de verdade o que acontece no local — e de manter na sua máquina aquilo que nunca deveria ter saído dela.
 
 | Novidade | O que traz |
 |----------|------------|
@@ -144,7 +144,7 @@ A v1.21.0 trata de fazer o servidor refletir de verdade o que acontece no local 
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.21.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Documentação

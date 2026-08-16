@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.21.0](#novedades-de-la-v1210)
+- [Novedades de la v1.22.0](#novedades-de-la-v1220)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 184/184 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 187/187 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -98,9 +98,9 @@ Cada corrección fue verificada (build de webpack limpio, 184/184 tests, linter 
 | **Transferencias** | Todo archivo o carpeta cuyo nombre contenga `.tmp` queda excluido de forma permanente de las transferencias (subidas, `uploadOnSave` y sync), en todos los servidores y sin configurar nada en `ignore` |
 | **Perfiles** | El perfil activado con `SFTP: Set Profile` o con el Administrador de Conexiones ya no "se cambia solo": las recargas de `sftp.json` dejan de restablecerlo al `defaultProfile` y la selección persiste entre reinicios de VSCode. `defaultProfile` pasa a ser solo el valor inicial y el respaldo si el perfil activo desaparece |
 
-## Novedades de la v1.21.0
+## Novedades de la v1.22.0
 
-La v1.21.0 se centra en que el servidor refleje de verdad lo que ocurre en local — y en que lo que nunca debió salir de tu máquina se quede en ella.
+La v1.22.0 se centra en que el servidor refleje de verdad lo que ocurre en local — y en que lo que nunca debió salir de tu máquina se quede en ella.
 
 | Novedad | Qué aporta |
 |---------|------------|
@@ -144,7 +144,7 @@ La v1.21.0 se centra en que el servidor refleje de verdad lo que ocurre en local
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.21.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Documentación

@@ -2,7 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
-| 41 | 2026-08-16 | Release 1.21.0: espejo local-remoto seguro           | [Ver detalle](2026-08-16_release_1_21_0.md) |
+| 41 | 2026-08-16 | Release 1.22.0: espejo local-remoto seguro           | [Ver detalle](2026-08-16_release_1_22_0.md) |
 | 40 | 2026-08-16 | Correcciones en transferencia y watcher              | [Ver detalle](2026-08-16_fix_transferencia_watcher.md) |
 | 39 | 2026-08-16 | Vista de actividad y modo pausa                      | [Ver detalle](2026-08-16_feat_actividad_y_pausa.md) |
 | 38 | 2026-08-16 | Renombrar y mover como rename en el servidor         | [Ver detalle](2026-08-16_feat_rename_remoto.md) |

@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.21.0](#neuerungen-in-v1210)
+- [Neuerungen in v1.22.0](#neuerungen-in-v1220)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 184/184 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 187/187 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -98,9 +98,9 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Übertragungen** | Jede Datei und jeder Ordner, deren Name `.tmp` enthält, wird dauerhaft von den Übertragungen ausgeschlossen (Uploads, `uploadOnSave` und Sync), auf allen Servern und ohne jegliche `ignore`-Konfiguration |
 | **Profile** | Das mit `SFTP: Set Profile` oder dem Verbindungsmanager aktivierte Profil „wechselt nicht mehr von selbst": das Neuladen von `sftp.json` setzt es nicht mehr auf das `defaultProfile` zurück, und die Auswahl bleibt über VSCode-Neustarts hinweg erhalten. `defaultProfile` ist nur noch der Anfangswert und die Rückfallebene, wenn das aktive Profil verschwindet |
 
-## Neuerungen in v1.21.0
+## Neuerungen in v1.22.0
 
-Bei v1.21.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert — und dass auf deinem Rechner bleibt, was ihn nie hätte verlassen dürfen.
+Bei v1.22.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert — und dass auf deinem Rechner bleibt, was ihn nie hätte verlassen dürfen.
 
 | Neuerung | Was sie bringt |
 |----------|----------------|
@@ -144,7 +144,7 @@ Bei v1.21.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.21.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Dokumentation
