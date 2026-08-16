@@ -1,6 +1,11 @@
 jest.mock('fs');
 
-import { resolveTrashRoot, isInsideTrash, trashBatchStamp } from '../remoteTrash';
+import {
+  resolveTrashRoot,
+  isInsideTrash,
+  trashBatchStamp,
+  parseBatchStamp,
+} from '../remoteTrash';
 
 /**
  * The trash is only a safety net if emptying it can't destroy real data, so the
@@ -70,5 +75,23 @@ describe('trashBatchStamp', () => {
 
   test('pads single digits so names sort chronologically', () => {
     expect(trashBatchStamp(new Date(2026, 0, 2, 3, 4, 5))).toBe('20260102-030405');
+  });
+});
+
+describe('parseBatchStamp', () => {
+  test('round-trips a stamp produced by trashBatchStamp', () => {
+    const when = new Date(2026, 7, 16, 12, 34, 56);
+    expect(parseBatchStamp(trashBatchStamp(when))).toBe(when.getTime());
+  });
+
+  test('rejects names this extension did not create', () => {
+    // the sweep deletes whole folders, so anything it cannot date must survive
+    ['', 'notes', '2026-08-16', '20260816', '20260816-1234', 'backup-20260816-123456'].forEach(
+      name => expect(parseBatchStamp(name)).toBeNull()
+    );
+  });
+
+  test('rejects an impossible date', () => {
+    expect(parseBatchStamp('20261345-995999')).toBeNull();
   });
 });

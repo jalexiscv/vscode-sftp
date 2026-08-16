@@ -367,6 +367,12 @@ export async function purgeExpired(fileService: FileService): Promise<number> {
     }
 
     const remoteFs = await fileService.getRemoteFileSystem(config);
+
+    // Sweep the trash directory itself, not just the index. Entries pushed out
+    // of the index by MAX_INDEX_ENTRIES would otherwise sit on the server for
+    // ever: unreachable for a restore and invisible to a purge.
+    await purgeExpiredBatchFolders(remoteFs, resolveTrashRoot(config), retentionDays);
+
     for (const entry of expired) {
       try {
         if (entry.isDirectory) {
@@ -425,6 +431,74 @@ export async function emptyTrash(fileService: FileService): Promise<void> {
   }
 
   forgetService(fileService.baseDir);
+}
+
+/**
+ * Removes whole batch folders older than the retention window.
+ *
+ * The folder name is the batch timestamp, so the server itself carries the age
+ * of its contents and the sweep needs no index. Anything that doesn't parse as
+ * a timestamp is left alone — it wasn't put there by this extension.
+ */
+async function purgeExpiredBatchFolders(
+  remoteFs: any,
+  trashRoot: string,
+  retentionDays: number
+): Promise<void> {
+  let entries: Array<{ name: string; fspath: string }>;
+  try {
+    entries = await remoteFs.list(trashRoot);
+  } catch (error) {
+    // no trash directory yet, or it is unreachable; nothing to sweep
+    return;
+  }
+
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  for (const entry of entries) {
+    const at = parseBatchStamp(entry.name);
+    if (at === null || at >= cutoff) {
+      continue;
+    }
+
+    try {
+      await remoteFs.rmdir(entry.fspath, true);
+      logger.info(`[trash] purged expired batch ${entry.name}`);
+    } catch (error) {
+      logger.debug(`[trash] could not purge batch ${entry.name}: ${error.message}`);
+    }
+  }
+}
+
+/** Epoch millis encoded in a `YYYYMMDD-HHmmss` folder name, or null. */
+export function parseBatchStamp(name: string): number | null {
+  const match = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(name);
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+  const when = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second)
+  );
+
+  // Date rolls out-of-range components over instead of rejecting them, so
+  // "20261345-995999" would silently become a valid, differently-dated folder.
+  // This sweep deletes folders recursively, so it only accepts a name that
+  // reads back exactly as it was written.
+  const roundTrips =
+    when.getFullYear() === Number(year) &&
+    when.getMonth() === Number(month) - 1 &&
+    when.getDate() === Number(day) &&
+    when.getHours() === Number(hour) &&
+    when.getMinutes() === Number(minute) &&
+    when.getSeconds() === Number(second);
+
+  return roundTrips ? when.getTime() : null;
 }
 
 /** Trash roots of every profile that has entries, for the confirmation dialog. */
