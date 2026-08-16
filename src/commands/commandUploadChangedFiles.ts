@@ -7,6 +7,7 @@ import { getGitService, GitAPI, Repository, Status, Change } from '../modules/gi
 import { checkCommand } from './abstract/createCommand';
 import logger from '../logger';
 import { simplifyPath } from '../helper';
+import { showConfirmMessage } from '../host';
 
 export default checkCommand({
   id: COMMAND_UPLOAD_CHANGEDFILES,
@@ -95,29 +96,53 @@ async function handleCommand(hint: any) {
     }
   }
 
-  await Promise.all(creates.concat(uploads).map(change => {
-    try {
-      uploadFile(change.uri);
-    } catch (e) {
-      logger.error('Upload failed.', e);
-    }
-  }));
+  // every phase awaits its own promises: the callbacks used to be synchronous,
+  // so Promise.all got undefined[], nothing was waited for and the rejections
+  // escaped the try/catch as unhandled ones — the failure logs below never ran
   await Promise.all(
-    renames.map(change => {
+    creates.concat(uploads).map(async change => {
       try {
-        renameRemote(change.originalUri, { originPath: change.renameUri!.fsPath });
+        await uploadFile(change.uri);
+      } catch (e) {
+        logger.error('Upload failed.', e);
+      }
+    })
+  );
+  await Promise.all(
+    renames.map(async change => {
+      try {
+        // the handler targets the new path and translates fromLocalPath itself
+        await renameRemote(change.renameUri!, { fromLocalPath: change.originalUri.fsPath });
       } catch (e) {
         logger.error('Rename failed.', e);
       }
     })
   );
-  await Promise.all(deletes.map(change => {
-    try {
-      removeRemote(change.uri);
-    } catch (e) {
-      logger.error('Deletion failed.', e);
+
+  // Deleting on the server is the one irreversible half of this command, and
+  // a staged deletion is a git decision, not necessarily a "remove it from
+  // production" one. Ask before mirroring it.
+  let skippedDeletes = false;
+  if (deletes.length > 0) {
+    const confirmed = await showConfirmMessage(
+      `Delete ${deletes.length} file(s) on ${describeTarget(deletes)}?`,
+      'Delete',
+      'Skip'
+    );
+    if (confirmed) {
+      await Promise.all(
+        deletes.map(async change => {
+          try {
+            await removeRemote(change.uri);
+          } catch (e) {
+            logger.error('Deletion failed.', e);
+          }
+        })
+      );
+    } else {
+      skippedDeletes = true;
     }
-  }));
+  }
 
   logger.log('');
   logger.log('------ Upload Changed Files Result ------');
@@ -128,7 +153,37 @@ async function handleCommand(hint: any) {
     renames,
     c => `${simplifyPath(c.originalUri.fsPath)} ➞ ${simplifyPath(c.renameUri!.fsPath)}`
   );
-  outputGroup('deleted', deletes, c => simplifyPath(c.uri.fsPath));
+  outputGroup(
+    skippedDeletes ? 'deleted (skipped, not mirrored)' : 'deleted',
+    deletes,
+    c => simplifyPath(c.uri.fsPath)
+  );
+}
+
+// Names the servers the deletions would reach, so the prompt says *where*.
+function describeTarget(changes: Change[]): string {
+  const names = new Set<string>();
+  changes.forEach(change => {
+    const fileService = getFileService(change.uri);
+    if (!fileService) {
+      return;
+    }
+
+    let host: string | undefined;
+    try {
+      host = fileService.getConfig().host;
+    } catch (e) {
+      // an unresolvable config is the transfer's problem, not the prompt's
+    }
+
+    const label = [fileService.name, host].filter(part => Boolean(part)).join(' - ');
+    if (label) {
+      names.add(label);
+    }
+  });
+
+  const targets = Array.from(names);
+  return targets.length > 0 ? targets.join(', ') : 'the remote';
 }
 
 function outputGroup<T>(label: string, items: T[], formatItem: (x: T) => string) {

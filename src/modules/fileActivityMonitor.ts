@@ -21,6 +21,8 @@ import {
 } from './serviceManager';
 import { reportError, isValidFile, isConfigFile, isInWorkspace } from '../helper';
 import { downloadFile, uploadFile } from '../fileHandlers';
+import { isPaused, isSuppressed } from './syncControl';
+import { ActivityKind, record, succeed, fail } from './activityLog';
 
 // vscode glob patterns always use forward slashes
 const CONFIG_GLOB = '**/' + CONFIG_PATH.split(path.sep).join('/');
@@ -78,14 +80,32 @@ async function handleFileSave(uri: vscode.Uri) {
 
   const config = fileService.getConfig();
   if (config.uploadOnSave) {
+    // an explicit command is the user overriding the pause; this path is not
+    if (isPaused() || isSuppressed()) {
+      logger.info('[file-save] skipped (auto sync paused)');
+      return;
+    }
+
     let fspath = uri.fsPath;
+    let activityId: number | undefined;
     try {
       // resolve the on-disk casing so the remote path matches it
       fspath = realpathSync.native(uri.fsPath);
       uri = vscode.Uri.file(fspath);
       logger.info(`[file-save] ${fspath}`);
+      activityId = record({
+        kind: ActivityKind.Upload,
+        localPath: fspath,
+        serviceName: fileService.name,
+        profile: app.state.profile,
+        retry: () => uploadFile(uri),
+      });
       await uploadFile(uri);
+      succeed(activityId);
     } catch (error) {
+      if (activityId !== undefined) {
+        fail(activityId, error);
+      }
       logger.error(error, `upload ${fspath}`);
       app.sftpBarItem.updateStatus(StatusBarItem.Status.error);
     }
@@ -100,6 +120,12 @@ async function downloadOnOpen(uri: vscode.Uri) {
 
   const config = fileService.getConfig();
   if (config.downloadOnOpen) {
+    // bail out before the prompt: asking and then doing nothing is worse
+    if (isPaused()) {
+      logger.info('[file-open] skipped (auto sync paused)');
+      return;
+    }
+
     if (config.downloadOnOpen === 'confirm') {
       const isConfirm = await showConfirmMessage('Do you want SFTP to download this file?');
       if (!isConfirm) return;
