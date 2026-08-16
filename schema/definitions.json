@@ -110,6 +110,58 @@
         "description": "Absolute path to the ignore file or Relative path relative to the workspace root folder.",
         "default": ".gitignore"
       },
+      "ignoreTempFiles": {
+        "type": "boolean",
+        "description": "Never transfer local scratch files (editor swap files, OS metadata, merge leftovers, partial downloads). Set to false to disable the built-in exclusion list.",
+        "default": true
+      },
+      "tempFilePatterns": {
+        "type": "array",
+        "description": "Extra gitignore patterns added to the built-in temporary file exclusion list. Use a negation such as \"!*.bak\" to allow one of the built-in patterns back through.",
+        "items": {
+          "type": "string",
+          "description": "Temporary file pattern."
+        },
+        "default": []
+      },
+      "deleteRemoteOnLocalDelete": {
+        "type": "boolean",
+        "description": "Delete a file on the server when it is deleted locally. Bulk deletions ask for confirmation first (see deleteRemoteConfirmThreshold) and deletions performed by git operations are ignored.",
+        "default": true
+      },
+      "deleteRemoteConfirmThreshold": {
+        "type": "integer",
+        "description": "Number of local deletions above which SFTP asks for confirmation before mirroring them to the server. Set to 0 to always ask.",
+        "minimum": 0,
+        "default": 10
+      },
+      "renameRemoteOnLocalRename": {
+        "type": "boolean",
+        "description": "Rename or move the file on the server when it is renamed or moved locally, instead of re-uploading it and deleting the old path.",
+        "default": true
+      },
+      "remoteTrash": {
+        "type": "object",
+        "description": "Move remote files to a trash folder instead of deleting them outright, so a mistaken deletion can be undone.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Move deleted remote files to the trash folder instead of removing them.",
+            "default": true
+          },
+          "path": {
+            "type": "string",
+            "description": "Trash folder, relative to remotePath unless it starts with \"/\".",
+            "default": ".sftp-trash"
+          },
+          "retentionDays": {
+            "type": "number",
+            "description": "Days to keep trashed files before they are purged. 0 disables automatic purging.",
+            "minimum": 0,
+            "default": 7
+          }
+        }
+      },
       "remoteExplorer": {
         "type": "object",
         "description": "Remote Explorer Setting.",
@@ -138,6 +190,14 @@
         "enum": ["number", true],
         "description": "Limit the open file descriptors to the specific number in a remote server. Set to true for using default limit(222). Do not set this unless you have to.",
         "default": true
+      },
+      "filePerm": {
+        "type": "number",
+        "description": "Octal permissions applied to newly uploaded files, written as plain digits (e.g. 644). When set, the permissions of the target file are no longer preserved."
+      },
+      "dirPerm": {
+        "type": "number",
+        "description": "Octal permissions applied to newly created remote directories, written as plain digits (e.g. 755). When set, the permissions of the target directory are no longer preserved."
       }
     }
   },
@@ -314,6 +374,11 @@
         "type": ["string", "boolean"],
         "description": "Set to true for both control and data connection encryption, 'control' for control connection encryption only, or 'implicit' for\nimplicitly encrypted control connection (this mode is deprecated in modern times, but usually uses port 990).",
         "default": false
+      },
+      "passive": {
+        "type": "boolean",
+        "description": "Deprecated and ignored. The FTP backend uses basic-ftp, which only supports passive mode, so active mode (`passive: false`) is no longer supported. The connection is always passive.",
+        "default": true
       },
       "secureOptions": {
         "type": "object",
