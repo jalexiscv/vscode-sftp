@@ -19,6 +19,7 @@ VSCode-SFTP vous permet d'ajouter, de modifier ou de supprimer des fichiers dans
 
 - [Pourquoi ce fork existe](#pourquoi-ce-fork-existe)
 - [Ce que nous avons mis à jour](#ce-que-nous-avons-mis-à-jour)
+- [Nouveautés de la v1.21.0](#nouveautés-de-la-v1210)
 - [Ce que nous attendons de cette version](#ce-que-nous-attendons-de-cette-version)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -45,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 42/42 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 184/184 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -97,6 +98,28 @@ Chaque correction a été vérifiée (build webpack propre, 42/42 tests, linter 
 | **Transferts** | Tout fichier ou dossier dont le nom contient `.tmp` est désormais exclu en permanence des transferts (envois, `uploadOnSave` et sync), sur tous les serveurs et sans aucune configuration `ignore` |
 | **Profils** | Le profil activé avec `SFTP: Set Profile` ou le gestionnaire de connexions ne « change plus tout seul » : les rechargements de `sftp.json` ne le réinitialisent plus au `defaultProfile`, et la sélection persiste entre les redémarrages de VSCode. `defaultProfile` devient seulement la valeur initiale et le repli si le profil actif disparaît |
 
+## Nouveautés de la v1.21.0
+
+La v1.21.0 vise à ce que le serveur reflète vraiment ce qui se passe en local — et à ce que ce qui n'aurait jamais dû quitter votre machine y reste.
+
+| Nouveauté | Ce que cela apporte |
+|-----------|---------------------|
+| **Les fichiers temporaires ne sont jamais envoyés** | Une liste intégrée exclut les fichiers d'échange et de sauvegarde des éditeurs (vim, emacs), les fichiers de verrouillage d'Office et de LibreOffice, les restes de fusion (`*.orig`, `*.rej`, `*.bak`), les téléchargements incomplets (`*.part`, `*.crdownload`) et les métadonnées du système (`.DS_Store`, `Thumbs.db`, `desktop.ini`) — sur tous les serveurs et sans aucune configuration. Désactivable avec `ignoreTempFiles` et extensible avec `tempFilePatterns` ; les fichiers de verrouillage de dépendances comme `composer.lock` sont transférés normalement |
+| **Les suppressions locales sont répercutées sur le serveur** | `deleteRemoteOnLocalDelete` (actif par défaut) couvre les fichiers et les dossiers, que la suppression vienne de l'explorateur de VS Code, d'un terminal ou d'un outil externe, sans aucun glob `watcher.files`. Quatre garde-fous évitent les mauvaises surprises (voir plus bas) |
+| **Corbeille distante avec annulation** | Avec `remoteTrash`, supprimer est un `rename` côté serveur vers un dossier de corbeille : cela ne coûte aucune bande passante et s'annule avec `SFTP: Undo Last Remote Deletion`. Il y a aussi `SFTP: Restore from Remote Trash` et `SFTP: Empty Remote Trash`, et les entrées expirées sont purgées d'elles-mêmes après `retentionDays` |
+| **Renommages et déplacements répercutés comme un `rename`** | `renameRemoteOnLocalRename` renomme sur le serveur au lieu de renvoyer le fichier puis de supprimer l'ancien : le fichier conserve son identité distante et il n'existe aucun instant où le chemin manque sur un docroot en production |
+| **Vue d'activité** | Une deuxième vue dans la barre latérale SFTP avec l'historique de chaque transfert, suppression et renommage : type, état, heure, chemin, profil, durée et erreur. Les opérations en échec se relancent une par une ou toutes d'un coup ; masquable avec le paramètre `sftp.showActivityView` |
+| **Mode pause** | `SFTP: Pause/Resume Auto Sync` suspend toute la synchronisation automatique — `uploadOnSave`, `downloadOnOpen`, le watcher et la réplication des suppressions et des renommages — tandis que les commandes explicites continuent de fonctionner. L'état est mémorisé par workspace et affiché dans la barre d'état |
+
+### Les quatre garde-fous des suppressions
+
+| Garde-fou | Comportement |
+|-----------|--------------|
+| **Confirmation en lot** | Un lot supérieur à `deleteRemoteConfirmThreshold` (10 par défaut) ouvre une boîte de dialogue modale listant les fichiers et ne fait rien sans confirmation |
+| **Conscience de git** | Les suppressions provoquées par une opération git (checkout, rebase, merge, stash…) sont écartées : changer de branche ne touche jamais au serveur |
+| **Auto-suppression** | Les suppressions provoquées par le `Sync Remote -> Local --delete` de l'extension elle-même, lorsqu'il nettoie les fichiers locaux superflus, sont neutralisées au lieu d'être renvoyées au serveur |
+| **Corbeille distante** | Avec `remoteTrash`, une suppression est un déplacement réversible vers la corbeille du serveur plutôt qu'un `unlink` |
+
 ## Ce que nous attendons de cette version
 
 - **Un remplacement direct (drop-in).** Le même format de `sftp.json`, les mêmes commandes, les mêmes flux de travail — les configurations existantes fonctionnent sans aucune migration.
@@ -121,7 +144,7 @@ Chaque correction a été vérifiée (build webpack propre, 42/42 tests, linter 
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.20.0.vsix
+code --install-extension sftp-1.21.0.vsix
 ```
 
 ## Documentation
@@ -175,6 +198,7 @@ Vous pouvez consulter la liste complète des options de configuration [ici](http
 - [Contextes multiples](#contextes-multiples)
 - [Connexion par rebonds (hopping)](#connexion-par-rebonds-hopping)
 - [Configuration dans les paramètres utilisateur](#configuration-dans-les-paramètres-utilisateur)
+- [Suppressions et renommages sûrs](#suppressions-et-renommages-sûrs)
 
 ### Simple
 ```json
@@ -327,6 +351,27 @@ Dans sftp.json :
   "ignore": [".vscode", ".git", ".DS_Store"]
 }
 ```
+
+### Suppressions et renommages sûrs
+```json
+{
+  "host": "host",
+  "username": "utilisateur",
+  "remotePath": "/var/www/project",
+  "ignoreTempFiles": true,
+  "tempFilePatterns": ["*.generated.php"],
+  "deleteRemoteOnLocalDelete": true,
+  "deleteRemoteConfirmThreshold": 10,
+  "renameRemoteOnLocalRename": true,
+  "remoteTrash": {
+    "enabled": true,
+    "path": "/var/tmp/sftp-trash",
+    "retentionDays": 14
+  }
+}
+```
+
+_Remarque :_ toutes ces valeurs sont celles que l'extension utilise déjà par défaut, sauf `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) et `remoteTrash.retentionDays` (`7`) ; il suffit de les écrire pour les modifier. Un `path` absolu place la corbeille en dehors du docroot servi par le serveur web.
 
 ## Explorateur distant
 ![aperçu-explorateur-distant](assets/showcase/remote-explorer.png)

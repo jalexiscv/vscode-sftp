@@ -31,3 +31,16 @@ Change the default behavior from `View Content` to `Edit in Local` when opening 
   "name": "My Server"
 }
 ```
+
+### showActivityView
+Show the **SFTP Activity** view in the SFTP sidebar container, with the history of transfers, deletions and renames.
+
+| Key | Value | Default |
+| --- | --- | --- |
+| *showActivityView* | *boolean* | *true* |
+
+```json
+{
+  "sftp.showActivityView": true
+}
+```
