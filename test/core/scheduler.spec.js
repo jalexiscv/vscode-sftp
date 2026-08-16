@@ -14,9 +14,14 @@ const randomInt = function(min, max) {
 };
 const delay = millisecends =>
   new Promise(resolve => {
-    setTimeout(() => {
+    // unref'd: the pause/autoStart tests deliberately leave 20s tasks pending,
+    // and a referenced timer keeps the jest worker alive past the run
+    const timer = setTimeout(() => {
       resolve();
     }, millisecends);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
   });
 const fixture = Symbol('fixture');
 
