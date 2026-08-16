@@ -161,13 +161,25 @@ describe('syncControl', () => {
       expect(isGitOperationInProgress(path.join(repo, 'src', 'deep'))).toBe(true);
     });
 
-    test('follows a .git file to the real git dir (worktrees, submodules)', () => {
-      const realGitDir = path.join('c:', 'repo-main', '.git', 'worktrees', 'wt');
+    test('follows an absolute .git file to the real git dir (worktrees)', () => {
+      // path.resolve keeps this absolute on both platforms; "c:/x" is absolute
+      // on windows but an ordinary relative folder on linux, where the gitdir
+      // then resolved against the repo and pointed nowhere
+      const realGitDir = path.resolve(path.sep, 'repo-main', '.git', 'worktrees', 'wt');
       vol.fromJSON({
-        [path.join(repo, '.git')]: `gitdir: ${realGitDir}\n`,
+        [path.join(repo, '.git')]: 'gitdir: ' + realGitDir + '\n',
         [path.join(realGitDir, 'index.lock')]: '',
       });
       expect(isGitOperationInProgress(repo)).toBe(true);
+    });
+
+    test('follows a relative .git file to the real git dir (submodules)', () => {
+      // what git actually writes for a submodule
+      vol.fromJSON({
+        [path.join(repo, 'sub', '.git')]: 'gitdir: ../.git/modules/sub\n',
+        [path.join(repo, '.git', 'modules', 'sub', 'index.lock')]: '',
+      });
+      expect(isGitOperationInProgress(path.join(repo, 'sub'))).toBe(true);
     });
 
     test('is false when git is idle', () => {
