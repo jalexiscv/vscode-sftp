@@ -8,9 +8,11 @@ import { restoreEntry } from './commandRestoreFromTrash';
 /**
  * Undo for the most recent deletion batch.
  *
- * Restores the whole batch rather than a single file: a deletion that came from
- * removing a folder locally produced many entries, and bringing back one of
- * them would leave the tree half restored.
+ * Restores every entry of the batch rather than only the newest one: deleting
+ * several files at once (a multi-select, a `rm` of a glob) produces one entry
+ * each, and bringing back only one would leave the rest gone with no obvious
+ * way to notice. A deleted *folder* is a single entry, since the monitor
+ * collapses its children under it.
  */
 export default checkCommand({
   id: COMMAND_RESTORE_LAST_DELETION,

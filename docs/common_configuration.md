@@ -436,6 +436,10 @@ Use an absolute path outside the document root when the remote is served by a we
 | --- | --- | --- |
 | *path* | *string* | `.sftp-trash` |
 
+| 💡 Important |
+| :--- |
+| *Over FTP, prefer a name without a leading dot (for example `sftp-trash`). Many FTP servers omit dotfiles from a plain `LIST`, which makes the extension unable to tell an existing trash directory from a missing one.* |
+
 #### retentionDays
 Days to keep trashed files before they are purged. Purging runs in the background when the extension activates. `0` disables automatic purging.
 
