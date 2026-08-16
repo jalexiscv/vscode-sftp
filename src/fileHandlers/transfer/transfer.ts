@@ -57,9 +57,15 @@ function getAltDirection(direction: TransferDirection) {
     : TransferDirection.LOCAL_TO_REMOTE;
 }
 
+// remote filesystems routinely report mtime with a one second resolution, so
+// every comparison in this file has to happen at that granularity
+function mtimeInSeconds(entry: FileEntry): number {
+  return Math.floor(entry.mtime / 1000);
+}
+
 function isFileModified(a: FileEntry, b: FileEntry): boolean {
   // compare time at seconds
-  return Math.floor(a.mtime / 1000) !== Math.floor(b.mtime / 1000) || a.size !== b.size;
+  return mtimeInSeconds(a) !== mtimeInSeconds(b) || a.size !== b.size;
 }
 
 function toHash<T, R = T>(items: T[], key: string, transform?: (a: T) => R): { [key: string]: R } {
@@ -86,7 +92,12 @@ async function transferFolder(
   // If dirPerm is configured, we chmod the remote directory after creation.
   if(config.transferOption.dirPerm) {
     logger.info('chmod remote directory as configured by dirPerm, dirPerm is: ', config.transferOption.dirPerm);
-    targetFs.chmod(targetFsPath, parseInt(String(config.transferOption.dirPerm), 8));
+    // awaited so a failure can't surface as an unhandled rejection, but not
+    // fatal: over FTP this is `SITE CHMOD`, which plenty of servers reject.
+    // The directory is already there, so keep transferring into it.
+    await targetFs
+      .chmod(targetFsPath, parseInt(String(config.transferOption.dirPerm), 8))
+      .catch(error => logger.warn(`chmod ${targetFsPath} failed: ${error.message}`));
   }
 
   const fileEntries = await srcFs.list(srcFsPath);
@@ -160,7 +171,12 @@ async function transferWithType(
         // If dirPerm is configured, we chmod the remote directory after creation.
         if(config.transferOption.dirPerm) {
           logger.info('Running chmod on remote directory with perm: ', config.transferOption.dirPerm);
-          targetFs.chmod(targetFs.pathResolver.dirname(targetFsPath), parseInt(String(config.transferOption.dirPerm), 8));
+          const dirFsPath = targetFs.pathResolver.dirname(targetFsPath);
+          // see transferFolder: awaited so nothing is left dangling, non-fatal
+          // because FTP servers commonly refuse `SITE CHMOD`.
+          await targetFs
+            .chmod(dirFsPath, parseInt(String(config.transferOption.dirPerm), 8))
+            .catch(error => logger.warn(`chmod ${dirFsPath} failed: ${error.message}`));
         }
       }
       // <<< save before upload: start
@@ -263,7 +279,10 @@ async function _sync(
             }
 
             if (transferOption.update) {
-              if (from.mtime <= to.mtime) {
+              // seconds, like isFileModified: comparing raw milliseconds here
+              // made a file "newer" by sub-second noise the remote can't even
+              // represent, so it was re-transferred on every sync
+              if (mtimeInSeconds(from) <= mtimeInSeconds(to)) {
                 return;
               }
             }
@@ -350,13 +369,22 @@ async function _sync(
     } else if (transferOption.delete) {
       Object.keys(desFileTable).forEach(id => {
         const file = desFileTable[id];
-        deleted.push(file);
+        // `deleted` is what sync() reports back to the caller, so it may only
+        // hold entries that are really going to be removed. removeFile skips
+        // ignored paths and unsupported types, so the push has to happen after
+        // the same checks, not before them.
+        if (transferOption.ignore && transferOption.ignore(file.fspath)) {
+          return;
+        }
+
         switch (file.type) {
           case FileType.Directory:
+            deleted.push(file);
             dirMissed.push(file.fspath);
             break;
           case FileType.File:
           case FileType.SymbolicLink:
+            deleted.push(file);
             fileMissed.push(file.fspath);
             break;
           default:
@@ -365,9 +393,11 @@ async function _sync(
       });
     }
 
-    // side-effect
-    fileMissed.forEach(file => removeFile(file, targetFs, FileType.File, transferOption));
-    dirMissed.forEach(file => removeFile(file, targetFs, FileType.Directory, transferOption));
+    // side-effect. Awaited together with the transfers below: a removal that
+    // outlives the command would report success before the server is done.
+    const removePromise = fileMissed
+      .map(file => removeFile(file, targetFs, FileType.File, transferOption))
+      .concat(dirMissed.map(file => removeFile(file, targetFs, FileType.Directory, transferOption)));
 
     const transFilePromise = file2trans.map(([src, target, direction, option]) =>
       transferFile(
@@ -406,16 +436,23 @@ async function _sync(
       )
     );
 
-    return Promise.all([...transFilePromise, ...transDirPromise, ...syncPromise]).then(flatten);
+    return Promise.all([
+      ...removePromise,
+      ...transFilePromise,
+      ...transDirPromise,
+      ...syncPromise,
+    ]).then(flatten);
   };
 
   // create dir here so we don't have to ensure it for children files.
   await targetFs.ensureDir(targetFsPath);
 
-  const files = await Promise.all([
-    srcFs.list(srcFsPath).catch(err => []),
-    targetFs.list(targetFsPath).catch(err => []),
-  ]);
+  // A failed listing is not an empty directory. Swallowing the error made a
+  // transient network failure on the source look like "everything is gone",
+  // which with `delete` on wipes the whole destination; on the target side it
+  // silently re-transfers the tree. A propagated error is reported once and
+  // the user retries, which is the only recoverable outcome of the three.
+  const files = await Promise.all([srcFs.list(srcFsPath), targetFs.list(targetFsPath)]);
   await syncFiles(...files);
 }
 
