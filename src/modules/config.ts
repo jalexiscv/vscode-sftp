@@ -37,6 +37,10 @@ const configScheme = {
   passive: Joi.boolean(),
 
   remotePath: Joi.string().required(),
+  // octal digits carried in a number, e.g. 644 — parsed with parseInt(x, 8).
+  // Validated so a string or boolean can't reach that parse as NaN.
+  filePerm: Joi.number().integer(),
+  dirPerm: Joi.number().integer(),
   uploadOnSave: Joi.boolean(),
   useTempFile: Joi.boolean(),
   openSsh: Joi.boolean(),
@@ -46,12 +50,25 @@ const configScheme = {
     .min(0)
     .items(Joi.string()),
   ignoreFile: Joi.string(),
+  ignoreTempFiles: Joi.boolean(),
+  tempFilePatterns: Joi.array()
+    .min(0)
+    .items(Joi.string()),
   watcher: {
     files: Joi.string().allow(false, null),
     autoUpload: Joi.boolean(),
     autoDelete: Joi.boolean(),
   },
   concurrency: Joi.number().integer(),
+
+  deleteRemoteOnLocalDelete: Joi.boolean(),
+  deleteRemoteConfirmThreshold: Joi.number().integer().min(0),
+  renameRemoteOnLocalRename: Joi.boolean(),
+  remoteTrash: {
+    enabled: Joi.boolean(),
+    path: Joi.string(),
+    retentionDays: Joi.number().min(0),
+  },
 
   syncOption: {
     delete: Joi.boolean(),
@@ -79,6 +96,8 @@ const defaultConfig = {
   downloadOnOpen: false,
   ignore: [],
   // ignoreFile: undefined,
+  ignoreTempFiles: true,
+  tempFilePatterns: [],
   // watcher: {
   //   files: false,
   //   autoUpload: false,
@@ -86,6 +105,19 @@ const defaultConfig = {
   // },
   concurrency: 4,
   // limitOpenFilesOnRemote: false
+
+  // mirror local deletions to the server. On by default because the opposite
+  // silently drifts the two sides apart; the confirm threshold below is what
+  // keeps a bulk deletion (a git checkout, a `rm -rf`) from going through
+  // unnoticed.
+  deleteRemoteOnLocalDelete: true,
+  deleteRemoteConfirmThreshold: 10,
+  renameRemoteOnLocalRename: true,
+  remoteTrash: {
+    enabled: true,
+    path: '.sftp-trash',
+    retentionDays: 7,
+  },
 
   protocol: 'sftp',
 

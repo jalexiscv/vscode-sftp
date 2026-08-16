@@ -13,6 +13,12 @@ export const CONFIG_PATH = path.join(VENDOR_FOLDER, CONGIF_FILENAME);
 // clave de workspaceState donde se persiste el perfil activo entre sesiones
 export const STATE_KEY_ACTIVE_PROFILE = 'sftp.state.activeProfile';
 
+// clave de workspaceState donde se persiste la pausa de la sincronización automática
+export const STATE_KEY_SYNC_PAUSED = 'sftp.state.syncPaused';
+
+// clave de workspaceState donde se persiste el índice de la papelera remota
+export const STATE_KEY_TRASH_INDEX = 'sftp.state.trashIndex';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 
@@ -69,3 +75,23 @@ export const COMMAND_REMOTEEXPLORER_VIEW_CONTENT = 'sftp.viewContent';
 
 export const COMMAND_CREATE_FOLDER = 'sftp.create.folder';
 export const COMMAND_CREATE_FILE = 'sftp.create.file';
+
+// pausa de la sincronización automática
+export const COMMAND_TOGGLE_AUTO_SYNC = 'sftp.toggleAutoSync';
+export const COMMAND_PAUSE_AUTO_SYNC = 'sftp.pauseAutoSync';
+export const COMMAND_RESUME_AUTO_SYNC = 'sftp.resumeAutoSync';
+
+// papelera remota
+export const COMMAND_RESTORE_FROM_TRASH = 'sftp.trash.restore';
+export const COMMAND_RESTORE_LAST_DELETION = 'sftp.trash.restoreLast';
+export const COMMAND_EMPTY_TRASH = 'sftp.trash.empty';
+
+// registro de actividad
+export const COMMAND_ACTIVITY_REFRESH = 'sftp.activity.refresh';
+export const COMMAND_ACTIVITY_CLEAR = 'sftp.activity.clear';
+export const COMMAND_ACTIVITY_RETRY = 'sftp.activity.retry';
+export const COMMAND_ACTIVITY_RETRY_ALL_FAILED = 'sftp.activity.retryAllFailed';
+export const COMMAND_ACTIVITY_REVEAL = 'sftp.activity.reveal';
+
+// nombre de la vista del registro de actividad (package.json > views)
+export const VIEW_ACTIVITY = 'sftpActivity';

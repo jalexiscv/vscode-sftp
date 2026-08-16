@@ -19,6 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
+- [v1.22.0 新功能](#v1210-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -45,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、42/42 测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、187/187 测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -97,6 +98,28 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **传输** | 名称中包含 `.tmp` 的任何文件或文件夹现在都会被永久排除在传输之外（上传、`uploadOnSave` 和同步），适用于所有服务器，无需任何 `ignore` 配置 |
 | **配置文件** | 通过 `SFTP: Set Profile` 或连接管理器激活的配置文件不再"自行切换"：重新加载 `sftp.json` 不会再将其重置为 `defaultProfile`，并且所选配置在 VSCode 重启后依然保留。`defaultProfile` 仅作为初始值，以及活动配置文件消失时的回退值 |
 
+## v1.22.0 新功能
+
+v1.22.0 的重点，是让服务器真正反映本地发生的事——同时把本不该离开你机器的文件留在本地。
+
+| 新功能 | 作用 |
+|--------|------|
+| **临时文件永远不会被上传** | 内置排除列表涵盖编辑器的交换文件与备份文件（vim、emacs）、Office 与 LibreOffice 的锁文件、合并残留（`*.orig`、`*.rej`、`*.bak`）、未下载完成的文件（`*.part`、`*.crdownload`）以及系统元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）——适用于所有服务器，无需任何配置。可用 `ignoreTempFiles` 关闭，用 `tempFilePatterns` 扩展；`composer.lock` 之类的依赖锁文件仍会正常传输 |
+| **本地删除会同步到服务器** | `deleteRemoteOnLocalDelete`（默认开启）涵盖文件和文件夹，无论删除来自 VS Code 资源管理器、终端还是外部工具，都不需要 `watcher.files` 通配符。四道防线避免误删（见下文） |
+| **可撤销的远程回收站** | 启用 `remoteTrash` 后，删除是服务器端向回收站目录执行的一次 `rename`：不消耗带宽，并可用 `SFTP: Undo Last Remote Deletion` 撤销。还提供 `SFTP: Restore from Remote Trash` 和 `SFTP: Empty Remote Trash`，过期条目会在 `retentionDays` 之后自动清理 |
+| **重命名和移动以 `rename` 同步** | `renameRemoteOnLocalRename` 直接在服务器上重命名，而不是重新上传再删除：文件保留其远程身份，也不会出现线上站点根目录中路径短暂缺失的时刻 |
+| **活动视图** | SFTP 侧边栏中的第二个视图，记录每一次传输、删除和重命名的历史：类型、状态、时间、路径、配置、耗时和错误。失败的操作可以逐个重试，也可以一次性全部重试；可通过 `sftp.showActivityView` 设置隐藏 |
+| **暂停模式** | `SFTP: Pause/Resume Auto Sync` 会暂停全部自动同步——`uploadOnSave`、`downloadOnOpen`、watcher 以及删除和重命名的同步——而显式命令仍然可用。该状态按工作区保存，并显示在状态栏中 |
+
+### 删除的四道防线
+
+| 防线 | 行为 |
+|------|------|
+| **批量确认** | 超过 `deleteRemoteConfirmThreshold`（默认 10）的批量删除会弹出列有文件清单的模态对话框，未确认则不做任何操作 |
+| **感知 git** | 由 git 操作（checkout、rebase、merge、stash 等）导致的删除会被丢弃：切换分支永远不会动到服务器 |
+| **自我抑制** | 扩展自身的 `Sync Remote -> Local --delete` 在清理多余本地文件时造成的删除会被抑制，而不会反弹回服务器 |
+| **远程回收站** | 启用 `remoteTrash` 后，删除是移动到服务器回收站的可逆操作，而不是 `unlink` |
+
 ## 我们对这个版本的期望
 
 - **直接替换（drop-in）。** 相同的 `sftp.json` 格式、相同的命令、相同的工作流——现有配置无需任何迁移即可使用。
@@ -121,7 +144,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.20.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## 文档
@@ -175,6 +198,7 @@ _注意：_ 反斜杠和其他特殊字符必须用反斜杠转义。
 - [多上下文](#多上下文)
 - [跳板连接（hopping）](#跳板连接hopping)
 - [用户设置中的配置](#用户设置中的配置)
+- [安全的删除与重命名](#安全的删除与重命名)
 
 ### 简单配置
 ```json
@@ -327,6 +351,27 @@ _注意：_ 变量替换在 `hop` 配置内不起作用。
   "ignore": [".vscode", ".git", ".DS_Store"]
 }
 ```
+
+### 安全的删除与重命名
+```json
+{
+  "host": "host",
+  "username": "用户名",
+  "remotePath": "/var/www/project",
+  "ignoreTempFiles": true,
+  "tempFilePatterns": ["*.generated.php"],
+  "deleteRemoteOnLocalDelete": true,
+  "deleteRemoteConfirmThreshold": 10,
+  "renameRemoteOnLocalRename": true,
+  "remoteTrash": {
+    "enabled": true,
+    "path": "/var/tmp/sftp-trash",
+    "retentionDays": 14
+  }
+}
+```
+
+_注意：_ 除了 `tempFilePatterns`、`remoteTrash.path`（默认 `.sftp-trash`）和 `remoteTrash.retentionDays`（默认 `7`）之外，上面这些都是扩展已经采用的默认值；只有需要修改时才必须写出来。使用绝对 `path` 可以把回收站放在 Web 服务器提供的站点根目录之外。
 
 ## 远程资源管理器
 ![远程资源管理器预览](assets/showcase/remote-explorer.png)

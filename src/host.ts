@@ -47,6 +47,55 @@ export function onDidOpenTextDocument(listener: (e: vscode.TextDocument) => any,
   return vscode.workspace.onDidOpenTextDocument(listener, thisArgs);
 }
 
+const noopDisposable: vscode.Disposable = {
+  dispose() {
+    // noop: api not available on this vscode
+  },
+};
+
+// The workspace file operation events (onDidDeleteFiles, onDidRenameFiles,
+// onDidCreateFiles) exist since vscode 1.43 but @types/vscode is pinned to
+// 1.40 here, so they are probed at runtime and typed locally. They only fire
+// for operations performed *through* vscode (explorer, refactorings), never
+// for external ones such as `git checkout` or `rm` — the FileSystemWatcher
+// covers those.
+function probeWorkspaceEvent<T>(
+  name: string,
+  listener: (e: T) => any,
+  thisArgs?: any
+): vscode.Disposable {
+  const workspace = vscode.workspace as any;
+  if (typeof workspace[name] !== 'function') {
+    return noopDisposable;
+  }
+
+  return workspace[name](listener, thisArgs) as vscode.Disposable;
+}
+
+export interface FileDeleteEvent {
+  readonly files: ReadonlyArray<vscode.Uri>;
+}
+
+export interface FileCreateEvent {
+  readonly files: ReadonlyArray<vscode.Uri>;
+}
+
+export interface FileRenameEvent {
+  readonly files: ReadonlyArray<{ readonly oldUri: vscode.Uri; readonly newUri: vscode.Uri }>;
+}
+
+export function onDidDeleteFiles(listener: (e: FileDeleteEvent) => any, thisArgs?: any) {
+  return probeWorkspaceEvent<FileDeleteEvent>('onDidDeleteFiles', listener, thisArgs);
+}
+
+export function onDidCreateFiles(listener: (e: FileCreateEvent) => any, thisArgs?: any) {
+  return probeWorkspaceEvent<FileCreateEvent>('onDidCreateFiles', listener, thisArgs);
+}
+
+export function onDidRenameFiles(listener: (e: FileRenameEvent) => any, thisArgs?: any) {
+  return probeWorkspaceEvent<FileRenameEvent>('onDidRenameFiles', listener, thisArgs);
+}
+
 export function pathRelativeToWorkspace(localPath) {
   return vscode.workspace.asRelativePath(localPath);
 }
@@ -114,6 +163,35 @@ export async function showConfirmMessage(
   );
 
   return Boolean(result && result.title === confirmLabel);
+}
+
+// A three-way prompt. Returns the title of the picked button, or undefined
+// when the notification is dismissed. `modal` blocks the window, which is what
+// destructive confirmations want so they can't be missed.
+export async function showChoiceMessage(
+  message: string,
+  choices: string[],
+  option: { modal?: boolean; warning?: boolean } = {}
+): Promise<string | undefined> {
+  const items = choices.map(title => ({ title }));
+  const show = option.warning
+    ? vscode.window.showWarningMessage
+    : vscode.window.showInformationMessage;
+  const result = await show.call(
+    vscode.window,
+    message,
+    { modal: Boolean(option.modal) },
+    ...items
+  );
+
+  return result ? (result as { title: string }).title : undefined;
+}
+
+export function showQuickPick<T extends vscode.QuickPickItem>(
+  items: T[] | Thenable<T[]>,
+  options?: vscode.QuickPickOptions
+): Thenable<T | undefined> {
+  return vscode.window.showQuickPick(items, options) as Thenable<T | undefined>;
 }
 
 export function showOpenDialog(options: vscode.OpenDialogOptions) {

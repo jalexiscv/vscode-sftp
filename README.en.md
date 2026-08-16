@@ -19,6 +19,7 @@ VSCode-SFTP lets you add, edit, or delete files in a local directory and sync th
 
 - [Why this fork exists](#why-this-fork-exists)
 - [What we updated](#what-we-updated)
+- [What's new in v1.22.0](#whats-new-in-v1220)
 - [What we expect from this release](#what-we-expect-from-this-release)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -45,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 42/42 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 187/187 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -97,6 +98,28 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 | **Transfers** | Any file or folder whose name contains `.tmp` is now permanently excluded from transfers (uploads, `uploadOnSave` and sync), on every server and without any `ignore` configuration |
 | **Profiles** | The profile activated with `SFTP: Set Profile` or the Connection Manager no longer "switches by itself": reloads of `sftp.json` stop resetting it to `defaultProfile`, and the selection persists across VSCode restarts. `defaultProfile` becomes just the initial value and the fallback when the active profile disappears |
 
+## What's new in v1.22.0
+
+v1.22.0 is about making the server truly mirror what happens locally — and about keeping on your machine what should never have left it.
+
+| Feature | What it gives you |
+|---------|-------------------|
+| **Local scratch files are never uploaded** | A built-in list excludes editor swap and backup files (vim, emacs), Office and LibreOffice lock files, merge leftovers (`*.orig`, `*.rej`, `*.bak`), partially written downloads (`*.part`, `*.crdownload`) and OS metadata (`.DS_Store`, `Thumbs.db`, `desktop.ini`) — on every server and with no configuration. Turn it off with `ignoreTempFiles` and extend it with `tempFilePatterns`; dependency lock files such as `composer.lock` are transferred normally |
+| **Local deletions are mirrored to the server** | `deleteRemoteOnLocalDelete` (on by default) covers files and folders, whether you delete from the VS Code explorer, a terminal or an external tool, with no `watcher.files` glob required. Four safeguards keep it from becoming a footgun (see below) |
+| **Remote trash with undo** | With `remoteTrash`, deleting is a server-side `rename` into a trash folder: it costs no bandwidth and is reversed with `SFTP: Undo Last Remote Deletion`. There are also `SFTP: Restore from Remote Trash` and `SFTP: Empty Remote Trash`, and expired entries are purged on their own after `retentionDays` |
+| **Renames and moves are mirrored as a `rename`** | `renameRemoteOnLocalRename` renames on the server instead of uploading again and deleting: the file keeps its remote identity and there is no moment in which the path is missing on a live document root |
+| **Activity view** | A second view in the SFTP sidebar with the history of every transfer, deletion and rename: type, status, time, path, profile, duration and error. Failed operations can be retried one by one or all at once; hide it with the `sftp.showActivityView` setting |
+| **Pause mode** | `SFTP: Pause/Resume Auto Sync` suspends all automatic syncing — `uploadOnSave`, `downloadOnOpen`, the watcher and the mirroring of deletions and renames — while explicit commands keep working. The state is stored per workspace and shown in the status bar |
+
+### The four deletion safeguards
+
+| Safeguard | Behaviour |
+|-----------|-----------|
+| **Bulk confirmation** | A batch larger than `deleteRemoteConfirmThreshold` (10 by default) opens a modal dialog listing the files and does nothing unless you confirm |
+| **Git awareness** | Deletions caused by a git operation (checkout, rebase, merge, stash…) are discarded: switching a branch never touches the server |
+| **Self-suppression** | Deletions caused by the extension's own `Sync Remote -> Local --delete` while cleaning up extraneous local files are suppressed instead of bouncing back to the server |
+| **Remote trash** | With `remoteTrash`, a deletion is a reversible move to the server's trash folder rather than an `unlink` |
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -121,7 +144,7 @@ Every fix was verified (clean webpack build, 42/42 tests, linter with no errors)
 Or from the command line:
 
 ```
-code --install-extension sftp-1.20.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Documentation
@@ -175,6 +198,7 @@ You can see the full list of configuration options [here](https://github.com/Nat
 - [Multiple contexts](#multiple-contexts)
 - [Connection hopping](#connection-hopping)
 - [Configuration in User Settings](#configuration-in-user-settings)
+- [Safe deletions and renames](#safe-deletions-and-renames)
 
 ### Simple
 ```json
@@ -327,6 +351,27 @@ In sftp.json:
   "ignore": [".vscode", ".git", ".DS_Store"]
 }
 ```
+
+### Safe deletions and renames
+```json
+{
+  "host": "host",
+  "username": "username",
+  "remotePath": "/var/www/project",
+  "ignoreTempFiles": true,
+  "tempFilePatterns": ["*.generated.php"],
+  "deleteRemoteOnLocalDelete": true,
+  "deleteRemoteConfirmThreshold": 10,
+  "renameRemoteOnLocalRename": true,
+  "remoteTrash": {
+    "enabled": true,
+    "path": "/var/tmp/sftp-trash",
+    "retentionDays": 14
+  }
+}
+```
+
+_Note:_ all of these are the values the extension already uses by default, except `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) and `remoteTrash.retentionDays` (`7`); you only need to write them down in order to change them. An absolute `path` keeps the trash outside the document root served by the web server.
 
 ## Remote Explorer
 ![remote-explorer-preview](assets/showcase/remote-explorer.png)

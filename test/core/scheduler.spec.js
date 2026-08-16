@@ -14,9 +14,14 @@ const randomInt = function(min, max) {
 };
 const delay = millisecends =>
   new Promise(resolve => {
-    setTimeout(() => {
+    // unref'd: the pause/autoStart tests deliberately leave 20s tasks pending,
+    // and a referenced timer keeps the jest worker alive past the run
+    const timer = setTimeout(() => {
       resolve();
     }, millisecends);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
   });
 const fixture = Symbol('fixture');
 
@@ -50,14 +55,30 @@ describe('scheduler', () => {
 
   test('.add() - concurrency: 1', done => {
     const input = [[10, 30], [20, 20], [30, 10]];
+    const totalDuration = input.reduce((sum, [, ms]) => sum + ms, 0);
 
     const startTime = new Date().getTime();
     const queue = new Scheduler({ concurrency: 1 });
-    input.forEach(([val, ms]) => queue.add(wrapTask(() => delay(ms).then(() => val))));
+    const result = [];
+    input.forEach(([val, ms]) =>
+      queue.add(wrapTask(() => delay(ms).then(() => result.push(val))))
+    );
     queue.onIdle(() => {
-      const time = new Date().getTime() - startTime;
-      expect(50 <= time && time <= 100).toBeTruthy();
-      done();
+      // what concurrency 1 guarantees is serialization, not a wall clock
+      // window: the tasks run one after another, so the run can never be
+      // shorter than the sum of the delays. There is no upper bound to assert,
+      // a loaded CI box can take arbitrarily long.
+      try {
+        const time = new Date().getTime() - startTime;
+        // setTimeout may fire a hair early, so allow one millisecond of slack
+        expect(time).toBeGreaterThanOrEqual(totalDuration - 1);
+        expect(result).toEqual(input.map(([val]) => val));
+        done();
+      } catch (error) {
+        // without this the failure escapes the callback, done() is never
+        // called and the test dies on the 5s timeout instead of reporting
+        done(error);
+      }
     });
   });
 

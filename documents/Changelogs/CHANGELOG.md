@@ -2,6 +2,13 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 41 | 2026-08-16 | Release 1.22.0: espejo local-remoto seguro           | [Ver detalle](2026-08-16_release_1_22_0.md) |
+| 40 | 2026-08-16 | Correcciones en transferencia y watcher              | [Ver detalle](2026-08-16_fix_transferencia_watcher.md) |
+| 39 | 2026-08-16 | Vista de actividad y modo pausa                      | [Ver detalle](2026-08-16_feat_actividad_y_pausa.md) |
+| 38 | 2026-08-16 | Renombrar y mover como rename en el servidor         | [Ver detalle](2026-08-16_feat_rename_remoto.md) |
+| 37 | 2026-08-16 | Papelera remota con restauración                     | [Ver detalle](2026-08-16_feat_papelera_remota.md) |
+| 36 | 2026-08-16 | Réplica de los borrados locales en el servidor       | [Ver detalle](2026-08-16_feat_borrado_espejo_remoto.md) |
+| 35 | 2026-08-16 | Exclusión integral de archivos temporales locales    | [Ver detalle](2026-08-16_feat_archivos_temporales.md) |
 | 34 | 2026-07-10 | Release 1.20.0: perfil estable y exclusión de .tmp   | [Ver detalle](2026-07-10_release_1_20_0.md) |
 | 33 | 2026-07-10 | El perfil activo se respeta y persiste entre sesiones | [Ver detalle](2026-07-10_fix_perfil_activo_estable.md) |
 | 32 | 2026-07-10 | Los archivos temporales `.tmp` nunca se transfieren  | [Ver detalle](2026-07-10_feat_ignorar_archivos_tmp.md) |
@@ -9,12 +16,12 @@
 | 30 | 2026-07-07 | Modo strict de TypeScript activado                   | [Ver detalle](2026-07-07_chore_strict_typescript.md) |
 | 29 | 2026-07-07 | Administrador gráfico de conexiones (webview)        | [Ver detalle](2026-07-07_feat_administrador_conexiones.md) |
 | 28 | 2026-07-05 | Release 1.18.0: FTP moderno (basic-ftp)              | [Ver detalle](2026-07-05_release_1_18_0.md) |
-| 27 | 2026-07-05 | Migración del soporte FTP a basic-ftp                | [Ver detalle](2026-07-05_feat_migracion_basic_ftp.md) |
+| 27 | 2026-07-05 | Migración del soporte FTP a basic-ftp                | [Ver detalle](2026-07-05_feat_migración_basic_ftp.md) |
 | 26 | 2026-07-05 | Sincronización de los READMEs con la v1.17.0         | [Ver detalle](2026-07-05_docs_readme_v1170.md) |
 | 25 | 2026-07-05 | Release 1.17.0: contraseñas seguras + CI             | [Ver detalle](2026-07-05_release_1_17_0.md) |
 | 24 | 2026-07-05 | Guardado seguro de contraseñas (SecretStorage)       | [Ver detalle](2026-07-05_feat_guardar_contrasenas.md) |
 | 23 | 2026-07-05 | CI y release automatizada con GitHub Actions         | [Ver detalle](2026-07-05_chore_ci_github_actions.md) |
-| 22 | 2026-07-05 | README multiidioma: español base + 5 traducciones    | [Ver detalle](2026-07-05_docs_readme_multiidioma.md) |
+| 22 | 2026-07-05 | README multiidioma: español base + 5 traducciónes    | [Ver detalle](2026-07-05_docs_readme_multiidioma.md) |
 | 21 | 2026-07-05 | README: Comunidad, Licencia, Autor y Donaciones      | [Ver detalle](2026-07-05_docs_readme_comunidad.md) |
 | 20 | 2026-07-05 | README raíz traducido íntegramente al español        | [Ver detalle](2026-07-05_docs_readme_espanol.md) |
 | 19 | 2026-07-05 | README del fork: motivación, cambios y expectativas  | [Ver detalle](2026-07-05_docs_readme_fork.md) |
@@ -28,7 +35,7 @@
 | 11 | 2026-07-05 | Robustez del handler de uploadOnSave                 | [Ver detalle](2026-07-05_fix_upload_on_save_robustez.md) |
 | 10 | 2026-07-05 | Sobrescritura FTP rechazada (mod_rename, error 550)  | [Ver detalle](2026-07-05_fix_ftp_sobrescritura.md) |
 | 9  | 2026-07-05 | Nombres no ASCII corruptos en listados FTP           | [Ver detalle](2026-07-05_fix_ftp_encoding.md) |
-| 8  | 2026-07-05 | Ignore: sftp.json nunca se sube; patrones en Windows | [Ver detalle](2026-07-05_fix_sistema_ignore.md) |
+| 8  | 2026-07-05 | Ignore: sftp.json nunca se sube; patrónes en Windows | [Ver detalle](2026-07-05_fix_sistema_ignore.md) |
 | 7  | 2026-07-05 | Recarga de sftp.json ante cambios externos (git)     | [Ver detalle](2026-07-05_fix_recarga_sftp_json.md) |
 | 6  | 2026-07-05 | "Config Not Found" por casing de rutas en Windows    | [Ver detalle](2026-07-05_fix_config_not_found_casing.md) |
 | 5  | 2026-07-05 | Cuelgue tras cierre del canal SFTP del servidor      | [Ver detalle](2026-07-05_fix_desconexion_sftp.md) |

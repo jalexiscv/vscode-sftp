@@ -2,7 +2,7 @@
   "name": "sftp",
   "displayName": "SFTP",
   "description": "SFTP/FTP sync",
-  "version": "1.20.0",
+  "version": "1.22.0",
   "publisher": "jalexiscv",
   "author": "jalexiscv <jalexiscv@utede.edu.co> (https://github.com/jalexiscv)",
   "engines": {
@@ -50,6 +50,11 @@
           "id": "remoteExplorer",
           "name": "Explorer",
           "when": "sftp.enabled"
+        },
+        {
+          "id": "sftpActivity",
+          "name": "Activity",
+          "when": "sftp.enabled && config.sftp.showActivityView"
         }
       ]
     },
@@ -76,6 +81,11 @@
           "type": "boolean",
           "default": true,
           "description": "After a successful connection with a typed password, offer to store it securely in the VS Code secret storage."
+        },
+        "sftp.showActivityView": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the SFTP Activity view with the history of transfers, deletions and renames."
         }
       }
     },
@@ -309,6 +319,71 @@
           "light": "resources/light/refresh.svg",
           "dark": "resources/dark/refresh.svg"
         }
+      },
+      {
+        "command": "sftp.toggleAutoSync",
+        "title": "Pause/Resume Auto Sync",
+        "category": "SFTP",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "sftp.pauseAutoSync",
+        "title": "Pause Auto Sync",
+        "category": "SFTP",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "sftp.resumeAutoSync",
+        "title": "Resume Auto Sync",
+        "category": "SFTP",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "sftp.trash.restoreLast",
+        "title": "Undo Last Remote Deletion",
+        "category": "SFTP",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "sftp.trash.restore",
+        "title": "Restore from Remote Trash",
+        "category": "SFTP",
+        "icon": "$(history)"
+      },
+      {
+        "command": "sftp.trash.empty",
+        "title": "Empty Remote Trash",
+        "category": "SFTP",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "sftp.activity.refresh",
+        "title": "Refresh Activity",
+        "category": "SFTP",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sftp.activity.clear",
+        "title": "Clear Activity",
+        "category": "SFTP",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "sftp.activity.retryAllFailed",
+        "title": "Retry All Failed Operations",
+        "category": "SFTP",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "sftp.activity.retry",
+        "title": "Retry",
+        "category": "SFTP",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "sftp.activity.reveal",
+        "title": "Open Local File",
+        "category": "SFTP"
       }
     ],
     "menus": {
@@ -324,6 +399,50 @@
         {
           "command": "sftp.cancelAllTransfer",
           "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.toggleAutoSync",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.pauseAutoSync",
+          "when": "sftp.enabled && !sftp.autoSyncPaused"
+        },
+        {
+          "command": "sftp.resumeAutoSync",
+          "when": "sftp.enabled && sftp.autoSyncPaused"
+        },
+        {
+          "command": "sftp.trash.restoreLast",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.trash.restore",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.trash.empty",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.activity.refresh",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.activity.clear",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.activity.retryAllFailed",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.activity.retry",
+          "when": "false"
+        },
+        {
+          "command": "sftp.activity.reveal",
+          "when": "false"
         },
         {
           "command": "sftp.upload.activeFile",
@@ -582,6 +701,31 @@
           "command": "sftp.openConnectionManager",
           "when": "view == remoteExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "sftp.pauseAutoSync",
+          "when": "view == sftpActivity && !sftp.autoSyncPaused",
+          "group": "navigation@0"
+        },
+        {
+          "command": "sftp.resumeAutoSync",
+          "when": "view == sftpActivity && sftp.autoSyncPaused",
+          "group": "navigation@0"
+        },
+        {
+          "command": "sftp.activity.refresh",
+          "when": "view == sftpActivity",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sftp.activity.retryAllFailed",
+          "when": "view == sftpActivity",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sftp.activity.clear",
+          "when": "view == sftpActivity",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -662,6 +806,11 @@
           "command": "sftp.download.folder",
           "group": "inline",
           "when": "sftp.enabled && view == remoteExplorer && viewItem == folder"
+        },
+        {
+          "command": "sftp.activity.retry",
+          "group": "inline",
+          "when": "view == sftpActivity && viewItem == activity.failed"
         }
       ],
       "scm/title": [

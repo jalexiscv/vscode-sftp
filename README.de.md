@@ -19,6 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
+- [Neuerungen in v1.22.0](#neuerungen-in-v1220)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -45,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 42/42 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 187/187 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -97,6 +98,28 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Übertragungen** | Jede Datei und jeder Ordner, deren Name `.tmp` enthält, wird dauerhaft von den Übertragungen ausgeschlossen (Uploads, `uploadOnSave` und Sync), auf allen Servern und ohne jegliche `ignore`-Konfiguration |
 | **Profile** | Das mit `SFTP: Set Profile` oder dem Verbindungsmanager aktivierte Profil „wechselt nicht mehr von selbst": das Neuladen von `sftp.json` setzt es nicht mehr auf das `defaultProfile` zurück, und die Auswahl bleibt über VSCode-Neustarts hinweg erhalten. `defaultProfile` ist nur noch der Anfangswert und die Rückfallebene, wenn das aktive Profil verschwindet |
 
+## Neuerungen in v1.22.0
+
+Bei v1.22.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert — und dass auf deinem Rechner bleibt, was ihn nie hätte verlassen dürfen.
+
+| Neuerung | Was sie bringt |
+|----------|----------------|
+| **Temporäre Dateien werden nie hochgeladen** | Eine eingebaute Liste schließt Swap- und Backup-Dateien der Editoren (vim, emacs), Sperrdateien von Office und LibreOffice, Merge-Überbleibsel (`*.orig`, `*.rej`, `*.bak`), unvollständige Downloads (`*.part`, `*.crdownload`) und System-Metadaten (`.DS_Store`, `Thumbs.db`, `desktop.ini`) aus — auf allen Servern und ohne jede Konfiguration. Mit `ignoreTempFiles` abschaltbar und mit `tempFilePatterns` erweiterbar; Abhängigkeits-Lockdateien wie `composer.lock` werden normal übertragen |
+| **Lokale Löschungen werden auf den Server gespiegelt** | `deleteRemoteOnLocalDelete` (standardmäßig aktiv) erfasst Dateien und Ordner, egal ob du im VS-Code-Explorer, in einem Terminal oder mit einem externen Werkzeug löschst, und braucht kein `watcher.files`-Glob. Vier Schutzmechanismen verhindern böse Überraschungen (siehe unten) |
+| **Remote-Papierkorb mit Rückgängig** | Mit `remoteTrash` ist ein Löschen ein serverseitiges `rename` in einen Papierkorb-Ordner: Das kostet keine Bandbreite und lässt sich mit `SFTP: Undo Last Remote Deletion` zurücknehmen. Dazu kommen `SFTP: Restore from Remote Trash` und `SFTP: Empty Remote Trash`; abgelaufene Einträge werden nach `retentionDays` von selbst bereinigt |
+| **Umbenennen und Verschieben werden als `rename` gespiegelt** | `renameRemoteOnLocalRename` benennt auf dem Server um, statt die Datei erneut hochzuladen und die alte zu löschen: Die Datei behält ihre Remote-Identität, und es gibt keinen Moment, in dem der Pfad in einem produktiven Document-Root fehlt |
+| **Aktivitätsansicht** | Eine zweite Ansicht in der SFTP-Seitenleiste mit dem Verlauf jeder Übertragung, Löschung und Umbenennung: Typ, Status, Uhrzeit, Pfad, Profil, Dauer und Fehler. Fehlgeschlagene Vorgänge lassen sich einzeln oder alle auf einmal wiederholen; ausblendbar über die Einstellung `sftp.showActivityView` |
+| **Pausenmodus** | `SFTP: Pause/Resume Auto Sync` setzt die gesamte automatische Synchronisierung aus — `uploadOnSave`, `downloadOnOpen`, den Watcher sowie die Spiegelung von Löschungen und Umbenennungen — während explizite Befehle weiterhin funktionieren. Der Zustand wird pro Workspace gespeichert und in der Statusleiste angezeigt |
+
+### Die vier Schutzmechanismen beim Löschen
+
+| Schutzmechanismus | Verhalten |
+|-------------------|-----------|
+| **Sammelbestätigung** | Ein Stapel größer als `deleteRemoteConfirmThreshold` (Standard 10) öffnet einen modalen Dialog mit der Dateiliste und tut ohne Bestätigung nichts |
+| **Git-Bewusstsein** | Löschungen, die durch eine Git-Operation ausgelöst wurden (checkout, rebase, merge, stash…), werden verworfen: Ein Branch-Wechsel rührt den Server nie an |
+| **Selbstunterdrückung** | Löschungen, die das eigene `Sync Remote -> Local --delete` beim Aufräumen überzähliger lokaler Dateien verursacht, werden unterdrückt, statt zum Server zurückzuprallen |
+| **Remote-Papierkorb** | Mit `remoteTrash` ist eine Löschung ein umkehrbares Verschieben in den Papierkorb des Servers statt eines `unlink` |
+
 ## Was wir von dieser Version erwarten
 
 - **Ein direkter Ersatz (drop-in).** Dasselbe `sftp.json`-Format, dieselben Befehle, dieselben Arbeitsabläufe — bestehende Konfigurationen funktionieren ohne jegliche Migration.
@@ -121,7 +144,7 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.20.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Dokumentation
@@ -175,6 +198,7 @@ Die vollständige Liste der Konfigurationsoptionen findest du [hier](https://git
 - [Mehrere Kontexte](#mehrere-kontexte)
 - [Verbindung mit Sprüngen (Hopping)](#verbindung-mit-sprüngen-hopping)
 - [Konfiguration in den Benutzereinstellungen](#konfiguration-in-den-benutzereinstellungen)
+- [Sicheres Löschen und Umbenennen](#sicheres-löschen-und-umbenennen)
 
 ### Einfach
 ```json
@@ -327,6 +351,27 @@ In sftp.json:
   "ignore": [".vscode", ".git", ".DS_Store"]
 }
 ```
+
+### Sicheres Löschen und Umbenennen
+```json
+{
+  "host": "host",
+  "username": "benutzername",
+  "remotePath": "/var/www/project",
+  "ignoreTempFiles": true,
+  "tempFilePatterns": ["*.generated.php"],
+  "deleteRemoteOnLocalDelete": true,
+  "deleteRemoteConfirmThreshold": 10,
+  "renameRemoteOnLocalRename": true,
+  "remoteTrash": {
+    "enabled": true,
+    "path": "/var/tmp/sftp-trash",
+    "retentionDays": 14
+  }
+}
+```
+
+_Hinweis:_ Alle diese Werte sind jene, die die Erweiterung bereits standardmäßig verwendet, außer `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) und `remoteTrash.retentionDays` (`7`); du musst sie nur eintragen, um sie zu ändern. Ein absoluter `path` hält den Papierkorb außerhalb des vom Webserver ausgelieferten Document-Roots.
 
 ## Remote-Explorer
 ![remote-explorer-vorschau](assets/showcase/remote-explorer.png)

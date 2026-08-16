@@ -54,6 +54,29 @@ Download file or folders.
 #### KeyBindings Args
 func(fspaths: string[])
 
+### SFTP: Pause Auto Sync / SFTP: Resume Auto Sync / SFTP: Pause/Resume Auto Sync
+Suspend every *automatic* transfer: `uploadOnSave`, `downloadOnOpen`, the watcher, and the mirroring of local deletions and renames.
+
+Explicit commands keep working while paused — running a command *is* how you override the pause for one operation. The state is stored per workspace and survives a window reload, and the status bar shows a `$(debug-pause)` marker while it is active.
+
+### SFTP: Undo Last Remote Deletion
+Restore the most recent batch of deletions from the remote trash.
+
+Restores the whole batch rather than a single file: deleting a folder locally produces one trash entry per file, and bringing back only one of them would leave the tree half restored. Requires [remoteTrash](https://github.com/Natizyskunk/vscode-sftp/wiki/Configuration#remotetrash) to be enabled.
+
+### SFTP: Restore from Remote Trash
+Pick any entry from the trash history and restore it to its original remote path.
+
+The restore refuses to overwrite: if something already occupies the original path, it reports the conflict instead of replacing what is there.
+
+### SFTP: Empty Remote Trash
+Permanently delete the remote trash folder of every configured server. Asks for confirmation with a modal dialog, since this is the point at which deletions stop being recoverable.
+
+### SFTP: Refresh Activity / SFTP: Clear Activity / SFTP: Retry All Failed Operations
+Act on the **SFTP Activity** view, the second view in the SFTP sidebar container. It records every transfer, deletion and rename with its type, status, time, path, profile, duration and error.
+
+Failed entries can be retried individually with the inline button, or all at once with `Retry All Failed Operations` — retries run one after another so a failing server is not hammered. The view can be hidden with the `sftp.showActivityView` setting.
+
 ### SFTP: Cancel All Transfers
 Stop the current transfers (upload and download).
 

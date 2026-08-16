@@ -9,6 +9,7 @@ import { replaceHomePath, resolvePath } from '../helper';
 import { SETTING_KEY_REMOTE, CONFIG_PATH } from '../constants';
 import upath from './upath';
 import Ignore from './ignore';
+import { resolveTempFilePatterns } from './tempFiles';
 import { FileSystem } from './fs';
 import Scheduler from './scheduler';
 import { createRemoteIfNoneExist, removeRemoteFs } from './remoteFs';
@@ -50,12 +51,25 @@ interface ServiceOption {
   };
   ignore: string[];
   ignoreFile: string;
+  ignoreTempFiles: boolean;
+  tempFilePatterns: string[];
+  deleteRemoteOnLocalDelete: boolean;
+  deleteRemoteConfirmThreshold: number;
+  renameRemoteOnLocalRename: boolean;
+  remoteTrash: RemoteTrashConfig;
   remoteExplorer: {
     filesExclude?: string[];
     order: number;
   };
   remoteTimeOffsetInHours: number;
   limitOpenFilesOnRemote: number | true;
+}
+
+export interface RemoteTrashConfig {
+  enabled: boolean;
+  /** relative to remotePath, or absolute when it starts with "/" */
+  path: string;
+  retentionDays: number;
 }
 
 interface WatcherConfig {
@@ -122,16 +136,35 @@ const DEFAULT_SSHCONFIG_FILE = '~/.ssh/config';
 // root-anchored gitignore pattern for the extension config file
 const CONFIG_IGNORE_PATTERN = '/' + CONFIG_PATH.split(path.sep).join('/');
 
-// any file or directory whose name contains ".tmp" is a temp artifact
-const TMP_FILES_IGNORE_PATTERN = '*.tmp*';
+/**
+ * Keeps the remote trash out of every traversal.
+ *
+ * Without this, a `Sync Remote -> Local` would download every file the user
+ * ever deleted, and a `Sync Local -> Remote --delete` would wipe the trash —
+ * defeating the point of having one.
+ *
+ * Only a trash relative to `remotePath` needs a pattern; an absolute one is
+ * outside the synced tree already.
+ */
+function trashIgnorePatterns(config: FileServiceConfig): string[] {
+  const trash = resolveRemoteTrashConfig(config);
+  if (!trash.enabled || trash.path.charAt(0) === '/') {
+    return [];
+  }
+
+  const normalized = trash.path.replace(/^\.\//, '').replace(/\/+$/, '');
+  return normalized ? ['/' + normalized] : [];
+}
 
 function filesIgnoredFromConfig(config: FileServiceConfig): string[] {
   const cache = app.fsCache;
   // the config file holds credentials; never let a sync/upload ship it.
-  // temp files (".tmp" in the name) must never reach the remote either
-  const ignore: string[] = [CONFIG_IGNORE_PATTERN, TMP_FILES_IGNORE_PATTERN].concat(
-    config.ignore && config.ignore.length ? config.ignore : []
-  );
+  // editor/OS/tool scratch files must never reach the remote either — see
+  // core/tempFiles for the list and how to opt out of it.
+  const ignore: string[] = [CONFIG_IGNORE_PATTERN]
+    .concat(trashIgnorePatterns(config))
+    .concat(resolveTempFilePatterns(config))
+    .concat(config.ignore && config.ignore.length ? config.ignore : []);
 
   const ignoreFile = config.ignoreFile;
   if (!ignoreFile) {
@@ -163,10 +196,16 @@ function getHostInfo(config) {
     'downloadOnOpen',
     'ignore',
     'ignoreFile',
+    'ignoreTempFiles',
+    'tempFilePatterns',
     'watcher',
     'concurrency',
     'syncOption',
     'sshConfigPath',
+    'deleteRemoteOnLocalDelete',
+    'deleteRemoteConfirmThreshold',
+    'renameRemoteOnLocalRename',
+    'remoteTrash',
   ];
 
   return Object.keys(config).reduce((obj, key) => {
@@ -350,6 +389,15 @@ function getCompleteConfig(
   return mergedConfig;
 }
 
+// pattern lists accumulate base + profile instead of the profile replacing the
+// base, so a profile can narrow what gets uploaded without restating the
+// project-wide excludes
+const CONCATENATED_KEYS = ['ignore', 'tempFilePatterns'];
+
+// nested option objects merge key by key, so `{"remoteTrash": {"enabled": false}}`
+// in a profile keeps the inherited path and retention
+const DEEP_MERGED_KEYS = ['remoteTrash', 'syncOption', 'remoteExplorer'];
+
 function mergeProfile(
   target: FileServiceConfig,
   source: FileServiceConfig
@@ -359,14 +407,58 @@ function mergeProfile(
 
   const keys = Object.keys(source);
   for (const key of keys) {
-    if (key === 'ignore') {
-      res.ignore = res.ignore.concat(source.ignore);
+    if (CONCATENATED_KEYS.indexOf(key) !== -1) {
+      const base = Array.isArray(res[key]) ? res[key] : [];
+      const added = Array.isArray(source[key]) ? source[key] : [];
+      res[key] = base.concat(added);
+    } else if (
+      DEEP_MERGED_KEYS.indexOf(key) !== -1 &&
+      isPlainObject(res[key]) &&
+      isPlainObject(source[key])
+    ) {
+      res[key] = Object.assign({}, res[key], source[key]);
     } else {
       res[key] = source[key];
     }
   }
 
   return res;
+}
+
+function isPlainObject(value: any): boolean {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+const DEFAULT_REMOTE_TRASH: RemoteTrashConfig = {
+  enabled: true,
+  path: '.sftp-trash',
+  retentionDays: 7,
+};
+
+/**
+ * Fills in the trash options the user left out.
+ *
+ * `mergedDefault` is a shallow spread, so a config that sets only
+ * `{"remoteTrash": {"enabled": false}}` replaces the whole default object and
+ * would otherwise leave `path` undefined — which would then resolve to the
+ * remote root and rename deleted files on top of it.
+ */
+export function resolveRemoteTrashConfig(config: {
+  remoteTrash?: Partial<RemoteTrashConfig>;
+}): RemoteTrashConfig {
+  const trash = config.remoteTrash;
+  if (!isPlainObject(trash)) {
+    return { ...DEFAULT_REMOTE_TRASH };
+  }
+
+  return {
+    enabled: trash!.enabled !== undefined ? Boolean(trash!.enabled) : DEFAULT_REMOTE_TRASH.enabled,
+    path: trash!.path || DEFAULT_REMOTE_TRASH.path,
+    retentionDays:
+      typeof trash!.retentionDays === 'number'
+        ? trash!.retentionDays
+        : DEFAULT_REMOTE_TRASH.retentionDays,
+  };
 }
 
 enum Event {

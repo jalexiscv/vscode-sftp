@@ -117,6 +117,7 @@ export function createFileService(config: any, workspace: string) {
   service.setWatcherService(watcherService);
   service.beforeTransfer(task => {
     const { localFsPath, transferType } = task;
+    app.sftpBarItem.setQueueSize(getRunningTransformTasks().length);
     app.sftpBarItem.showMsg(
       `${transferType} ${path.basename(localFsPath)}`,
       simplifyPath(localFsPath)
@@ -126,6 +127,8 @@ export function createFileService(config: any, workspace: string) {
     const { localFsPath, transferType } = task;
     const filename = path.basename(localFsPath);
     const filepath = simplifyPath(localFsPath);
+    // the task is already out of the pending set when this fires
+    app.sftpBarItem.setQueueSize(getRunningTransformTasks().length);
     if (task.isCancelled()) {
       logger.info(`cancel transfer ${localFsPath}`);
       app.sftpBarItem.showMsg(`cancelled ${filename}`, filepath, 2000 * 2);

@@ -19,6 +19,7 @@ O VSCode-SFTP permite adicionar, editar ou excluir arquivos em um diretório loc
 
 - [Por que este fork existe](#por-que-este-fork-existe)
 - [O que atualizamos](#o-que-atualizamos)
+- [Novidades da v1.22.0](#novidades-da-v1220)
 - [O que esperamos desta versão](#o-que-esperamos-desta-versão)
 - [Instalação](#instalação)
 - [Documentação](#documentação)
@@ -45,7 +46,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 42/42 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 187/187 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -97,6 +98,28 @@ Cada correção foi verificada (build do webpack limpo, 42/42 testes, linter sem
 | **Transferências** | Todo arquivo ou pasta cujo nome contenha `.tmp` fica permanentemente excluído das transferências (uploads, `uploadOnSave` e sync), em todos os servidores e sem configurar nada no `ignore` |
 | **Perfis** | O perfil ativado com `SFTP: Set Profile` ou com o Gerenciador de Conexões não "muda mais sozinho": os recarregamentos do `sftp.json` deixam de restaurá-lo ao `defaultProfile`, e a seleção persiste entre reinicializações do VSCode. O `defaultProfile` passa a ser apenas o valor inicial e o recurso quando o perfil ativo desaparece |
 
+## Novidades da v1.22.0
+
+A v1.22.0 trata de fazer o servidor refletir de verdade o que acontece no local — e de manter na sua máquina aquilo que nunca deveria ter saído dela.
+
+| Novidade | O que traz |
+|----------|------------|
+| **Os arquivos temporários nunca são enviados** | Uma lista integrada exclui os arquivos de swap e de backup dos editores (vim, emacs), os arquivos de bloqueio do Office e do LibreOffice, os restos de merge (`*.orig`, `*.rej`, `*.bak`), os downloads incompletos (`*.part`, `*.crdownload`) e os metadados do sistema (`.DS_Store`, `Thumbs.db`, `desktop.ini`) — em todos os servidores e sem configurar nada. Desative com `ignoreTempFiles` e amplie com `tempFilePatterns`; os arquivos de lock de dependências, como `composer.lock`, são transferidos normalmente |
+| **As exclusões locais são replicadas no servidor** | `deleteRemoteOnLocalDelete` (ativo por padrão) cobre arquivos e pastas, seja a exclusão feita no explorador do VS Code, num terminal ou numa ferramenta externa, sem precisar de um glob `watcher.files`. Quatro salvaguardas evitam sustos (veja abaixo) |
+| **Lixeira remota com desfazer** | Com `remoteTrash`, excluir é um `rename` do lado do servidor para uma pasta de lixeira: não custa largura de banda e se reverte com `SFTP: Undo Last Remote Deletion`. Há também `SFTP: Restore from Remote Trash` e `SFTP: Empty Remote Trash`, e as entradas expiradas são purgadas sozinhas depois dos `retentionDays` |
+| **Renomear e mover são replicados como um `rename`** | `renameRemoteOnLocalRename` renomeia no servidor em vez de enviar de novo e excluir: o arquivo mantém sua identidade remota e não existe nenhum instante em que o caminho falte num docroot em produção |
+| **Visão de atividade** | Uma segunda visão na barra lateral do SFTP com o histórico de cada transferência, exclusão e renomeação: tipo, estado, hora, caminho, perfil, duração e erro. As operações que falharam podem ser repetidas uma a uma ou todas de uma vez; oculte-a com a configuração `sftp.showActivityView` |
+| **Modo pausa** | `SFTP: Pause/Resume Auto Sync` suspende toda a sincronização automática — `uploadOnSave`, `downloadOnOpen`, o watcher e a réplica de exclusões e renomeações — enquanto os comandos explícitos continuam funcionando. O estado é guardado por workspace e aparece na barra de status |
+
+### As quatro salvaguardas das exclusões
+
+| Salvaguarda | Comportamento |
+|-------------|---------------|
+| **Confirmação em lote** | Um lote maior que `deleteRemoteConfirmThreshold` (10 por padrão) abre uma caixa de diálogo modal com a lista de arquivos e não faz nada sem confirmação |
+| **Consciência do git** | As exclusões provocadas por uma operação do git (checkout, rebase, merge, stash…) são descartadas: trocar de branch nunca toca no servidor |
+| **Autossupressão** | As exclusões provocadas pelo próprio `Sync Remote -> Local --delete` ao limpar arquivos locais sobrantes são suprimidas em vez de voltarem ao servidor |
+| **Lixeira remota** | Com `remoteTrash`, uma exclusão é uma movimentação reversível para a lixeira do servidor em vez de um `unlink` |
+
 ## O que esperamos desta versão
 
 - **Um substituto direto (drop-in).** O mesmo formato de `sftp.json`, os mesmos comandos, os mesmos fluxos de trabalho — as configurações existentes funcionam sem nenhuma migração.
@@ -121,7 +144,7 @@ Cada correção foi verificada (build do webpack limpo, 42/42 testes, linter sem
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.20.0.vsix
+code --install-extension sftp-1.22.0.vsix
 ```
 
 ## Documentação
@@ -175,6 +198,7 @@ Você pode ver a lista completa de opções de configuração [aqui](https://git
 - [Múltiplos contextos](#múltiplos-contextos)
 - [Conexão com saltos (hopping)](#conexão-com-saltos-hopping)
 - [Configuração nas configurações do usuário](#configuração-nas-configurações-do-usuário)
+- [Exclusões e renomeações seguras](#exclusões-e-renomeações-seguras)
 
 ### Simples
 ```json
@@ -327,6 +351,27 @@ No sftp.json:
   "ignore": [".vscode", ".git", ".DS_Store"]
 }
 ```
+
+### Exclusões e renomeações seguras
+```json
+{
+  "host": "host",
+  "username": "usuario",
+  "remotePath": "/var/www/project",
+  "ignoreTempFiles": true,
+  "tempFilePatterns": ["*.generated.php"],
+  "deleteRemoteOnLocalDelete": true,
+  "deleteRemoteConfirmThreshold": 10,
+  "renameRemoteOnLocalRename": true,
+  "remoteTrash": {
+    "enabled": true,
+    "path": "/var/tmp/sftp-trash",
+    "retentionDays": 14
+  }
+}
+```
+
+_Nota:_ todos esses valores são os que a extensão já usa por padrão, exceto `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) e `remoteTrash.retentionDays` (`7`); só é preciso escrevê-los para alterá-los. Um `path` absoluto mantém a lixeira fora do docroot servido pelo servidor web.
 
 ## Explorador Remoto
 ![previa-do-explorador-remoto](assets/showcase/remote-explorer.png)
