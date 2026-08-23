@@ -2,6 +2,8 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 47 | 2026-08-22 | Vista de planes de carga y persistencia del registro | [Ver detalle](2026-08-22_feat_vista_planes_y_persistencia.md) |
+| 46 | 2026-08-22 | Verificación de carga por hash (SSH exec / FTP)      | [Ver detalle](2026-08-22_feat_verificacion_hash.md) |
 | 45 | 2026-08-22 | Índice de sincronización, plan de carga y escáner     | [Ver detalle](2026-08-22_feat_indice_plan_escaner.md) |
 | 44 | 2026-08-22 | Verificación de carga, reintentos y conteo de bytes  | [Ver detalle](2026-08-22_feat_verificacion_carga.md) |
 | 43 | 2026-08-22 | Base de transferencias y recolector único de cambios | [Ver detalle](2026-08-22_fix_base_transferencias.md) |
