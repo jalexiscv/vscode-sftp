@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 49 | 2026-08-22 | Detección de cambios externos, planes y escaneo       | [Ver detalle](2026-08-22_feat_cambios_externos.md) |
 | 48 | 2026-08-22 | Endurecimiento tras la revisión adversarial (ronda 1) | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda1.md) |
 | 47 | 2026-08-22 | Vista de planes de carga y persistencia del registro | [Ver detalle](2026-08-22_feat_vista_planes_y_persistencia.md) |
 | 46 | 2026-08-22 | Verificación de carga por hash (SSH exec / FTP)      | [Ver detalle](2026-08-22_feat_verificacion_hash.md) |
