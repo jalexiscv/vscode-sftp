@@ -3,7 +3,7 @@ jest.mock('fs');
 import { vol } from 'memfs';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sync, TransferDirection } from '../transfer';
+import { sync, transfer, TransferDirection } from '../transfer';
 import localFs from '../../../core/localFs';
 import TransferTask from '../../../core/transferTask';
 import RemoteFs from '../../../../test/helper/localRemoteFs';
@@ -77,7 +77,102 @@ const fillFs = obj => {
 };
 const mapList = (list: any[], key: string) => list.map(t => t[key]);
 
+// what ServiceConfig.ignore does with a gitignore `node_modules/` pattern:
+// the trailing slash only matches when the caller says the path is a
+// directory, and the subtree below never gets asked
+function ignoreDirOnly(root: string, name: string) {
+  return jest.fn((fsPath: string, isDirectory?: boolean) => {
+    const relative = path.relative(root, fsPath).split(path.sep).join('/');
+    const candidates = isDirectory ? [relative, relative + '/'] : [relative];
+    return candidates.includes(name + '/');
+  });
+}
+
 describe('transfer algorithm', () => {
+  describe('ignore', () => {
+    afterEach(() => {
+      vol.reset();
+    });
+
+    test('transfer prunes a directory that ignore only matches with a trailing slash', async () => {
+      fillFs({
+        local: {
+          a: file('a'),
+          node_modules: {
+            x: file('x'),
+          },
+          src: {
+            b: file('b'),
+          },
+        },
+        remote: {},
+      });
+      const ignore = ignoreDirOnly('/local', 'node_modules');
+      const task: TransferTask[] = [];
+
+      await transfer(
+        {
+          srcFsPath: '/local',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/remote',
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          transferOption: {
+            perserveTargetMode: false,
+            ignore,
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(task, 'targetFsPath').sort()).toEqual(
+        ['/remote/a', '/remote/src/b'].formatSep().sort()
+      );
+      // the directory was offered as such, and nothing below it was listed
+      expect(ignore).toHaveBeenCalledWith(path.join('/local', 'node_modules'), true);
+      expect(ignore.mock.calls.map(call => call[0])).not.toContain(path.join('/local/node_modules', 'x'));
+      expect(fs.existsSync(path.join('/remote', 'node_modules'))).toBe(false);
+    });
+
+    test('sync --delete keeps a target directory that ignore only matches with a trailing slash', async () => {
+      fillFs({
+        local: {
+          a: file('a', 1),
+        },
+        remote: {
+          a: file('$a'),
+          node_modules: {
+            y: file('$y'),
+          },
+          stale: file('$stale'),
+        },
+      });
+      const ignore = ignoreDirOnly('/remote', 'node_modules');
+      const task: TransferTask[] = [];
+
+      const deleted = await sync(
+        {
+          srcFsPath: '/local',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/remote',
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          transferOption: {
+            delete: true,
+            perserveTargetMode: false,
+            ignore,
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(deleted, 'fspath')).toEqual(['/remote/stale'].formatSep());
+      expect(ignore).toHaveBeenCalledWith(path.join('/remote', 'node_modules'), true);
+      expect(fs.existsSync(path.join('/remote/node_modules', 'y'))).toBe(true);
+      expect(fs.existsSync(path.join('/remote', 'stale'))).toBe(false);
+    });
+  });
+
   describe('sync', () => {
     afterEach(() => {
       vol.reset();

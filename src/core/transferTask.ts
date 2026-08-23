@@ -28,9 +28,114 @@ export const DEFAULT_TRANSFER_RETRIES = 2;
 export const ERROR_CODE_VERIFY = 'EVERIFY';
 
 // each retry waits RETRY_BASE_DELAY_MS × attempt before re-opening the source
-const RETRY_BASE_DELAY_MS = 500;
+export const RETRY_BASE_DELAY_MS = 500;
+// the delay actually used; only setRetryBaseDelayForTest() moves it
+let retryBaseDelayMs = RETRY_BASE_DELAY_MS;
 // remote file systems report mtime in whole seconds and some round them
 const MTIME_TOLERANCE_IN_SECONDS = 2;
+
+/**
+ * Test hook: shortens the base delay between retries, or restores the default
+ * when called without a value. The retry tests drive real streams over memfs,
+ * which do not tolerate fake timers, and 500 ms × attempt per retry adds up
+ * to seconds of wall-clock wait for every case that exhausts the retries.
+ * Production code never calls it.
+ */
+export function setRetryBaseDelayForTest(ms: number = RETRY_BASE_DELAY_MS): void {
+  retryBaseDelayMs = ms;
+}
+
+/**
+ * Where a failed attempt was when it broke: reaching the source (stat, open,
+ * read) or working on the target (open, write, futimes, rename, verify). The
+ * same "not found" means opposite things on each side, see
+ * {@link isRetryableTransferError}.
+ */
+export type TransferPhase = 'source' | 'target';
+
+// errno codes no retry can fix: permissions, a path of the wrong kind, a
+// read-only target or an operation the file system does not implement
+const PERMANENT_ERROR_CODES = new Set(['EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'EROFS', 'ENOTSUP']);
+
+// SFTP status codes; ssh2 reports them as bare numbers (2 is NO_SUCH_FILE and
+// goes through isNotFoundError, 4 is the generic FAILURE and is retried)
+const SFTP_PERMISSION_DENIED = 3;
+const SFTP_OP_UNSUPPORTED = 8;
+// basic-ftp reports reply codes as numbers too; three digits tell them apart
+const FTP_FIRST_REPLY_CODE = 100;
+// "exceeded storage allocation": the one permanent negative reply the server
+// may answer differently once it has made room
+const FTP_EXCEEDED_STORAGE = 552;
+
+/**
+ * Whether an attempt that failed with `error` deserves another one.
+ *
+ * Retrying buys nothing against a permanent answer and, at 500 ms × attempt
+ * per file, costs minutes on a batch the server refuses wholesale (FTP runs
+ * one transfer at a time), so only what a moment later could succeed is
+ * retried:
+ *
+ * - never: a cancelled transfer; permission denied (`EACCES`, `EPERM`, SFTP
+ *   `3`); a path of the wrong kind (`EISDIR`, `ENOTDIR`); a read-only or
+ *   unsupporting file system (`EROFS`, `ENOTSUP`, SFTP `8`); a source that is
+ *   not there (`ENOENT`, SFTP `2`, FTP `550` or a "no such file" message
+ *   while reaching the source: it will not come back); any other FTP
+ *   permanent negative reply (`5xx`: `530`/`532` auth, `550` unavailable,
+ *   `553` name not allowed...) except `552`.
+ * - always: a failed verification ({@link ERROR_CODE_VERIFY}: bytes, size,
+ *   hash, or a target not found after the upload); network errors and
+ *   timeouts (`ECONNRESET`, `ETIMEDOUT`, `EPIPE`, `ECONNREFUSED`...); SFTP
+ *   `4` FAILURE and every other SFTP status; FTP transient negative replies
+ *   (`4xx`: `421`, `425`, `426`, `450`, `451`, `452`) and `552`; a target
+ *   that went missing mid-transfer; and anything unknown.
+ */
+export function isRetryableTransferError(error: any, phase: TransferPhase): boolean {
+  if (!error) {
+    return true;
+  }
+  if (FileSystem.isAbortedError(error)) {
+    return false;
+  }
+
+  const code = error.code;
+  if (code === ERROR_CODE_VERIFY) {
+    return true;
+  }
+  if (typeof code === 'string' && PERMANENT_ERROR_CODES.has(code)) {
+    return false;
+  }
+  // a source that is gone will not come back; a target that vanished may
+  if (phase === 'source' && isNotFoundError(error)) {
+    return false;
+  }
+  if (typeof code === 'number') {
+    if (code < FTP_FIRST_REPLY_CODE) {
+      return code !== SFTP_PERMISSION_DENIED && code !== SFTP_OP_UNSUPPORTED;
+    }
+    if (code >= 500 && code < 600) {
+      return code === FTP_EXCEEDED_STORAGE;
+    }
+  }
+  return true;
+}
+
+// the message, plus the code when the message does not already carry it
+// (ssh2's "Permission denied" says nothing about its status 3); a
+// verification error spells its reason out and needs no suffix
+function describeError(error: any): string {
+  const message = String(error && error.message ? error.message : error);
+  const code = error && error.code;
+  if (code === ERROR_CODE_VERIFY) {
+    return message;
+  }
+  if (
+    (typeof code === 'string' && code !== '' && !message.includes(code)) ||
+    (typeof code === 'number' && !message.includes(String(code)))
+  ) {
+    return `${message} (code ${code})`;
+  }
+  return message;
+}
 
 interface FileHandle {
   fsPath: string;
@@ -103,12 +208,13 @@ class ByteCounter extends Transform {
  * reports on.
  *
  * Beyond streaming the bytes it is responsible for proving the transfer
- * landed: every attempt counts the bytes handed to the target against the
- * source size, an upload is then checked against the server according to
- * {@link TransferOption.verifyUpload}, and a failed attempt is retried with an
- * increasing delay unless the task was cancelled. The outcome is exposed
- * through {@link verification}, {@link bytesTransferred}, {@link expectedSize}
- * and {@link attempts}.
+ * landed: every attempt measures the source again and counts the bytes handed
+ * to the target against it, an upload is then checked against the server
+ * according to {@link TransferOption.verifyUpload}, and a failed attempt is
+ * retried with an increasing delay unless the task was cancelled or the error
+ * is one no retry can fix ({@link isRetryableTransferError}). The outcome is
+ * exposed through {@link verification}, {@link bytesTransferred},
+ * {@link expectedSize} and {@link attempts}.
  *
  * Key lifecycle methods:
  * - {@link run} transfers with retries; rejects with
@@ -127,6 +233,9 @@ export default class TransferTask implements Task {
   private _handle: Readable | undefined;
   private _counter: ByteCounter | undefined;
   private _retryWait: (() => void) | undefined;
+  // the error raised while reaching the source during the current attempt,
+  // so run() can tell which side an error came from (see _phaseOf)
+  private _sourceError: unknown;
   private _cancelled: boolean = false;
   private _attempts: number = 0;
   private _bytesTransferred: number = 0;
@@ -215,9 +324,14 @@ export default class TransferTask implements Task {
         if (this._cancelled || FileSystem.isAbortedError(error) || attempt > retries) {
           throw error;
         }
+        if (!isRetryableTransferError(error, this._phaseOf(error))) {
+          logger.warn(`[transfer] not retrying ${this.localFsPath}: ${describeError(error)}`);
+          throw error;
+        }
 
-        const message = error && error.message ? error.message : String(error);
-        logger.warn(`[transfer] retry ${attempt}/${retries} for ${this.localFsPath}: ${message}`);
+        logger.warn(
+          `[transfer] retry ${attempt}/${retries} for ${this.localFsPath}: ${describeError(error)}`
+        );
         await this._waitBeforeRetry(attempt);
         if (this._cancelled) {
           throw FileSystem.createAbortedError();
@@ -247,6 +361,7 @@ export default class TransferTask implements Task {
   private async _transferOnce() {
     this._bytesTransferred = 0;
     this._verification = undefined;
+    this._sourceError = undefined;
 
     const src = this._srcFsPath;
     const target = this._targetFsPath;
@@ -407,24 +522,49 @@ export default class TransferTask implements Task {
     }
   }
 
-  // the remote stat taken while collecting is reused for downloads (over FTP
-  // an lstat is a LIST of the whole parent directory); a local stat is cheap
-  // and, unlike the collected one, sees a file rewritten since then
   private async _resolveExpectedSize(): Promise<number> {
+    try {
+      return await this._measureSource();
+    } catch (error) {
+      this._sourceError = error;
+      throw error;
+    }
+  }
+
+  // uploads lstat the local source on every attempt: it is cheap and, unlike
+  // the size collected while listing, sees a file rewritten since then.
+  // Downloads trust the collected size on the first attempt (over FTP a stat
+  // is a SIZE or a LIST of the whole parent directory) and measure the source
+  // again on every retry: a remote file that grew since the listing (a log, a
+  // cache) would otherwise fail the byte count on every attempt although each
+  // download was complete
+  private _measureSource(): Promise<number> {
     const { size } = this._TransferOption;
-    if (
-      this._transferDirection === TransferDirection.REMOTE_TO_LOCAL &&
-      typeof size === 'number'
-    ) {
-      return size;
+    if (this._transferDirection === TransferDirection.REMOTE_TO_LOCAL) {
+      if (this._attempts === 1 && typeof size === 'number') {
+        return Promise.resolve(size);
+      }
+      return this._srcFs.statSize(this._srcFsPath);
     }
 
-    const stat = await this._srcFs.lstat(this._srcFsPath);
-    return stat.size;
+    return this._srcFs.lstat(this._srcFsPath).then(stat => stat.size);
+  }
+
+  // the error that reached run() is compared by identity with the one the
+  // source raised: stat, get and the read stream all record theirs, the
+  // target never does, so anything else belongs to the target side
+  private _phaseOf(error: unknown): TransferPhase {
+    return this._sourceError !== undefined && error === this._sourceError ? 'source' : 'target';
   }
 
   private async _openSource(): Promise<Readable> {
-    const handle = await this._srcFs.get(this._srcFsPath);
+    let handle: Readable;
+    try {
+      handle = await this._srcFs.get(this._srcFsPath);
+    } catch (error) {
+      this._sourceError = error;
+      throw error;
+    }
     // stored as soon as it exists so cancel() and a failed sibling open() can
     // still reach it
     this._handle = handle;
@@ -443,6 +583,9 @@ export default class TransferTask implements Task {
     // that lands before put() is listening from becoming an uncaught exception
     counter.on('error', () => undefined);
     handle.once('error', err => {
+      // a source that fails mid-stream is still a source-side failure (the
+      // local open is lazy, so even a missing file can surface here)
+      this._sourceError = err;
       // emitted, not destroy(err): a counter that already ended has
       // auto-destroyed and would swallow the error, while put() is still
       // waiting on it (same reason abortReadableStream emits)
@@ -603,7 +746,7 @@ export default class TransferTask implements Task {
       const timer = setTimeout(() => {
         this._retryWait = undefined;
         resolve();
-      }, RETRY_BASE_DELAY_MS * attempt);
+      }, retryBaseDelayMs * attempt);
       // unref'd so a pending retry never holds the process open (see syncControl)
       if (typeof timer.unref === 'function') {
         timer.unref();

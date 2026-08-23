@@ -7,8 +7,12 @@ import { Readable } from 'stream';
 import TransferTask, {
   TransferDirection,
   TransferOption,
+  TransferPhase,
   TransferVerificationError,
   ERROR_CODE_VERIFY,
+  RETRY_BASE_DELAY_MS,
+  isRetryableTransferError,
+  setRetryBaseDelayForTest,
 } from '../transferTask';
 import { FileSystem, FileType } from '../fs';
 import { ERROR_MSG_STREAM_INTERRUPT } from '../fs/fileSystem';
@@ -16,9 +20,10 @@ import localFs from '../localFs';
 import RemoteFs from '../../../test/helper/localRemoteFs';
 import logger from '../../logger';
 
-// the retry delay is real time (500 ms × attempt), so the cases that exhaust
-// retries keep them low; the whole file stays around a few seconds
-jest.setTimeout(30000);
+// the retry delay is real time (streams over memfs do not tolerate fake
+// timers), so it is shortened for the whole file; the one case that needs the
+// real one sets it back itself
+const FAST_RETRY_DELAY_MS = 1;
 
 const CONTENT = 'hello, verified world';
 const SIZE = Buffer.byteLength(CONTENT);
@@ -109,7 +114,7 @@ class TruncatingFs extends RemoteFs {
   }
 }
 
-// fails the first N puts with a plain error, then behaves
+// fails the first N puts with a network error, then behaves
 class FlakyFs extends RemoteFs {
   failures: number = 1;
   puts: number = 0;
@@ -117,9 +122,55 @@ class FlakyFs extends RemoteFs {
   put(input: Readable, fsPath: string, option?: any): Promise<void> {
     this.puts += 1;
     if (this.puts <= this.failures) {
-      return Promise.reject(new Error('connection reset by peer'));
+      return Promise.reject(Object.assign(new Error('connection reset by peer'), { code: 'ECONNRESET' }));
     }
     return super.put(input, fsPath, option);
+  }
+}
+
+// every put is refused with the error the test hands over (a server that
+// denies the write, an FTP reply...)
+class RefusingFs extends RemoteFs {
+  error: any = new Error('refused');
+  puts: number = 0;
+
+  put(_input: Readable, _fsPath: string, _option?: any): Promise<void> {
+    this.puts += 1;
+    return Promise.reject(this.error);
+  }
+}
+
+// the first open of the target fails as if its directory had gone, the next
+// one works: the same ENOENT as a missing source, on the other side
+class VanishingTargetFs extends RemoteFs {
+  opens: number = 0;
+
+  open(fsPath: string, flags: string, mode?: number): Promise<unknown> {
+    this.opens += 1;
+    if (this.opens === 1) {
+      return Promise.reject(Object.assign(new Error('no such file or directory'), { code: 'ENOENT' }));
+    }
+    return super.open(fsPath, flags, mode);
+  }
+}
+
+// the source opens fine and then fails while being read: a file the user
+// cannot read (the local open is lazy, so this is how a local EACCES shows up)
+class UnreadableSourceFs extends RemoteFs {
+  get(_fsPath: string, _option?: any): Promise<Readable> {
+    const stream = new Readable({
+      read() {
+        this.destroy(Object.assign(new Error('EACCES: permission denied, read'), { code: 'EACCES' }));
+      },
+    });
+    return Promise.resolve(stream);
+  }
+}
+
+// a remote source that is not there any more when the download opens it
+class MissingSourceFs extends RemoteFs {
+  get(_fsPath: string, _option?: any): Promise<Readable> {
+    return Promise.reject(Object.assign(new Error('No such file'), { code: 2 }));
   }
 }
 
@@ -169,10 +220,15 @@ describe('TransferTask', () => {
     vol.reset();
     fillFs({ '/local/a.txt': CONTENT });
     warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    setRetryBaseDelayForTest(FAST_RETRY_DELAY_MS);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    setRetryBaseDelayForTest();
   });
 
   describe('upload', () => {
@@ -305,6 +361,8 @@ describe('TransferTask', () => {
     });
 
     test('cancelling while waiting for a retry stops the task right away', async () => {
+      // the real delay: the cancel has to land inside the wait
+      setRetryBaseDelayForTest(RETRY_BASE_DELAY_MS);
       const remoteFs = createRemoteFs(FlakyFs);
       remoteFs.failures = 10;
       const task = createUpload(remoteFs, { retries: 10 });
@@ -363,6 +421,164 @@ describe('TransferTask', () => {
 
       expect(error.reason).toMatch(/^bytes mismatch/);
       expect(fs.readFileSync('/remote/a.txt', 'utf8')).toBe('previous');
+    });
+  });
+
+  describe('retry policy', () => {
+    const withCode = (code: string | number, message = 'boom') =>
+      Object.assign(new Error(message), { code });
+    const phases: TransferPhase[] = ['source', 'target'];
+
+    test.each([
+      ['EACCES', 'EACCES'],
+      ['EPERM', 'EPERM'],
+      ['EISDIR', 'EISDIR'],
+      ['ENOTDIR', 'ENOTDIR'],
+      ['EROFS', 'EROFS'],
+      ['ENOTSUP', 'ENOTSUP'],
+      ['SFTP 3 PERMISSION_DENIED', 3],
+      ['SFTP 8 OP_UNSUPPORTED', 8],
+      ['FTP 500', 500],
+      ['FTP 530', 530],
+      ['FTP 532', 532],
+      ['FTP 550', 550],
+      ['FTP 553', 553],
+    ])('%s is never retried', (_name, code) => {
+      phases.forEach(phase => expect(isRetryableTransferError(withCode(code), phase)).toBe(false));
+    });
+
+    test.each([
+      ['ECONNRESET', 'ECONNRESET'],
+      ['ETIMEDOUT', 'ETIMEDOUT'],
+      ['EPIPE', 'EPIPE'],
+      ['ECONNREFUSED', 'ECONNREFUSED'],
+      ['EVERIFY', ERROR_CODE_VERIFY],
+      ['SFTP 4 FAILURE', 4],
+      ['SFTP 6 NO_CONNECTION', 6],
+      ['SFTP 7 CONNECTION_LOST', 7],
+      ['FTP 421', 421],
+      ['FTP 425', 425],
+      ['FTP 426', 426],
+      ['FTP 450', 450],
+      ['FTP 451', 451],
+      ['FTP 452', 452],
+      ['FTP 552 (storage allocation)', 552],
+    ])('%s is retried', (_name, code) => {
+      phases.forEach(phase => expect(isRetryableTransferError(withCode(code), phase)).toBe(true));
+    });
+
+    test('a missing path is final on the source and worth a retry on the target', () => {
+      const missing = [
+        withCode('ENOENT'),
+        withCode(2, 'No such file'),
+        new Error('file not exist'), // ftpFileSystem.lstat, no code at all
+      ];
+      missing.forEach(error => {
+        expect(isRetryableTransferError(error, 'source')).toBe(false);
+        expect(isRetryableTransferError(error, 'target')).toBe(true);
+      });
+      // FTP's 550 is a permanent reply on either side
+      expect(isRetryableTransferError(withCode(550, '550 No such file'), 'target')).toBe(false);
+    });
+
+    test('unknown errors and a cancelled transfer fall on their defaults', () => {
+      phases.forEach(phase => {
+        expect(isRetryableTransferError(new Error('something odd'), phase)).toBe(true);
+        expect(isRetryableTransferError(undefined, phase)).toBe(true);
+        expect(isRetryableTransferError('a string', phase)).toBe(true);
+        expect(isRetryableTransferError(FileSystem.createAbortedError(), phase)).toBe(false);
+      });
+    });
+
+    test('a target that denies the write is not retried, whatever the budget', async () => {
+      const remoteFs = createRemoteFs(RefusingFs);
+      remoteFs.error = withCode(3, 'Permission denied');
+      const task = createUpload(remoteFs, { retries: 5 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe(3);
+      expect(task.attempts).toBe(1);
+      expect(remoteFs.puts).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toBe(
+        '[transfer] not retrying /local/a.txt: Permission denied (code 3)'
+      );
+    });
+
+    test('an FTP permanent reply stops at once while a transient one is retried', async () => {
+      const refused = createRemoteFs(RefusingFs);
+      refused.error = withCode(550, '550 Permission denied.');
+      const stopped = createUpload(refused, { retries: 2 });
+      await rejection(stopped.run());
+      expect(stopped.attempts).toBe(1);
+
+      const busy = createRemoteFs(RefusingFs);
+      busy.error = withCode(426, '426 Connection closed; transfer aborted.');
+      const exhausted = createUpload(busy, { retries: 2 });
+      const error = await rejection(exhausted.run());
+      expect(error.code).toBe(426);
+      expect(exhausted.attempts).toBe(3);
+    });
+
+    test('a local source that is not there is not retried', async () => {
+      vol.reset();
+      fillFs({}, ['/local', '/remote']);
+      const remoteFs = createRemoteFs();
+      const task = createUpload(remoteFs, { retries: 2 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe('ENOENT');
+      expect(task.attempts).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^\[transfer\] not retrying .*a\.txt: .*ENOENT/);
+    });
+
+    test('a source that fails while being read is a source-side failure', async () => {
+      const remoteFs = createRemoteFs();
+      const srcFs = createRemoteFs(UnreadableSourceFs);
+      const task = createUpload(remoteFs, { retries: 2 }, srcFs);
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe('EACCES');
+      expect(task.attempts).toBe(1);
+      expect(warn.mock.calls[0][0]).toMatch(/not retrying .*a\.txt: EACCES/);
+    });
+
+    test('a remote source missing at download time is not retried', async () => {
+      vol.reset();
+      fillFs({}, ['/local']);
+      const srcFs = createRemoteFs(MissingSourceFs);
+      const task = createDownload(srcFs, { size: SIZE, retries: 2 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe(2);
+      expect(task.attempts).toBe(1);
+      expect(warn.mock.calls[0][0]).toBe('[transfer] not retrying /local/a.txt: No such file (code 2)');
+    });
+
+    test('a target that went missing is retried: on open and after the upload', async () => {
+      const remoteFs = createRemoteFs(VanishingTargetFs);
+      const task = createUpload(remoteFs, { retries: 1 });
+
+      await task.run();
+
+      expect(task.attempts).toBe(2);
+      expect(remoteFs.opens).toBe(2);
+      expect(fs.readFileSync('/remote/a.txt', 'utf8')).toBe(CONTENT);
+      expect(warn.mock.calls[0][0]).toMatch(/^\[transfer\] retry 1\/1 for .*a\.txt: .*ENOENT/);
+
+      // verified-and-gone is EVERIFY, which is always worth another try
+      const gone = createRemoteFs();
+      jest.spyOn(gone, 'statSize').mockRejectedValue(withCode('ENOENT', 'no such file'));
+      const verified = createUpload(gone, { retries: 1 });
+      const error = await rejection(verified.run());
+      expect(error.code).toBe('EVERIFY');
+      expect(error.reason).toBe('not found after upload');
+      expect(verified.attempts).toBe(2);
     });
   });
 
@@ -443,6 +659,53 @@ describe('TransferTask', () => {
       expect(error.code).toBe('EVERIFY');
       expect(error.reason).toBe(`bytes mismatch (sent 3, expected ${SIZE})`);
       expect(task.verification!.level).toBe('none');
+    });
+
+    test('a source that grew since the listing is measured again on the retry', async () => {
+      // the listing saw three bytes; the file holds the whole content by now
+      const remoteFs = createRemoteFs(CountingLstatFs);
+      const task = createDownload(remoteFs, { size: 3, retries: 1 });
+
+      await task.run();
+
+      expect(fs.readFileSync('/local/a.txt', 'utf8')).toBe(CONTENT);
+      expect(task.attempts).toBe(2);
+      expect(task.expectedSize).toBe(SIZE);
+      expect(task.bytesTransferred).toBe(SIZE);
+      // the first attempt trusted the listing, the retry asked the source
+      expect(remoteFs.lstats).toEqual(['/remote/a.txt']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(
+        /^\[transfer\] retry 1\/1 for .*a\.txt: .*bytes mismatch \(sent \d+, expected 3\)/
+      );
+    });
+
+    test('without retries a stale listed size still fails, as there is no second measure', async () => {
+      const remoteFs = createRemoteFs(CountingLstatFs);
+      const task = createDownload(remoteFs, { size: 3, retries: 0 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe('EVERIFY');
+      expect(remoteFs.lstats).toEqual([]);
+    });
+
+    test('a source that vanished before the retry is measured is not retried again', async () => {
+      const remoteFs = createRemoteFs();
+      const statSize = jest
+        .spyOn(remoteFs, 'statSize')
+        .mockRejectedValue(Object.assign(new Error('No such file'), { code: 2 }));
+      const task = createDownload(remoteFs, { size: 3, retries: 2 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe(2);
+      expect(task.attempts).toBe(2);
+      expect(statSize).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map(call => call[0])).toEqual([
+        expect.stringMatching(/^\[transfer\] retry 1\/2 for .*a\.txt: .*bytes mismatch/),
+        '[transfer] not retrying /local/a.txt: No such file (code 2)',
+      ]);
     });
   });
 

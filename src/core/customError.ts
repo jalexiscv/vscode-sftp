@@ -1,5 +1,11 @@
 import * as path from 'path';
-import TransferTask from './transferTask';
+// type-only on purpose: transferTask.ts imports CustomError as a value (its
+// TransferVerificationError extends it), so a value import here would close a
+// require() cycle and hand one of the two modules a half-initialised other,
+// depending on which file is loaded first. `import type` is erased at
+// compile time (TypeScript >= 3.8; ts-loader and the jest transpiler both
+// honour it), so no runtime edge exists in this direction.
+import type TransferTask from './transferTask';
 
 /**
  * An Error with a machine-readable `code`, so callers can branch on what went
