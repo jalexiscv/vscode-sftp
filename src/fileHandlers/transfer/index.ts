@@ -1,5 +1,6 @@
 import { TransferResult, TransferFailedError } from '../../core';
 import { markReported } from '../../helper';
+import { suppressAutoSync } from '../../modules/syncControl';
 import { refreshRemoteExplorer } from '../shared';
 import createFileHandler, { FileHandlerContext } from '../createFileHandler';
 import { transfer, sync, TransferOption, SyncOption, TransferDirection } from './transfer';
@@ -24,7 +25,7 @@ function assertTransferSucceeded(result: TransferResult, action: TransferAction)
 }
 
 function createTransferHandle(direction: TransferDirection) {
-  return async function handle(this: FileHandlerContext, option) {
+  async function run(this: FileHandlerContext, option) {
     const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
     const localFs = this.fileService.getLocalFileSystem();
     const { localFsPath, remoteFsPath } = this.target;
@@ -59,6 +60,17 @@ function createTransferHandle(direction: TransferDirection) {
       result,
       direction === TransferDirection.REMOTE_TO_LOCAL ? 'download' : 'upload'
     );
+  }
+
+  if (direction === TransferDirection.LOCAL_TO_REMOTE) {
+    return run;
+  }
+
+  // A download writes local files the watcher and uploadOnSave would otherwise
+  // see as the user's own edits and push straight back to the server. Uploads
+  // are not wrapped: suppressing them would swallow real saves made meanwhile.
+  return function handle(this: FileHandlerContext, option) {
+    return suppressAutoSync(() => run.call(this, option));
   };
 }
 
@@ -67,27 +79,33 @@ const downloadHandle = createTransferHandle(TransferDirection.REMOTE_TO_LOCAL);
 
 export const sync2Remote = createFileHandler<SyncOption>({
   name: 'sync local ➞ remote',
-  async handle(option) {
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
-    const localFs = this.fileService.getLocalFileSystem();
-    const { localFsPath, remoteFsPath } = this.target;
-    const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-    // Attach filePerm and dirPerm to transferOption
-    option.filePerm = this.config.filePerm;
-    option.dirPerm = this.config.dirPerm;
-    await sync(
-      {
-        srcFsPath: localFsPath,
-        srcFs: localFs,
-        targetFsPath: remoteFsPath,
-        targetFs: remoteFs,
-        transferOption: option,
-        transferDirection: TransferDirection.LOCAL_TO_REMOTE,
-      },
-      t => scheduler.add(t)
-    );
-    const result = await scheduler.run();
-    assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'upload');
+  handle(option) {
+    const run = async () => {
+      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
+      const localFs = this.fileService.getLocalFileSystem();
+      const { localFsPath, remoteFsPath } = this.target;
+      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
+      // Attach filePerm and dirPerm to transferOption
+      option.filePerm = this.config.filePerm;
+      option.dirPerm = this.config.dirPerm;
+      await sync(
+        {
+          srcFsPath: localFsPath,
+          srcFs: localFs,
+          targetFsPath: remoteFsPath,
+          targetFs: remoteFs,
+          transferOption: option,
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+        },
+        t => scheduler.add(t)
+      );
+      const result = await scheduler.run();
+      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'upload');
+    };
+
+    // both directions also downloads, and those writes must not be mirrored
+    // back; a plain local -> remote sync writes nothing locally
+    return option.bothDiretions ? suppressAutoSync(run) : run();
   },
   transformOption() {
     const config = this.config;
@@ -113,24 +131,28 @@ export const sync2Remote = createFileHandler<SyncOption>({
 
 export const sync2Local = createFileHandler<SyncOption>({
   name: 'sync remote ➞ local',
-  async handle(option) {
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
-    const localFs = this.fileService.getLocalFileSystem();
-    const { localFsPath, remoteFsPath } = this.target;
-    const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-    await sync(
-      {
-        srcFsPath: remoteFsPath,
-        srcFs: remoteFs,
-        targetFsPath: localFsPath,
-        targetFs: localFs,
-        transferOption: option,
-        transferDirection: TransferDirection.REMOTE_TO_LOCAL,
-      },
-      t => scheduler.add(t)
-    );
-    const result = await scheduler.run();
-    assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'download');
+  handle(option) {
+    // everything this writes (and, with syncOption.delete, removes) locally is
+    // the extension's doing, not an edit to upload or a deletion to mirror
+    return suppressAutoSync(async () => {
+      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
+      const localFs = this.fileService.getLocalFileSystem();
+      const { localFsPath, remoteFsPath } = this.target;
+      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
+      await sync(
+        {
+          srcFsPath: remoteFsPath,
+          srcFs: remoteFs,
+          targetFsPath: localFsPath,
+          targetFs: localFs,
+          transferOption: option,
+          transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+        },
+        t => scheduler.add(t)
+      );
+      const result = await scheduler.run();
+      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'download');
+    });
   },
   transformOption() {
     const config = this.config;
