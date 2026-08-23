@@ -11,6 +11,7 @@ import watcherService from '../fileWatcher';
 // other while loading
 import { uploadFile, downloadFile } from '../../fileHandlers';
 import { ActivityKind, ActivityStatus, record, update, succeed, fail } from '../activityLog';
+import { emitTransferStart, emitTransferDone } from '../transferEvents';
 import Trie from './trie';
 
 /**
@@ -169,6 +170,7 @@ export function createFileService(config: any, workspace: string) {
       simplifyPath(localFsPath)
     );
     activityIds.set(task, recordTransfer(service, task));
+    emitTransferStart({ service, task, profile: app.state.profile });
   });
   service.afterTransfer((error, task) => {
     const { localFsPath, transferType } = task;
@@ -199,6 +201,9 @@ export function createFileService(config: any, workspace: string) {
         succeed(activityId);
       }
     }
+    // after the activity entry is settled, so a listener that reads the log
+    // (or the sync index feeder) sees the final state of this task
+    emitTransferDone({ service, task, error: error || null, profile: app.state.profile });
   });
 
   return service;
