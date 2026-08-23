@@ -19,6 +19,7 @@ import { getFileService, getRunningTransformTasks } from './serviceManager';
 import { isPaused, isSuppressed, isGitOperationInProgress, readGitHead } from './syncControl';
 import { moveToTrash, isTrashEnabled, trashBatchStamp } from './remoteTrash';
 import * as activityLog from './activityLog';
+import { forgetInIndex, renameInIndex } from './syncIndexFeeder';
 import {
   onDidDeleteFiles,
   onDidRenameFiles,
@@ -185,18 +186,23 @@ async function deleteOne(item: PendingDeletion, batchStamp: string): Promise<voi
       });
       if (entry) {
         activityLog.succeed(activityId);
+        await forgetInIndex(fileService, item.fsPath);
         return;
       }
     }
 
     await removeRemote(item.uri);
     activityLog.succeed(activityId);
+    // the sync index must not remember a file the server no longer has;
+    // forgetInIndex never throws, so the deletion's outcome is already settled
+    await forgetInIndex(fileService, item.fsPath);
   } catch (error) {
     // A path that is already gone on the server is the expected outcome of a
     // file that was never uploaded; it is not a failure worth alarming about.
     if (isNotFoundError(error)) {
       logger.debug(`[delete-monitor] ${target.remoteFsPath} already absent on the remote`);
       activityLog.update(activityId, { status: activityLog.ActivityStatus.Skipped });
+      await forgetInIndex(fileService, item.fsPath);
       return;
     }
 
@@ -471,6 +477,8 @@ async function handleRename(oldUri: vscode.Uri, newUri: vscode.Uri) {
     logger.info(`[rename-monitor] ${oldUri.fsPath} -> ${newUri.fsPath}`);
     await renameRemote(newUri, { fromLocalPath: oldUri.fsPath });
     activityLog.succeed(activityId);
+    // keep the verified entry under its new path; renameInIndex never throws
+    await renameInIndex(fileService, oldUri.fsPath, newUri.fsPath);
   } catch (error) {
     // Release the claim on the old path. The watcher also reported this rename
     // as a deletion; leaving the mark set would suppress it, and the remote

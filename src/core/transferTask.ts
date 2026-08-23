@@ -191,6 +191,16 @@ export default class TransferTask implements Task {
     return this._verification;
   }
 
+  /** mtime of the source as it was collected ({@link TransferOption.mtime}), in ms. */
+  get sourceMtime(): number {
+    return this._TransferOption.mtime;
+  }
+
+  /** Size of the source as it was collected, when the collector knew it. */
+  get sourceSize(): number | undefined {
+    return this._TransferOption.size;
+  }
+
   async run() {
     const retries = this._maxRetries();
     let attempt = 0;

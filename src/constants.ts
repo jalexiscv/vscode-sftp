@@ -108,3 +108,7 @@ export const COMMAND_PLAN_CLEAR_ALL = 'sftp.plan.clearAll';
 
 // comando que VS Code genera por el id de la vista; no se declara en package.json
 export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
+
+// detección de cambios externos e índice de sincronización
+export const COMMAND_SCAN_EXTERNAL_CHANGES = 'sftp.scanExternalChanges';
+export const COMMAND_REBUILD_SYNC_INDEX = 'sftp.rebuildSyncIndex';

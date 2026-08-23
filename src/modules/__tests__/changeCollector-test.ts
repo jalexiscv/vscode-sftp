@@ -4,26 +4,27 @@ jest.mock('fs');
 jest.mock('../serviceManager', () => ({
   getFileService: jest.fn(),
   getRunningTransformTasks: jest.fn(() => []),
+  getAllFileService: jest.fn(() => []),
 }));
-// the default handler's upload is the observable outcome here, not a transfer
-jest.mock('../../fileHandlers', () => ({
-  uploadFile: jest.fn(() => Promise.resolve()),
-}));
-jest.mock('../../host', () => ({
-  ...jest.requireActual('../../host'),
-  getWorkspaceFolders: () => [{ uri: { fsPath: require('path').resolve(require('path').sep, 'ws') } }],
+// the default handler ends in the confirmation gate; what it is handed is the
+// observable outcome here, not a transfer
+jest.mock('../planConfirmation', () => ({
+  confirmAndRunPlan: jest.fn(() => Promise.resolve({ decision: 'run', summary: {} })),
 }));
 
 import * as path from 'path';
 import { vol } from 'memfs';
 import { TransferDirection } from '../../core';
-import { uploadFile } from '../../fileHandlers';
 import { getFileService, getRunningTransformTasks } from '../serviceManager';
+import { confirmAndRunPlan } from '../planConfirmation';
 import {
   setPaused,
   suppressAutoSync,
   __resetForTest as resetSyncControl,
 } from '../syncControl';
+import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
+import { indexFor } from '../syncIndexFeeder';
+import { getPlans, __resetForTest as resetPlans } from '../uploadPlan';
 import {
   enqueueChange,
   setBatchHandler,
@@ -36,25 +37,29 @@ import {
   __resetForTest,
 } from '../changeCollector';
 
-const { queueKey, isGitDriven, BATCH_INTERVAL } = testHooks;
+const { queueKey, isGitDriven, planSourceFor, BATCH_INTERVAL, MAX_WAIT, RECENTLY_HANDLED_TTL } = testHooks;
 
 const CASE_INSENSITIVE = process.platform === 'win32' || process.platform === 'darwin';
 const root = path.resolve(path.sep, 'ws');
 const p = (...segments: string[]) => path.join(root, ...segments);
 
-const uploadFileMock = uploadFile as jest.Mock;
 const getFileServiceMock = getFileService as jest.Mock;
 const getRunningTransformTasksMock = getRunningTransformTasks as jest.Mock;
+const confirmAndRunPlanMock = confirmAndRunPlan as jest.Mock;
 
 function uri(fsPath: string) {
   return { scheme: 'file', fsPath } as any;
 }
 
+let nextServiceId = 1;
+
 function fakeService(baseDir: string, config: any = {}) {
+  const resolved = { ignore: null, host: 'example.test', port: 22, remotePath: '/remote', ...config };
   return {
+    id: nextServiceId++,
     baseDir,
     name: path.basename(baseDir),
-    getConfig: () => ({ ignore: null, ...config }),
+    getConfig: jest.fn(() => resolved),
   } as any;
 }
 
@@ -84,17 +89,21 @@ function change(overrides: Partial<PendingChange> = {}): PendingChange {
     source: 'save',
     queuedAt: 0,
     gitBusyWhenQueued: false,
-    gitHeadWhenQueued: 'abc',
+    gitHeadWhenQueued: 'refs/heads/main',
     ...overrides,
   };
 }
 
+const names = (batch: ChangeBatch) => batch.items.map(i => path.basename(i.fsPath));
+
 beforeEach(() => {
   __resetForTest();
   resetSyncControl();
+  resetSyncIndex();
+  resetPlans();
+  initSyncIndex({ storagePath: undefined });
   vol.reset();
-  uploadFileMock.mockClear();
-  uploadFileMock.mockImplementation(() => Promise.resolve());
+  confirmAndRunPlanMock.mockClear();
   getFileServiceMock.mockReset();
   getRunningTransformTasksMock.mockReset();
   getRunningTransformTasksMock.mockImplementation(() => []);
@@ -105,6 +114,7 @@ afterEach(async () => {
   // never leave a pass running into the next test
   await flushNow();
   __resetForTest();
+  resetSyncIndex();
 });
 
 describe('queueKey', () => {
@@ -127,7 +137,7 @@ describe('dedupe', () => {
   test('a second change of the same path within the window replaces the first', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'scan');
     enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     expect(pendingCount()).toBe(1);
 
@@ -139,10 +149,10 @@ describe('dedupe', () => {
   });
 
   if (CASE_INSENSITIVE) {
-    test('a save and a watcher event that differ only in casing are one change', async () => {
+    test('two events that differ only in casing are one change', async () => {
       const seen = collectBatches();
 
-      enqueueChange(uri(p('src', 'A.ts')), 'save');
+      enqueueChange(uri(p('src', 'A.ts')), 'watcher');
       enqueueChange(uri(p('src', 'a.ts')), 'watcher');
 
       await flushNow();
@@ -154,13 +164,81 @@ describe('dedupe', () => {
   test('different paths stay separate', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
-    enqueueChange(uri(p('src', 'b.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     expect(pendingCount()).toBe(2);
 
     await flushNow();
 
-    expect(seen[0].items.map(i => path.basename(i.fsPath)).sort()).toEqual(['a.ts', 'b.ts']);
+    expect(names(seen[0]).sort()).toEqual(['a.ts', 'b.ts']);
+  });
+});
+
+describe('saves', () => {
+  test('a save is processed at once, without waiting for the window', async () => {
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+
+    // the handler is reached synchronously: no timer, no flush
+    expect(seen.length).toBe(1);
+    expect(seen[0].items[0].source).toBe('save');
+    expect(pendingCount()).toBe(0);
+  });
+
+  test("the watcher's echo of a save is dropped, so the save is one upload", async () => {
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    expect(pendingCount()).toBe(0);
+
+    await flushNow();
+
+    expect(seen.length).toBe(1);
+  });
+
+  test('a watcher event for the same path after the TTL is a new change', async () => {
+    const seen = collectBatches();
+    const realNow = Date.now;
+    let now = 10000;
+    Date.now = () => now;
+    try {
+      enqueueChange(uri(p('src', 'a.ts')), 'save');
+      now += RECENTLY_HANDLED_TTL + 1;
+      enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+      await flushNow();
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(seen.length).toBe(2);
+    expect(seen[1].items[0].source).toBe('watcher');
+  });
+
+  test('saves queued while a pass runs are processed right after it, watcher changes wait', async () => {
+    const seen: ChangeBatch[] = [];
+    let firstPass = true;
+    setBatchHandler(async batch => {
+      seen.push(batch);
+      if (firstPass) {
+        firstPass = false;
+        enqueueChange(uri(p('src', 'b.ts')), 'save');
+        enqueueChange(uri(p('src', 'c.ts')), 'watcher');
+      }
+    });
+
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    // the follow-up for the save is immediate; c.ts stays for its window
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(seen.length).toBe(2);
+    expect(names(seen[1])).toEqual(['b.ts']);
+    expect(pendingCount()).toBe(1);
+
+    await flushNow();
+    expect(names(seen[2])).toEqual(['c.ts']);
   });
 });
 
@@ -170,7 +248,7 @@ describe('pending count', () => {
     const listener = jest.fn();
     const subscription = onDidChangePending(listener);
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     expect(pendingCount()).toBe(1);
     expect(listener).toHaveBeenCalledTimes(1);
 
@@ -180,7 +258,7 @@ describe('pending count', () => {
     expect(listener).toHaveBeenCalledTimes(2);
 
     subscription.dispose();
-    enqueueChange(uri(p('src', 'b.ts')), 'save');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     expect(listener).toHaveBeenCalledTimes(2);
   });
 });
@@ -192,7 +270,7 @@ describe('batches', () => {
     installServices(alpha, beta);
     const seen = collectBatches();
 
-    enqueueChange(uri(p('alpha', 'a.ts')), 'save');
+    enqueueChange(uri(p('alpha', 'a.ts')), 'watcher');
     enqueueChange(uri(p('beta', 'b.ts')), 'watcher');
     enqueueChange(uri(p('alpha', 'sub', 'c.ts')), 'scan');
 
@@ -201,20 +279,20 @@ describe('batches', () => {
     expect(seen.length).toBe(2);
     const forAlpha = seen.find(batch => batch.service === alpha)!;
     const forBeta = seen.find(batch => batch.service === beta)!;
-    expect(forAlpha.items.map(i => path.basename(i.fsPath)).sort()).toEqual(['a.ts', 'c.ts']);
-    expect(forBeta.items.map(i => path.basename(i.fsPath))).toEqual(['b.ts']);
+    expect(names(forAlpha).sort()).toEqual(['a.ts', 'c.ts']);
+    expect(names(forBeta)).toEqual(['b.ts']);
   });
 
   test('orders the items of a batch deepest first, as the watcher did', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
-    enqueueChange(uri(p('src', 'deep', 'deeper', 'c.ts')), 'save');
-    enqueueChange(uri(p('src', 'deep', 'b.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'deep', 'deeper', 'c.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'deep', 'b.ts')), 'watcher');
 
     await flushNow();
 
-    expect(seen[0].items.map(i => path.basename(i.fsPath))).toEqual(['c.ts', 'b.ts', 'a.ts']);
+    expect(names(seen[0])).toEqual(['c.ts', 'b.ts', 'a.ts']);
   });
 
   test('carries the source and the git snapshot of each item', async () => {
@@ -244,21 +322,28 @@ describe('batches', () => {
       }
     });
 
-    enqueueChange(uri(p('alpha', 'a.ts')), 'save');
-    enqueueChange(uri(p('beta', 'b.ts')), 'save');
+    enqueueChange(uri(p('alpha', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('beta', 'b.ts')), 'watcher');
 
     await expect(flushNow()).resolves.toBeUndefined();
     expect(handled.sort()).toEqual(['alpha', 'beta']);
   });
 
-  test('setBatchHandler(null) restores the default upload', async () => {
-    setBatchHandler(async () => undefined);
-    setBatchHandler(null);
+  test('the config is resolved once per burst, not once per event', async () => {
+    const service = fakeService(p('src'));
+    installServices(service);
+    collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    for (let i = 0; i < 20; i++) {
+      enqueueChange(uri(p('src', `f${i}.ts`)), 'watcher');
+    }
     await flushNow();
+    expect(service.getConfig).toHaveBeenCalledTimes(1);
 
-    expect(uploadFileMock).toHaveBeenCalledTimes(1);
+    // the cache is dropped when the queue drains: a new burst asks again
+    enqueueChange(uri(p('src', 'g.ts')), 'watcher');
+    await flushNow();
+    expect(service.getConfig).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -268,6 +353,7 @@ describe('admission', () => {
     setPaused(true);
 
     enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     await flushNow();
 
     expect(seen).toEqual([]);
@@ -285,26 +371,28 @@ describe('admission', () => {
     expect(seen).toEqual([]);
   });
 
-  test('drops a path no config covers', async () => {
+  test('drops a path no config covers, before it reaches the queue', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('elsewhere', 'a.ts')), 'save');
-    enqueueChange(uri(p('src', 'b.ts')), 'save');
+    enqueueChange(uri(p('elsewhere', 'a.ts')), 'watcher');
+    expect(pendingCount()).toBe(0);
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     await flushNow();
 
     expect(seen.length).toBe(1);
-    expect(seen[0].items.map(i => path.basename(i.fsPath))).toEqual(['b.ts']);
+    expect(names(seen[0])).toEqual(['b.ts']);
   });
 
-  test('drops a path outside the workspace', async () => {
+  test('admits a path outside the workspace folder when a service covers it', async () => {
     const other = path.resolve(path.sep, 'outside');
     installServices(fakeService(p('src')), fakeService(other));
     const seen = collectBatches();
 
-    enqueueChange(uri(path.join(other, 'a.ts')), 'save');
+    enqueueChange(uri(path.join(other, 'a.ts')), 'watcher');
     await flushNow();
 
-    expect(seen).toEqual([]);
+    expect(seen.length).toBe(1);
+    expect(names(seen[0])).toEqual(['a.ts']);
   });
 
   test('drops a non-file uri', async () => {
@@ -316,21 +404,23 @@ describe('admission', () => {
     expect(seen).toEqual([]);
   });
 
-  test('drops a path the config ignores', async () => {
+  test('drops a path the config ignores, before it reaches the queue', async () => {
     installServices(
       fakeService(p('src'), { ignore: (fsPath: string) => /\.log$/.test(fsPath) })
     );
     const seen = collectBatches();
 
     enqueueChange(uri(p('src', 'debug.log')), 'watcher');
+    expect(pendingCount()).toBe(0);
     enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     await flushNow();
 
-    expect(seen[0].items.map(i => path.basename(i.fsPath))).toEqual(['a.ts']);
+    expect(names(seen[0])).toEqual(['a.ts']);
   });
 
   test('drops a path with an unusable config, without failing the batch', async () => {
     const broken = {
+      id: 99,
       baseDir: p('src'),
       name: 'src',
       getConfig: () => {
@@ -349,8 +439,6 @@ describe('admission', () => {
   test('drops a path that is being downloaded right now', async () => {
     getRunningTransformTasksMock.mockImplementation(() => [
       { transferType: TransferDirection.REMOTE_TO_LOCAL, localFsPath: p('src', 'a.ts') },
-      // an upload in flight is not a reason to skip: it is ours
-      { transferType: TransferDirection.LOCAL_TO_REMOTE, localFsPath: p('src', 'b.ts') },
     ]);
     const seen = collectBatches();
 
@@ -358,42 +446,144 @@ describe('admission', () => {
     enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     await flushNow();
 
-    expect(seen[0].items.map(i => path.basename(i.fsPath))).toEqual(['b.ts']);
+    expect(names(seen[0])).toEqual(['b.ts']);
+  });
+
+  test('defers, rather than drops, a change to a path whose upload is in flight', async () => {
+    getRunningTransformTasksMock.mockImplementation(() => [
+      { transferType: TransferDirection.LOCAL_TO_REMOTE, localFsPath: p('src', 'a.ts') },
+    ]);
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
+    await flushNow();
+
+    expect(names(seen[0])).toEqual(['b.ts']);
+    // still queued, waiting for the upload to finish
+    expect(pendingCount()).toBe(1);
+
+    getRunningTransformTasksMock.mockImplementation(() => []);
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(names(seen[1])).toEqual(['a.ts']);
+    expect(pendingCount()).toBe(0);
   });
 });
 
 describe('default handler', () => {
-  test('uploads each item once', async () => {
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+  const plansOf = () => getPlans();
+
+  test('turns the batch into one plan per service and hands it to the confirmation', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'aaa', [p('src', 'b.ts')]: 'bb' });
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     await flushNow();
 
-    expect(uploadFileMock).toHaveBeenCalledTimes(2);
-    const uploaded = uploadFileMock.mock.calls.map(([target]) => path.basename(target.fsPath));
-    expect(uploaded.sort()).toEqual(['a.ts', 'b.ts']);
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+    const [plan, options] = confirmAndRunPlanMock.mock.calls[0];
+    expect(plansOf()).toEqual([plan]);
+    expect(plan.serviceName).toBe('src');
+    expect(plan.source).toBe('watcher');
+    expect(plan.items.map((i: any) => path.basename(i.localPath)).sort()).toEqual(['a.ts', 'b.ts']);
+    const a = plan.items.find((i: any) => path.basename(i.localPath) === 'a.ts');
+    expect(a.reason).toBe('new');
+    expect(a.localSize).toBe(3);
+    expect(a.remotePath).toBe('/remote/a.ts');
+    // the threshold comes from the config; the run is not awaited
+    expect(options).toEqual({
+      serviceName: 'src',
+      host: 'example.test',
+      confirmThreshold: 20,
+      awaitRun: false,
+    });
   });
 
-  test('an in-editor save seen by the watcher too is one upload, not two', async () => {
-    // this is the bug the collector exists for
+  test('an in-editor save seen by the watcher too is one plan item, not two', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'x' });
+
     enqueueChange(uri(p('src', 'a.ts')), 'save');
     enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     await flushNow();
 
-    expect(uploadFileMock).toHaveBeenCalledTimes(1);
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+    expect(plansOf()[0].items.length).toBe(1);
+    expect(plansOf()[0].source).toBe('command');
   });
 
-  test('a failed upload is contained: the others go through and nothing rejects', async () => {
-    uploadFileMock.mockImplementation((target: { fsPath: string }) =>
-      path.basename(target.fsPath) === 'a.ts'
-        ? Promise.reject(new Error('EACCES'))
-        : Promise.resolve()
-    );
+  test('a file already in the index is "modified"; a git-driven batch is a git plan', async () => {
+    const head = path.join(root, '.git', 'HEAD');
+    vol.fromJSON({
+      [p('src', 'a.ts')]: 'x',
+      [p('src', 'b.ts')]: 'y',
+      [head]: 'ref: refs/heads/main\n',
+    });
+    const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });
+    const index = await indexFor(service);
+    index.set('a.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    setBatchHandler(null);
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
-    enqueueChange(uri(p('src', 'b.ts')), 'save');
-    await expect(flushNow()).resolves.toBeUndefined();
+    // the batch handler is private; drive it through the public path with a
+    // git snapshot that moved
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
+    vol.writeFileSync(head, 'ref: refs/heads/feature\n');
+    await flushNow();
 
-    expect(uploadFileMock).toHaveBeenCalledTimes(2);
+    const [plan] = plansOf();
+    expect(plan.source).toBe('git');
+    const reasons = plan.items.map((i: any) => [path.basename(i.localPath), i.reason]).sort();
+    expect(reasons).toEqual([['a.ts', 'modified'], ['b.ts', 'new']]);
+  });
+
+  test('a directory in the batch is expanded into its files, without duplicates', async () => {
+    vol.fromJSON({
+      [p('src', 'dir', 'one.ts')]: '1',
+      [p('src', 'dir', 'deep', 'two.ts')]: '22',
+      [p('src', 'dir', 'skip.log')]: 'log',
+    });
+    installServices(fakeService(p('src'), { ignore: (fsPath: string) => /\.log$/.test(fsPath) }));
+
+    enqueueChange(uri(p('src', 'dir')), 'watcher');
+    enqueueChange(uri(p('src', 'dir', 'one.ts')), 'watcher');
+    await flushNow();
+
+    const [plan] = plansOf();
+    expect(plan.items.map((i: any) => path.basename(i.localPath)).sort()).toEqual(['one.ts', 'two.ts']);
+  });
+
+  test('a path that vanished before the batch is left out; an empty batch makes no plan', async () => {
+    enqueueChange(uri(p('src', 'gone.ts')), 'watcher');
+    await flushNow();
+
+    expect(plansOf()).toEqual([]);
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+  });
+
+  test('setBatchHandler(null) restores the default plan-and-run', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'x' });
+    setBatchHandler(async () => undefined);
+    setBatchHandler(null);
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('planSourceFor: git wins, then watcher, poll, scan; saves alone are a command', () => {
+    const batchOf = (gitDriven: boolean, ...sources: any[]) => ({
+      service: {} as any,
+      gitDriven,
+      items: sources.map(source => change({ source })),
+    });
+    expect(planSourceFor(batchOf(true, 'save'))).toBe('git');
+    expect(planSourceFor(batchOf(false, 'save', 'watcher'))).toBe('watcher');
+    expect(planSourceFor(batchOf(false, 'poll', 'scan'))).toBe('poll');
+    expect(planSourceFor(batchOf(false, 'scan'))).toBe('scan');
+    expect(planSourceFor(batchOf(false, 'save'))).toBe('command');
   });
 });
 
@@ -410,7 +600,7 @@ describe('flushNow', () => {
         })
     );
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     await flushNow();
 
     expect(finished).toBe(true);
@@ -427,11 +617,11 @@ describe('flushNow', () => {
       }
     });
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     await flushNow();
 
     expect(seen.length).toBe(2);
-    expect(seen[1].items.map(i => path.basename(i.fsPath))).toEqual(['late.ts']);
+    expect(names(seen[1])).toEqual(['late.ts']);
     expect(pendingCount()).toBe(0);
   });
 
@@ -443,34 +633,31 @@ describe('flushNow', () => {
 });
 
 describe('git awareness', () => {
-  const gitNow = (state: { busy: boolean; head: string | null }) => () => state;
+  const gitNow = (state: { busy: boolean; ref: string | null }) => () => state;
 
   test('isGitDriven: git was busy when the change was queued', () => {
-    expect(isGitDriven(change({ gitBusyWhenQueued: true }), gitNow({ busy: false, head: 'abc' }))).toBe(
-      true
-    );
+    expect(
+      isGitDriven(change({ gitBusyWhenQueued: true }), gitNow({ busy: false, ref: 'refs/heads/main' }))
+    ).toBe(true);
   });
 
   test('isGitDriven: git is busy now', () => {
-    expect(isGitDriven(change(), gitNow({ busy: true, head: 'abc' }))).toBe(true);
+    expect(isGitDriven(change(), gitNow({ busy: true, ref: 'refs/heads/main' }))).toBe(true);
   });
 
-  test('isGitDriven: HEAD moved since the change was queued', () => {
-    expect(isGitDriven(change({ gitHeadWhenQueued: 'abc' }), gitNow({ busy: false, head: 'def' }))).toBe(
-      true
-    );
+  test('isGitDriven: HEAD moved to another ref since the change was queued', () => {
+    expect(isGitDriven(change(), gitNow({ busy: false, ref: 'refs/heads/feature' }))).toBe(true);
+    expect(isGitDriven(change(), gitNow({ busy: false, ref: 'detached:abc123' }))).toBe(true);
   });
 
   test('isGitDriven: nothing changed', () => {
-    expect(isGitDriven(change({ gitHeadWhenQueued: 'abc' }), gitNow({ busy: false, head: 'abc' }))).toBe(
-      false
-    );
+    expect(isGitDriven(change(), gitNow({ busy: false, ref: 'refs/heads/main' }))).toBe(false);
   });
 
   test('isGitDriven: outside a repository it is never git', () => {
-    expect(isGitDriven(change({ gitHeadWhenQueued: null }), gitNow({ busy: false, head: 'abc' }))).toBe(
-      false
-    );
+    expect(
+      isGitDriven(change({ gitHeadWhenQueued: null }), gitNow({ busy: false, ref: 'refs/heads/main' }))
+    ).toBe(false);
   });
 
   test('a checkout between queueing and processing flags the batch', async () => {
@@ -489,12 +676,84 @@ describe('git awareness', () => {
     expect(seen[0].items[0].gitHeadWhenQueued).toBe('refs/heads/main');
   });
 
+  test('a checkout to a detached HEAD flags the batch', async () => {
+    const head = path.join(root, '.git', 'HEAD');
+    vol.fromJSON({ [head]: 'ref: refs/heads/main\n' });
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    vol.writeFileSync(head, 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\n');
+
+    await flushNow();
+
+    expect(seen[0].gitDriven).toBe(true);
+  });
+
+  test('a commit on the same branch is not a checkout', async () => {
+    const gitDir = path.join(root, '.git');
+    vol.fromJSON({
+      [path.join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n',
+      [path.join(gitDir, 'refs', 'heads', 'main')]: 'aaaa\n',
+    });
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    // git commit: the branch moves, HEAD still points at it
+    vol.writeFileSync(path.join(gitDir, 'refs', 'heads', 'main'), 'bbbb\n');
+
+    await flushNow();
+
+    expect(seen[0].gitDriven).toBe(false);
+  });
+
+  test('a `git status` taking index.lock for an instant is not git', async () => {
+    const gitDir = path.join(root, '.git');
+    vol.fromJSON({ [path.join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n' });
+    vol.writeFileSync(path.join(gitDir, 'index.lock'), '');
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(seen[0].gitDriven).toBe(false);
+    expect(seen[0].items[0].gitBusyWhenQueued).toBe(false);
+  });
+
+  test('an index.lock held for longer than a moment is git', async () => {
+    const gitDir = path.join(root, '.git');
+    vol.fromJSON({ [path.join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n' });
+    const lock = path.join(gitDir, 'index.lock');
+    vol.writeFileSync(lock, '');
+    const old = new Date(Date.now() - 5000);
+    vol.utimesSync(lock, old, old);
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(seen[0].gitDriven).toBe(true);
+  });
+
+  test('a merge or rebase marker is git whatever the lock', async () => {
+    const gitDir = path.join(root, '.git');
+    vol.fromJSON({
+      [path.join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n',
+      [path.join(gitDir, 'MERGE_HEAD')]: 'cccc\n',
+    });
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(seen[0].gitDriven).toBe(true);
+  });
+
   test('a repeat of the same path keeps the earliest git snapshot', async () => {
     const head = path.join(root, '.git', 'HEAD');
     vol.fromJSON({ [head]: 'ref: refs/heads/main\n' });
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'scan');
     vol.writeFileSync(head, 'ref: refs/heads/feature\n');
     // the watcher reports the same write after the checkout already landed
     enqueueChange(uri(p('src', 'a.ts')), 'watcher');
@@ -547,7 +806,7 @@ describe('batching window', () => {
   test('waits for the burst to settle before processing', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     advance(BATCH_INTERVAL - 1);
     expect(seen).toEqual([]);
 
@@ -563,7 +822,7 @@ describe('batching window', () => {
   test('a change inside the window restarts it and joins the batch', async () => {
     const seen = collectBatches();
 
-    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
     advance(BATCH_INTERVAL - 100);
     enqueueChange(uri(p('src', 'b.ts')), 'watcher');
     advance(200);
@@ -572,9 +831,46 @@ describe('batching window', () => {
 
     advance(BATCH_INTERVAL);
     expect(seen.length).toBe(1);
-    expect(seen[0].items.map(i => path.basename(i.fsPath)).sort()).toEqual(['a.ts', 'b.ts']);
+    expect(names(seen[0]).sort()).toEqual(['a.ts', 'b.ts']);
 
     await flushNow();
+    expect(seen.length).toBe(1);
+  });
+
+  test('a file rewritten continuously cannot starve the batch: maxWait caps the window', async () => {
+    const seen = collectBatches();
+
+    // a log rewritten every 300 ms, for ever
+    for (let elapsed = 0; elapsed <= MAX_WAIT; elapsed += 300) {
+      enqueueChange(uri(p('src', 'app.log')), 'watcher');
+      advance(300);
+    }
+
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    await flushNow();
+  });
+
+  test('an ignored path does not restart the window', async () => {
+    installServices(
+      fakeService(p('src'), { ignore: (fsPath: string) => /\.log$/.test(fsPath) })
+    );
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    advance(BATCH_INTERVAL - 100);
+    enqueueChange(uri(p('src', 'noise.log')), 'watcher');
+    advance(100);
+
+    // fired at its own window, the ignored event did not push it back
+    expect(seen.length).toBe(1);
+    await flushNow();
+  });
+
+  test('a save does not wait for the window', () => {
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+
     expect(seen.length).toBe(1);
   });
 });

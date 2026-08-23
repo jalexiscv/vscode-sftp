@@ -23,6 +23,7 @@ import { reportError, isValidFile, isConfigFile, isInWorkspace } from '../helper
 import { downloadFile } from '../fileHandlers';
 import { isPaused, isSuppressed } from './syncControl';
 import { enqueueChange } from './changeCollector';
+import { runScan } from './externalChangeScanner';
 
 /**
  * Reacts to what happens inside the editor: a saved document, an opened one,
@@ -84,6 +85,13 @@ async function handleConfigSave(uri: vscode.Uri) {
   } finally {
     app.remoteExplorer.refresh();
   }
+
+  // a reloaded config may point at another destination (another index), and
+  // a freshly created one has never been reconciled; the scan is gated by
+  // externalChanges.scanOnStartup and runs in the background
+  findAllFileService(service => service.workspace === workspacePath).forEach(service => {
+    runScan(service, 'config').catch(error => logger.error(error, `[scan] ${service.name}`));
+  });
 }
 
 function handleFileSave(uri: vscode.Uri) {

@@ -431,6 +431,18 @@
         "title": "Clear Upload Plans",
         "category": "SFTP",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "sftp.scanExternalChanges",
+        "title": "Scan for External Changes",
+        "category": "SFTP",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sftp.rebuildSyncIndex",
+        "title": "Rebuild Sync Index",
+        "category": "SFTP",
+        "icon": "$(database)"
       }
     ],
     "menus": {
@@ -662,6 +674,14 @@
         {
           "command": "sftp.plan.remove",
           "when": "false"
+        },
+        {
+          "command": "sftp.scanExternalChanges",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.rebuildSyncIndex",
+          "when": "sftp.enabled"
         }
       ],
       "explorer/context": [

@@ -50,3 +50,49 @@ describe('config: verifyUpload / uploadRetries', () => {
     expect(mergedDefault({}).verifyUpload).toBe('stat');
   });
 });
+
+describe('config: externalChanges / watcher.pollInterval', () => {
+  test('defaults to scanning on startup and resume, asking above 20 files, no polling', () => {
+    const config = mergedDefault({});
+
+    expect(config.externalChanges).toEqual({
+      scanOnStartup: true,
+      scanOnResume: true,
+      confirmThreshold: 20,
+    });
+    // the watcher block stays absent by default, so polling is off
+    expect(config.watcher).toBeUndefined();
+    expect(validateConfig(mergedDefault(base))).toBeNull();
+  });
+
+  test('accepts a complete and a partial externalChanges block', () => {
+    expect(
+      validate({ externalChanges: { scanOnStartup: false, scanOnResume: true, confirmThreshold: 0 } })
+    ).toBeNull();
+    expect(validate({ externalChanges: { confirmThreshold: 5 } })).toBeNull();
+  });
+
+  test.each([
+    [{ scanOnStartup: 'yes' }],
+    [{ scanOnResume: 1 }],
+    [{ confirmThreshold: -1 }],
+    [{ confirmThreshold: 1.5 }],
+    [{ confirmThreshold: '20' }],
+  ])('rejects externalChanges %p', block => {
+    const error = validate({ externalChanges: block });
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toMatch(/externalChanges/);
+  });
+
+  test.each([[0], [5000], [60000]])('accepts watcher.pollInterval %p', interval => {
+    expect(validate({ watcher: { files: '**/*', pollInterval: interval } })).toBeNull();
+  });
+
+  test.each([[-1], [1.5], ['5000'], [true]])('rejects watcher.pollInterval %p', interval => {
+    const error = validate({ watcher: { files: '**/*', pollInterval: interval } });
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toMatch(/pollInterval/);
+  });
+});

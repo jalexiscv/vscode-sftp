@@ -7,8 +7,9 @@ import * as vscode from 'vscode';
  * reaches `app` again through `logger` -> `ui/output`. Pulling the pause state
  * in from here would close that cycle and run the constructor against a
  * half-initialised module. The state is pushed in through
- * {@link setPausedState} instead — the UI is told what to show, it doesn't go
- * looking for it.
+ * {@link setPausedState}, {@link setPendingUploads} and
+ * {@link setFailedUploads} instead — the UI is told what to show, it doesn't
+ * go looking for it.
  */
 
 const spinners = {
@@ -25,6 +26,8 @@ enum Status {
 }
 
 const PAUSE_ICON = '$(debug-pause)';
+const PENDING_ICON = '$(arrow-up)';
+const FAILED_ICON = '$(error)';
 const PAUSE_TOOLTIP =
   'Automatic sync is paused: saves, watchers and renames are not mirrored to the remote.\n' +
   'Run "SFTP: Resume Auto Sync" (or "SFTP: Toggle Auto Sync") to resume it.';
@@ -42,6 +45,8 @@ export default class StatusBarItem {
   private status: Status = Status.ok;
   private detail: string | null = null;
   private queueSize: number = 0;
+  private pendingUploads: number = 0;
+  private failedUploads: number = 0;
   private paused: boolean = false;
   // true while a transient showMsg text owns the item, so the decorations
   // below never rewrite a message the caller composed
@@ -102,6 +107,31 @@ export default class StatusBarItem {
     }
 
     this.queueSize = next;
+    this._render();
+  }
+
+  /**
+   * Local changes waiting to be uploaded (collector queue plus open upload
+   * plans), rendered as `$(arrow-up)N`. Pushed in by modules/uploadStatus.
+   */
+  setPendingUploads(n: number) {
+    const next = n > 0 ? n : 0;
+    if (this.pendingUploads === next) {
+      return;
+    }
+
+    this.pendingUploads = next;
+    this._render();
+  }
+
+  /** Uploads that failed in the recent plans, rendered as `$(error)N`. */
+  setFailedUploads(n: number) {
+    const next = n > 0 ? n : 0;
+    if (this.failedUploads === next) {
+      return;
+    }
+
+    this.failedUploads = next;
     this._render();
   }
 
@@ -198,6 +228,12 @@ export default class StatusBarItem {
     if (this.queueSize > 0) {
       decorated += ` (${this.queueSize})`;
     }
+    if (this.pendingUploads > 0) {
+      decorated += ` ${PENDING_ICON}${this.pendingUploads}`;
+    }
+    if (this.failedUploads > 0) {
+      decorated += ` ${FAILED_ICON}${this.failedUploads}`;
+    }
     if (this.paused) {
       decorated += ` ${PAUSE_ICON}`;
     }
@@ -215,6 +251,12 @@ export default class StatusBarItem {
     }
     if (this.queueSize > 0) {
       extra.push(`${this.queueSize} pending transfer(s).`);
+    }
+    if (this.pendingUploads > 0) {
+      extra.push(`${this.pendingUploads} local change(s) waiting to be uploaded.`);
+    }
+    if (this.failedUploads > 0) {
+      extra.push(`${this.failedUploads} upload(s) failed; see the SFTP Activity view.`);
     }
 
     if (extra.length <= 0) {

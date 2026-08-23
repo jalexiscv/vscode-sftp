@@ -66,6 +66,16 @@ interface ServiceOption {
   };
   remoteTimeOffsetInHours: number;
   limitOpenFilesOnRemote: number | true;
+  externalChanges: ExternalChangesConfig;
+}
+
+export interface ExternalChangesConfig {
+  /** reconcile the local tree against the sync index when the extension activates */
+  scanOnStartup: boolean;
+  /** ...and when automatic sync is resumed or the window regains focus */
+  scanOnResume: boolean;
+  /** batches above this many files ask before uploading; 0 always asks */
+  confirmThreshold: number;
 }
 
 export interface RemoteTrashConfig {
@@ -79,6 +89,8 @@ interface WatcherConfig {
   files: false | string;
   autoUpload: boolean;
   autoDelete: boolean;
+  /** ms between scans of the local tree; 0 (default) disables polling */
+  pollInterval?: number;
 }
 
 interface SftpOption {
@@ -234,6 +246,7 @@ function getHostInfo(config) {
     'deleteRemoteConfirmThreshold',
     'renameRemoteOnLocalRename',
     'remoteTrash',
+    'externalChanges',
   ];
 
   return Object.keys(config).reduce((obj, key) => {
@@ -424,7 +437,7 @@ const CONCATENATED_KEYS = ['ignore', 'tempFilePatterns'];
 
 // nested option objects merge key by key, so `{"remoteTrash": {"enabled": false}}`
 // in a profile keeps the inherited path and retention
-const DEEP_MERGED_KEYS = ['remoteTrash', 'syncOption', 'remoteExplorer'];
+const DEEP_MERGED_KEYS = ['remoteTrash', 'syncOption', 'remoteExplorer', 'externalChanges'];
 
 function mergeProfile(
   target: FileServiceConfig,
@@ -487,6 +500,53 @@ export function resolveRemoteTrashConfig(config: {
         ? trash!.retentionDays
         : DEFAULT_REMOTE_TRASH.retentionDays,
   };
+}
+
+const DEFAULT_EXTERNAL_CHANGES: ExternalChangesConfig = {
+  scanOnStartup: true,
+  scanOnResume: true,
+  confirmThreshold: 20,
+};
+
+/**
+ * Fills in the external-change options the user left out.
+ *
+ * Same reason as {@link resolveRemoteTrashConfig}: `mergedDefault` is a shallow
+ * spread, so `{"externalChanges": {"confirmThreshold": 5}}` replaces the whole
+ * default object and would otherwise leave the scan flags undefined.
+ */
+export function resolveExternalChangesConfig(config: {
+  externalChanges?: Partial<ExternalChangesConfig>;
+}): ExternalChangesConfig {
+  const external = config.externalChanges;
+  if (!isPlainObject(external)) {
+    return { ...DEFAULT_EXTERNAL_CHANGES };
+  }
+
+  return {
+    scanOnStartup:
+      external!.scanOnStartup !== undefined
+        ? Boolean(external!.scanOnStartup)
+        : DEFAULT_EXTERNAL_CHANGES.scanOnStartup,
+    scanOnResume:
+      external!.scanOnResume !== undefined
+        ? Boolean(external!.scanOnResume)
+        : DEFAULT_EXTERNAL_CHANGES.scanOnResume,
+    confirmThreshold:
+      typeof external!.confirmThreshold === 'number' && external!.confirmThreshold >= 0
+        ? external!.confirmThreshold
+        : DEFAULT_EXTERNAL_CHANGES.confirmThreshold,
+  };
+}
+
+/** `watcher.pollInterval` in ms, 0 when polling is off or the watcher block is absent. */
+export function resolvePollInterval(config: { watcher?: { pollInterval?: number } }): number {
+  const watcher = config.watcher;
+  if (!isPlainObject(watcher)) {
+    return 0;
+  }
+  const interval = watcher!.pollInterval;
+  return typeof interval === 'number' && interval > 0 ? Math.floor(interval) : 0;
 }
 
 enum Event {
@@ -565,6 +625,15 @@ export default class FileService {
 
   getAvailableProfiles(): string[] {
     return this._profiles || [];
+  }
+
+  /**
+   * The root-level `watcher` block as configured, without resolving the
+   * profile: it is not profile-specific, and callers that poll it (the
+   * external-change scanner) must not pay a validation per tick.
+   */
+  getWatcherConfig(): WatcherConfig | undefined {
+    return this._watcherConfig;
   }
 
   getPendingTransferTasks(): TransferTask[] {
