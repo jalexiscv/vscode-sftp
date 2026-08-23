@@ -31,9 +31,10 @@ export interface LocalFileRecord {
 export interface ScanOptions {
   /**
    * The service's `config.ignore`: receives an absolute path and returns true
-   * to skip it. Applied to directories too, which prunes the whole subtree.
+   * to skip it. Applied to directories too, which prunes the whole subtree;
+   * they are flagged as such so `dir/` patterns can match them.
    */
-  ignore?: ((fsPath: string) => boolean) | null;
+  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
   /** directories read in parallel; default {@link DEFAULT_CONCURRENCY} */
   concurrency?: number;
   /** polled between directories; once true the scan stops and returns what it has */
@@ -126,7 +127,7 @@ export async function scanLocalTree(
         continue;
       }
 
-      if (ignore && ignore(fsPath)) {
+      if (ignore && ignore(fsPath, isDirectory)) {
         continue;
       }
 

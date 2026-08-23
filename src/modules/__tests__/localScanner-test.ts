@@ -70,6 +70,26 @@ describe('scanLocalTree', () => {
     expect(result.dirs).toBe(4);
   });
 
+  test('directories are offered to ignore() flagged as such, so "dir/" patterns prune', async () => {
+    fillTree();
+    const offered: Array<[string, boolean | undefined]> = [];
+    // what config.ignore does with a `node_modules/` pattern: it only matches
+    // when told the path is a directory
+    const ignore = (fsPath: string, isDirectory?: boolean) => {
+      offered.push([path.relative(root, fsPath).split(path.sep).join('/'), isDirectory]);
+      return isDirectory === true && path.basename(fsPath) === 'node_modules';
+    };
+
+    const result = await scanLocalTree(root, { ignore });
+
+    expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+    // pruned, not read: root, src, src/deep, .vscode
+    expect(result.dirs).toBe(4);
+    expect(offered).toContainEqual(['node_modules', true]);
+    expect(offered).toContainEqual(['index.php', false]);
+    expect(offered.some(([rel]) => rel.indexOf('node_modules/') === 0)).toBe(false);
+  });
+
   test('stops cooperatively when isCancelled turns true', async () => {
     fillTree();
     let progressCalls = 0;
