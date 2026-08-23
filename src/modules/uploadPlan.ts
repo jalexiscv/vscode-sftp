@@ -380,7 +380,9 @@ function mtimeInSeconds(ms: number): number {
  * - in the index with a different size or mtime (in seconds) → `modified`
  * - in the index as `failed` → `modified` as well: the entry records an
  *   attempt, not a verified state, so the file is due again whatever its stat
- * - same size and mtime → counted as unchanged, not included
+ * - same size and mtime → counted as unchanged, not included; this holds for
+ *   `skipped` entries too — the user declined that very version, it is only
+ *   due again once the file changes
  * - in the index but not on disk → listed in `missingLocally`; deletions are
  *   mirrored by another module, this only reports them
  *

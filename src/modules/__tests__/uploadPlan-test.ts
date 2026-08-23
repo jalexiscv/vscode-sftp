@@ -438,6 +438,28 @@ describe('uploadPlan', () => {
       expect(result.items.map(i => i.reason)).toEqual(['modified']);
     });
 
+    test('a skipped entry is unchanged while the file keeps its size and mtime, modified once it moves', async () => {
+      const index = await getSyncIndex('k');
+      index.set('a.php', { size: 10, mtime: 1700000000000, verifiedAt: 0, status: 'skipped' });
+
+      const same = diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [record('a.php', 10, 1700000000500)],
+      });
+      expect(same.items).toEqual([]);
+      expect(same.unchanged).toBe(1);
+
+      const changed = diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [record('a.php', 11, 1700000000000)],
+      });
+      expect(changed.items.map(i => i.reason)).toEqual(['modified']);
+    });
+
     test('does not mutate the index', async () => {
       const index = await getSyncIndex('k');
       index.set('gone.php', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });

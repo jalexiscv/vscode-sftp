@@ -14,6 +14,7 @@ import {
   indexFor,
   forgetInIndex,
   renameInIndex,
+  rememberSkipped,
   init,
   destroy,
   testHooks,
@@ -332,6 +333,46 @@ describe('syncIndexFeeder', () => {
 
       await expect(forgetInIndex(broken, p('a.ts'))).resolves.toBeUndefined();
       await expect(renameInIndex(broken, p('a.ts'), p('b.ts'))).resolves.toBeUndefined();
+    });
+  });
+
+  describe('rememberSkipped', () => {
+    test('writes a skipped entry with the declined size and mtime', async () => {
+      const index = await indexOfService();
+      index.set('src/a.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+
+      await rememberSkipped(service, [
+        { localPath: p('src', 'a.ts'), localSize: 7, localMtime: 1700000007000 },
+        { localPath: p('src', 'b.ts'), localSize: 3, localMtime: 1700000003000 },
+        // outside the base dir: not this index's business
+        { localPath: path.resolve(path.sep, 'elsewhere', 'c.ts'), localSize: 1, localMtime: 1 },
+      ]);
+
+      expect(index.get('src/a.ts')).toEqual({
+        size: 7,
+        mtime: 1700000007000,
+        verifiedAt: 0,
+        status: 'skipped',
+      });
+      expect(index.get('src/b.ts')).toMatchObject({ size: 3, status: 'skipped' });
+      expect(index.size).toBe(2);
+    });
+
+    test('does nothing for an empty list and never throws on a broken config', async () => {
+      const index = await indexOfService();
+      await rememberSkipped(service, []);
+      expect(index.size).toBe(0);
+
+      const broken = {
+        name: 'broken',
+        baseDir,
+        getConfig: () => {
+          throw new Error('Unkown Profile');
+        },
+      } as any;
+      await expect(
+        rememberSkipped(broken, [{ localPath: p('a.ts'), localSize: 1, localMtime: 1 }])
+      ).resolves.toBeUndefined();
     });
   });
 });
