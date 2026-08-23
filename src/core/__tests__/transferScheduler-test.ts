@@ -118,6 +118,40 @@ describe('TransferFailedError', () => {
     expect(message).toBe('2 of 10 file(s) failed to upload: a.txt (EACCES), b.txt (read ECONNRESET)');
   });
 
+  test('a numeric code is no reason: the message is used instead', () => {
+    // ssh2 reports SFTP status codes as bare numbers (3 = permission denied)
+    const message = describeTransferFailures(
+      [failure('a.txt', Object.assign(new Error('Permission denied'), { code: 3 }))],
+      1,
+      'upload'
+    );
+
+    expect(message).toBe('1 of 1 file(s) failed to upload: a.txt (Permission denied)');
+  });
+
+  test('an empty code falls back to the message as well', () => {
+    const message = describeTransferFailures(
+      [failure('a.txt', Object.assign(new Error('boom'), { code: '' }))],
+      1,
+      'upload'
+    );
+
+    expect(message).toBe('1 of 1 file(s) failed to upload: a.txt (boom)');
+  });
+
+  test('a long or multi-line message is cut to one line of about 80 characters', () => {
+    const long = 'x'.repeat(120);
+    const cut = describeTransferFailures([failure('a.txt', new Error(long))], 1, 'upload');
+    expect(cut).toBe(`1 of 1 file(s) failed to upload: a.txt (${'x'.repeat(77)}...)`);
+
+    const multiline = describeTransferFailures(
+      [failure('a.txt', new Error('first line\n   second   line'))],
+      1,
+      'upload'
+    );
+    expect(multiline).toBe('1 of 1 file(s) failed to upload: a.txt (first line second line)');
+  });
+
   test('lists at most five names and counts the rest', () => {
     const failures = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(name =>
       failure(`${name}.txt`, Object.assign(new Error('x'), { code: 'EIO' }))

@@ -135,11 +135,16 @@ export async function activate(context: vscode.ExtensionContext) {
   schedulePurgeExpiredTrash();
 }
 
-export function deactivate() {
-  // not awaited: the debounced saves mean the index is normally on disk
-  // already, and a slow disk must not hold up the extension host shutdown
-  flushSyncIndex().catch(error => logger.error(error, 'flush sync index'));
-  flushActivityLog().catch(error => logger.error(error, 'flush activity log'));
+export async function deactivate(): Promise<void> {
+  // The returned promise is what makes the host wait for the last debounced
+  // write instead of killing the process mid-save; the debounced saves mean
+  // there is normally nothing left, so it costs nothing. One slot per module
+  // with something to flush, each logging its own failure so one broken flush
+  // never hides another.
+  const flushes: Array<Promise<void>> = [
+    flushSyncIndex().catch(error => logger.error(error, 'flush sync index')),
+    flushActivityLog().catch(error => logger.error(error, 'flush activity log')),
+  ];
   fileActivityMonitor.destory();
   localDeleteMonitor.destroy();
   changeCollector.destroy();
@@ -148,4 +153,10 @@ export function deactivate() {
     activityView = undefined;
   }
   getAllFileService().forEach(disposeFileService);
+
+  try {
+    await Promise.all(flushes);
+  } catch (error) {
+    logger.error(error, 'deactivate');
+  }
 }

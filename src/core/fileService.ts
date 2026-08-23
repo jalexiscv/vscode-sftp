@@ -116,7 +116,13 @@ export interface ServiceConfig
     Omit<ServiceOption, 'ignore'>,
     SftpOption,
     FtpOption {
-  ignore?: ((fsPath: string) => boolean) | null;
+  /**
+   * Whether `fsPath` (local or remote, absolute) is excluded by the config.
+   * Pass `isDirectory` when the caller knows it holds a directory: gitignore
+   * patterns with a trailing slash (`node_modules/`) only match a directory,
+   * and only when it is tested as one.
+   */
+  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
 }
 
 export interface WatcherService {
@@ -751,7 +757,7 @@ export default class FileService {
 
     const ignore = Ignore.from(ignoreConfig);
     const isWindows = process.platform === 'win32';
-    const ignoreFunc = fsPath => {
+    const ignoreFunc = (fsPath: string, isDirectory?: boolean) => {
       // vscode will always return path with / as separator
       const normalizedPath = path.normalize(fsPath);
       // windows paths are case-insensitive
@@ -770,7 +776,17 @@ export default class FileService {
       relativePath = relativePath.split(path.sep).join('/');
 
       // skip root
-      return relativePath !== '' && ignore.ignores(relativePath);
+      if (relativePath === '') {
+        return false;
+      }
+      if (ignore.ignores(relativePath)) {
+        return true;
+      }
+
+      // `dir/` patterns — the usual spelling in an ignoreFile — match only a
+      // path that ends in a slash. Without this, a scan or a folder transfer
+      // walks into node_modules and rejects its files one by one.
+      return Boolean(isDirectory) && ignore.ignores(relativePath + '/');
     };
 
     return ignoreFunc;

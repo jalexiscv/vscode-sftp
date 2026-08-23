@@ -60,6 +60,16 @@ const INDEX_DIR_NAME = 'sync-index';
 // keeps a 50k-entry index from being serialised hundreds of times per batch.
 const SAVE_DEBOUNCE_MS = 1000;
 
+// On windows, renaming over a file that an antivirus or an indexer holds open
+// fails with EPERM for a few milliseconds; two short retries cover that window
+// without turning a flush on deactivate into a long wait.
+const RENAME_RETRY_DELAYS_MS = [100, 200];
+
+// A save that keeps failing is rescheduled on its own this many times in a
+// row; past that it waits for the next change (or flush) rather than logging
+// the same error every second for the rest of the session.
+const MAX_AUTO_RETRIES = 5;
+
 // windows and macOS both default to case-insensitive filesystems, so a lookup
 // whose casing differs from the stored path must still find it
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
@@ -76,10 +86,32 @@ function normalizeRelPath(relPath: string): string {
     .replace(/^\/+/, '');
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 let storageRoot: string | undefined;
 const loaded = new Map<string, SyncIndex>();
 const loading = new Map<string, Promise<SyncIndex>>();
 
+/**
+ * The index of one destination: the entries in memory plus the rules for
+ * getting them to disk without ever losing the previous copy.
+ *
+ * Mutations only mark the index dirty; a debounced save serialises the whole
+ * map to `<file>.tmp` and renames it over the real file, so a crash mid-write
+ * leaves the last complete index rather than a truncated one. A failed rename
+ * is retried briefly, then the `.tmp` is removed and the save rescheduled. An
+ * index whose file could not be read or parsed at load time starts empty but
+ * never overwrites that file: the first save moves it to
+ * `<file>.corrupt-<timestamp>` and only then writes.
+ *
+ * Key lifecycle methods:
+ * - {@link get} / {@link set} / {@link remove} / {@link rename} read and change
+ *   entries by relative path, case-insensitively where the filesystem is.
+ * - {@link save} writes now and settles with the write; the debounced path
+ *   calls it too and logs its failure.
+ */
 export class SyncIndex {
   readonly key: string;
 
@@ -90,6 +122,11 @@ export class SyncIndex {
   private _saveTimer: any = null;
   // writes are chained so two overlapping saves never race on the .tmp file
   private _writeChain: Promise<void> = Promise.resolve();
+  // set when the file on disk could not be read or parsed: what is there may
+  // be the only copy of a real index, so the first write moves it aside first
+  private _loadFailed = false;
+  private _preservedOriginal = false;
+  private _consecutiveFailures = 0;
 
   /** @param filePath null for a memory-only index */
   constructor(key: string, private _filePath: string | null) {
@@ -138,6 +175,14 @@ export class SyncIndex {
     return this._entries.size;
   }
 
+  /**
+   * True when the file on disk was unreadable or unparsable at load time. The
+   * index then started empty, and its first save keeps that file aside.
+   */
+  get loadFailed(): boolean {
+    return this._loadFailed;
+  }
+
   clear(): void {
     if (this._entries.size === 0) {
       return;
@@ -184,6 +229,11 @@ export class SyncIndex {
     this._dirty = false;
   }
 
+  /** Flags the file on disk as unreadable; see {@link loadFailed}. */
+  _markLoadFailed(): void {
+    this._loadFailed = true;
+  }
+
   /** Drops a pending debounced save. Used when the module is reset. */
   _dispose(): void {
     this._cancelScheduledSave();
@@ -191,6 +241,10 @@ export class SyncIndex {
 
   private _markDirty() {
     this._dirty = true;
+    this._scheduleSave();
+  }
+
+  private _scheduleSave() {
     if (!this._filePath || this._saveTimer) {
       return;
     }
@@ -233,12 +287,75 @@ export class SyncIndex {
     const tmpPath = filePath + '.tmp';
     try {
       await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+      await this._preserveUnreadableOriginal(filePath);
       await fsPromises.writeFile(tmpPath, JSON.stringify(data), 'utf8');
-      await fsPromises.rename(tmpPath, filePath);
+      await this._replaceWithRetries(tmpPath, filePath);
+      this._consecutiveFailures = 0;
     } catch (error) {
       this._dirty = true;
       throw error;
     }
+  }
+
+  /**
+   * Moves an index file that failed to load out of the way, once, before the
+   * first write over it. Throws when it cannot: overwriting what may be the
+   * only copy of the real index is the one outcome to avoid.
+   */
+  private async _preserveUnreadableOriginal(filePath: string): Promise<void> {
+    if (!this._loadFailed || this._preservedOriginal) {
+      return;
+    }
+
+    const keptAs = `${filePath}.corrupt-${Date.now()}`;
+    try {
+      await fsPromises.rename(filePath, keptAs);
+      logger.warn(`[sync-index] kept the unreadable ${filePath} as ${keptAs}`);
+    } catch (error) {
+      // gone in the meantime: nothing left to preserve
+      if (!error || error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+    this._preservedOriginal = true;
+  }
+
+  /**
+   * Renames `.tmp` over the index file, retrying the transient failures. When
+   * the retries run out, the `.tmp` is removed (never left as an orphan), the
+   * entries stay dirty and another save is scheduled — bounded by
+   * {@link MAX_AUTO_RETRIES} in a row — before the error is rethrown.
+   */
+  private async _replaceWithRetries(tmpPath: string, filePath: string): Promise<void> {
+    let lastError: any;
+    const attempts = RENAME_RETRY_DELAYS_MS.length + 1;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (attempt > 1) {
+        await delay(RENAME_RETRY_DELAYS_MS[attempt - 2]);
+      }
+      try {
+        await fsPromises.rename(tmpPath, filePath);
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.debug(
+          `[sync-index] rename over ${filePath} failed (${error.message}), attempt ${attempt} of ${attempts}`
+        );
+      }
+    }
+
+    await fsPromises.unlink(tmpPath).catch(() => undefined);
+    this._dirty = true;
+    this._consecutiveFailures++;
+    if (this._consecutiveFailures <= MAX_AUTO_RETRIES) {
+      this._scheduleSave();
+      logger.warn(`[sync-index] cannot replace ${filePath}: ${lastError.message}; will retry`);
+    } else {
+      logger.warn(
+        `[sync-index] cannot replace ${filePath}: ${lastError.message}; giving up until the next change`
+      );
+    }
+    throw lastError;
   }
 }
 
@@ -256,16 +373,25 @@ function indexFilePath(key: string): string | null {
   return storageRoot ? path.join(storageRoot, INDEX_DIR_NAME, key + '.json') : null;
 }
 
+/**
+ * Reads an index file. A missing file is the normal first run; anything else
+ * that stops the load (EACCES, corrupt or unexpected JSON) starts the index
+ * empty *and flags it*, so its first save keeps the file aside instead of
+ * overwriting what may be the only copy — see {@link SyncIndex.loadFailed}.
+ */
 async function loadFromDisk(key: string, filePath: string): Promise<SyncIndex> {
   const index = new SyncIndex(key, filePath);
+  const keptAside = 'starting empty; the file is kept aside before the next write';
 
   let raw: string;
   try {
     raw = await fsPromises.readFile(filePath, 'utf8');
   } catch (error) {
-    if (error && error.code !== 'ENOENT') {
-      logger.warn(`[sync-index] cannot read ${filePath}: ${error.message}`);
+    if (error && error.code === 'ENOENT') {
+      return index;
     }
+    logger.warn(`[sync-index] cannot read ${filePath} (${error.message}); ${keptAside}`);
+    index._markLoadFailed();
     return index;
   }
 
@@ -277,16 +403,18 @@ async function loadFromDisk(key: string, filePath: string): Promise<SyncIndex> {
       !parsed.entries ||
       typeof parsed.entries !== 'object'
     ) {
-      logger.warn(`[sync-index] ${filePath} has an unexpected format; starting empty`);
+      logger.warn(`[sync-index] ${filePath} has an unexpected format; ${keptAside}`);
+      index._markLoadFailed();
       return index;
     }
 
     index._load(parsed.entries);
   } catch (error) {
-    // an unparsable index is unrecoverable; starting empty only costs a
+    // an unparsable index is unrecoverable for us; starting empty only costs a
     // re-upload of files that haven't changed, which the next verified upload
-    // records again
-    logger.warn(`[sync-index] ${filePath} is corrupt (${error.message}); starting empty`);
+    // records again. The copy is kept for whoever wants to look at it.
+    logger.warn(`[sync-index] ${filePath} is corrupt (${error.message}); ${keptAside}`);
+    index._markLoadFailed();
   }
 
   return index;

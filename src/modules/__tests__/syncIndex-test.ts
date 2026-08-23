@@ -1,6 +1,6 @@
 jest.mock('fs');
 
-import { vol } from 'memfs';
+import { vol, fs as memfs } from 'memfs';
 import * as path from 'path';
 import {
   IndexEntry,
@@ -195,20 +195,147 @@ describe('syncIndex', () => {
 
       const index = await getSyncIndex('bad');
       expect(index.size).toBe(0);
+      expect(index.loadFailed).toBe(true);
 
-      // and it can be written over
+      // and it can be written over — once the original is kept aside
       index.set('a.ts', entry());
       await index.save();
       expect(JSON.parse(vol.readFileSync(file, 'utf8') as string).entries['a.ts']).toBeDefined();
+      const kept = storedFiles().filter(f => /bad\.json\.corrupt-\d+$/.test(f));
+      expect(kept).toHaveLength(1);
+      expect(vol.readFileSync(kept[0], 'utf8')).toBe('{ not json');
+
+      // only once: the next save writes in place
+      index.set('b.ts', entry());
+      await index.save();
+      expect(storedFiles().filter(f => f.indexOf('.corrupt-') !== -1)).toHaveLength(1);
+      expect(storedFiles().some(f => f.endsWith('.tmp'))).toBe(false);
     });
 
-    test('a file of another version is ignored', async () => {
+    test('an index that cannot be read starts empty and is never overwritten in place', async () => {
+      initSyncIndex({ storagePath: storage });
+      const file = path.join(storage, 'sync-index', 'locked.json');
+      const original = JSON.stringify({ version: 1, key: 'locked', entries: { 'real.ts': entry() } });
+      vol.fromJSON({ [file]: original });
+      memfs.chmodSync(file, 0);
+
+      const index = await getSyncIndex('locked');
+      expect(index.size).toBe(0);
+      expect(index.loadFailed).toBe(true);
+
+      index.set('a.ts', entry());
+      await index.save();
+
+      // the real index survived under another name, readable again once the
+      // permission is back; the new file holds only what this session knows
+      const kept = storedFiles().filter(f => /locked\.json\.corrupt-\d+$/.test(f));
+      expect(kept).toHaveLength(1);
+      memfs.chmodSync(kept[0], 0o644);
+      expect(vol.readFileSync(kept[0], 'utf8')).toBe(original);
+      expect(Object.keys(JSON.parse(vol.readFileSync(file, 'utf8') as string).entries)).toEqual([
+        'a.ts',
+      ]);
+    });
+
+    test('a healthy index is not flagged and saves in place', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('fine');
+      index.set('a.ts', entry());
+      await index.save();
+      expect(index.loadFailed).toBe(false);
+
+      __resetForTest();
+      initSyncIndex({ storagePath: storage });
+      const reloaded = await getSyncIndex('fine');
+      expect(reloaded.loadFailed).toBe(false);
+      reloaded.set('b.ts', entry());
+      await reloaded.save();
+      expect(storedFiles().filter(f => f.indexOf('.corrupt-') !== -1)).toEqual([]);
+    });
+
+    test('a file of another version is ignored, and kept aside on the next write', async () => {
       initSyncIndex({ storagePath: storage });
       const file = path.join(storage, 'sync-index', 'v9.json');
       vol.fromJSON({ [file]: JSON.stringify({ version: 9, key: 'v9', entries: { 'a.ts': entry() } }) });
 
       const index = await getSyncIndex('v9');
       expect(index.size).toBe(0);
+      expect(index.loadFailed).toBe(true);
+
+      index.set('b.ts', entry());
+      await index.save();
+      expect(storedFiles().filter(f => /v9\.json\.corrupt-\d+$/.test(f))).toHaveLength(1);
+    });
+
+    describe('when the rename over the index fails', () => {
+      const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+
+      afterEach(() => {
+        jest.restoreAllMocks();
+      });
+
+      test('once: it is retried, and the previous index stays on disk until the new one lands', async () => {
+        initSyncIndex({ storagePath: storage });
+        const index = await getSyncIndex('retry');
+        index.set('a.ts', entry({ size: 1 }));
+        await index.save();
+        const file = storedFiles()[0];
+
+        let entriesWhenItFailed: string[] | undefined;
+        const rename = jest.spyOn(memfs.promises, 'rename').mockImplementationOnce(() => {
+          entriesWhenItFailed = Object.keys(
+            JSON.parse(vol.readFileSync(file, 'utf8') as string).entries
+          );
+          return Promise.reject(eperm());
+        });
+
+        index.set('b.ts', entry({ size: 2 }));
+        await index.save();
+
+        expect(rename).toHaveBeenCalledTimes(2);
+        // the failed attempt never touched the real file
+        expect(entriesWhenItFailed).toEqual(['a.ts']);
+        // the retry did, atomically: no .tmp left, both entries on disk
+        expect(storedFiles().some(f => f.endsWith('.tmp'))).toBe(false);
+        expect(Object.keys(JSON.parse(vol.readFileSync(file, 'utf8') as string).entries)).toEqual([
+          'a.ts',
+          'b.ts',
+        ]);
+        expect((index as any)._dirty).toBe(false);
+      });
+
+      test('for good: no .tmp is left, the previous index survives, and the index stays dirty and saves again later', async () => {
+        initSyncIndex({ storagePath: storage });
+        const index = await getSyncIndex('stuck');
+        index.set('a.ts', entry({ size: 1 }));
+        await index.save();
+        const file = storedFiles()[0];
+
+        const rename = jest
+          .spyOn(memfs.promises, 'rename')
+          .mockImplementationOnce(() => Promise.reject(eperm()))
+          .mockImplementationOnce(() => Promise.reject(eperm()))
+          .mockImplementationOnce(() => Promise.reject(eperm()));
+
+        index.set('b.ts', entry({ size: 2 }));
+        await expect(index.save()).rejects.toThrow('EPERM');
+
+        expect(rename).toHaveBeenCalledTimes(3);
+        expect(storedFiles()).toEqual([file]);
+        expect(Object.keys(JSON.parse(vol.readFileSync(file, 'utf8') as string).entries)).toEqual([
+          'a.ts',
+        ]);
+        expect((index as any)._dirty).toBe(true);
+
+        // rescheduled on its own: once the rename works again, the debounced
+        // save lands without anyone touching the index (real timers, see above)
+        await new Promise(resolve => setTimeout(resolve, 1300));
+        expect(Object.keys(JSON.parse(vol.readFileSync(file, 'utf8') as string).entries)).toEqual([
+          'a.ts',
+          'b.ts',
+        ]);
+        expect((index as any)._dirty).toBe(false);
+      });
     });
 
     test('save without changes does not rewrite the file', async () => {

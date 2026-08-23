@@ -2,7 +2,7 @@ jest.mock('fs');
 
 import { vol, fs as memfs } from 'memfs';
 import * as path from 'path';
-import { scanLocalTree } from '../localScanner';
+import { scanLocalTree, wouldLoop, PendingDir } from '../localScanner';
 
 // absolute on both platforms; "c:/..." is a relative folder on linux
 const root = path.resolve(path.sep, 'projects', 'site');
@@ -68,6 +68,26 @@ describe('scanLocalTree', () => {
     // skipped, not listed and filtered
     expect(seen.some(p => p.indexOf(at('node_modules') + path.sep) === 0)).toBe(false);
     expect(result.dirs).toBe(4);
+  });
+
+  test('directories are offered to ignore() flagged as such, so "dir/" patterns prune', async () => {
+    fillTree();
+    const offered: Array<[string, boolean | undefined]> = [];
+    // what config.ignore does with a `node_modules/` pattern: it only matches
+    // when told the path is a directory
+    const ignore = (fsPath: string, isDirectory?: boolean) => {
+      offered.push([path.relative(root, fsPath).split(path.sep).join('/'), isDirectory]);
+      return isDirectory === true && path.basename(fsPath) === 'node_modules';
+    };
+
+    const result = await scanLocalTree(root, { ignore });
+
+    expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+    // pruned, not read: root, src, src/deep, .vscode
+    expect(result.dirs).toBe(4);
+    expect(offered).toContainEqual(['node_modules', true]);
+    expect(offered).toContainEqual(['index.php', false]);
+    expect(offered.some(([rel]) => rel.indexOf('node_modules/') === 0)).toBe(false);
   });
 
   test('stops cooperatively when isCancelled turns true', async () => {
@@ -154,16 +174,118 @@ describe('scanLocalTree', () => {
     ]);
   });
 
-  test('honours the concurrency bound', async () => {
-    // a wide tree: many sibling directories, each with a file
-    const tree: { [p: string]: string } = {};
-    for (let i = 0; i < 40; i++) {
-      tree[at(`dir-${i}`, 'f.txt')] = String(i);
-    }
-    vol.fromJSON(tree);
+  describe('followSymlinks and loops', () => {
+    test('a link back to the scan root is not followed', async () => {
+      fillTree();
+      memfs.symlinkSync(root, at('src', 'deep', 'loop'));
 
-    const result = await scanLocalTree(root, { concurrency: 3 });
-    expect(result.files).toHaveLength(40);
-    expect(result.dirs).toBe(41);
+      const result = await scanLocalTree(root, {
+        followSymlinks: true,
+        ignore: p => path.basename(p) === 'node_modules',
+      });
+
+      // every file once, nothing under the loop
+      expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+      expect(result.dirs).toBe(4);
+    });
+
+    test('a link to an ancestor of the scan root is not followed either', async () => {
+      fillTree();
+      memfs.symlinkSync(path.dirname(root), at('up'));
+
+      const result = await scanLocalTree(root, {
+        followSymlinks: true,
+        ignore: p => path.basename(p) === 'node_modules',
+      });
+
+      expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+    });
+
+    test('two directories linking to each other terminate', async () => {
+      vol.fromJSON({ [at('a', 'a.txt')]: 'a', [at('b', 'b.txt')]: 'b' });
+      memfs.symlinkSync(at('b'), at('a', 'to-b'));
+      memfs.symlinkSync(at('a'), at('b', 'to-a'));
+
+      const result = await scanLocalTree(root, { followSymlinks: true });
+
+      // each link is followed once: the way back is cut
+      expect(names(result.files)).toEqual(['a/a.txt', 'a/to-b/b.txt', 'b/b.txt', 'b/to-a/a.txt']);
+      expect(result.dirs).toBe(5);
+    });
+
+    test('a link to a sibling is still followed (the target is not on the way here)', async () => {
+      vol.fromJSON({ [at('a', 'a.txt')]: 'a', [at('b', 'b.txt')]: 'b' });
+      memfs.symlinkSync(at('b'), at('a', 'to-b'));
+
+      const result = await scanLocalTree(root, { followSymlinks: true });
+
+      expect(names(result.files)).toEqual(['a/a.txt', 'a/to-b/b.txt', 'b/b.txt']);
+    });
+
+    test('wouldLoop: the decision on its own', () => {
+      const rootNode: PendingDir = { dir: root, real: root, parent: null };
+      const src: PendingDir = { dir: at('src'), real: at('src'), parent: rootNode };
+      const deep: PendingDir = { dir: at('src', 'deep'), real: at('src', 'deep'), parent: src };
+
+      expect(wouldLoop(root, deep)).toBe(true);
+      expect(wouldLoop(at('src'), deep)).toBe(true);
+      expect(wouldLoop(path.dirname(root), deep)).toBe(true);
+      expect(wouldLoop(at('src', 'deep'), deep)).toBe(true);
+      // a sibling, a cousin, or a name that merely starts the same
+      expect(wouldLoop(at('other'), deep)).toBe(false);
+      expect(wouldLoop(at('src', 'other'), deep)).toBe(false);
+      expect(wouldLoop(at('src', 'deeper'), deep)).toBe(false);
+      expect(wouldLoop(root + '-other', deep)).toBe(false);
+    });
+  });
+
+  describe('concurrency bound', () => {
+    // a wide tree: many sibling directories, each with a file
+    function fillWideTree() {
+      const tree: { [p: string]: string } = {};
+      for (let i = 0; i < 40; i++) {
+        tree[at(`dir-${i}`, 'f.txt')] = String(i);
+      }
+      vol.fromJSON(tree);
+    }
+
+    // The results are the same whatever the bound, so counting them proves
+    // nothing. What the bound limits is how many readdir calls are in flight
+    // at once: measure that, holding each call open long enough for the pool
+    // to fill its other slots.
+    async function maxReaddirsInFlight(concurrency: number): Promise<number> {
+      const promises = memfs.promises as any;
+      const readdir = promises.readdir;
+      let inFlight = 0;
+      let maxInFlight = 0;
+      promises.readdir = async (...args: any[]) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          return await readdir.apply(promises, args);
+        } finally {
+          inFlight--;
+        }
+      };
+      try {
+        const result = await scanLocalTree(root, { concurrency });
+        expect(result.files).toHaveLength(40);
+        expect(result.dirs).toBe(41);
+      } finally {
+        promises.readdir = readdir;
+      }
+      return maxInFlight;
+    }
+
+    test('never reads more directories at once than allowed, and does use the slots', async () => {
+      fillWideTree();
+      expect(await maxReaddirsInFlight(3)).toBe(3);
+    });
+
+    test('a bound of one reads strictly one directory at a time', async () => {
+      fillWideTree();
+      expect(await maxReaddirsInFlight(1)).toBe(1);
+    });
   });
 });
