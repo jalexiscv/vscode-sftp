@@ -1,6 +1,6 @@
 import { Uri } from 'vscode';
 import app from '../app';
-import { UResource, FileService, ServiceConfig } from '../core';
+import { UResource, FileService, ServiceConfig, TransferFailedError } from '../core';
 import logger from '../logger';
 import { getFileService } from '../modules/serviceManager';
 
@@ -104,21 +104,25 @@ export default function createFileHandler<T>(
     logger.trace(`handle ${handlerOption.name} for`, target.localFsPath);
 
     app.sftpBarItem.startSpinner();
+    // A batch that failed half-way still changed the remote; afterHandle
+    // (the explorer refresh) has to see that before the failure reaches the
+    // caller. Errors raised while collecting the tasks propagate as before.
+    let partialFailure: TransferFailedError | undefined;
     try {
       await handlerOption.handle.call(handleCtx, invokeOption);
-    // } catch (error) {
-    //   reportError(error, `when ${handlerOption.name} ${target.localFsPath}`);
-    //   Object.defineProperty(error, 'reported', {
-    //     configurable: false,
-    //     enumerable: false,
-    //     value: true,
-    //   });
-    //   throw error;
+    } catch (error) {
+      if (!(error instanceof TransferFailedError)) {
+        throw error;
+      }
+      partialFailure = error;
     } finally {
       app.sftpBarItem.stopSpinner();
     }
     if (handlerOption.afterHandle) {
       handlerOption.afterHandle.call(handleCtx);
+    }
+    if (partialFailure) {
+      throw partialFailure;
     }
   }
 

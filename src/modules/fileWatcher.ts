@@ -3,13 +3,29 @@ import * as path from 'path';
 import * as debounce from 'lodash.debounce';
 import logger from '../logger';
 import { isValidFile, isInWorkspace, fileDepth, isSamePath } from '../helper';
-import { upload, removeRemote } from '../fileHandlers';
-import { WatcherService, TransferDirection } from '../core';
+import { removeRemote } from '../fileHandlers';
+import { WatcherService } from '../core';
 import app from '../app';
 import StatusBarItem from '../ui/statusBarItem';
 import { getRunningTransformTasks, getFileService } from './serviceManager';
 import { isPaused, isSuppressed, isGitOperationInProgress } from './syncControl';
 import { ActivityKind, record, succeed, fail } from './activityLog';
+import { enqueueChange } from './changeCollector';
+
+/**
+ * The per-service filesystem watcher behind `watcher.files`, `autoUpload` and
+ * `autoDelete` in sftp.json: the path by which edits made outside the editor
+ * (a build, a generator, a terminal) reach the server.
+ *
+ * Creates and changes are not uploaded from here; they are handed to the
+ * change collector, which also receives in-editor saves, so one write is one
+ * upload whichever channel reports it first. Deletions keep their own queue
+ * below, and only when the local-delete monitor has opted out of them.
+ *
+ * Key lifecycle methods:
+ * - {@link createWatcher} installs (or replaces) the watcher of a service.
+ * - {@link removeWatcher} disposes it when the service goes away.
+ */
 
 /**
  * Whether localDeleteMonitor owns this deletion.
@@ -42,7 +58,6 @@ const watchers: {
 
 // keyed by path, not by Uri: vscode hands out a fresh Uri object per event, so
 // a Set would keep one entry per *event* instead of one per file.
-const uploadQueue = new Map<string, vscode.Uri>();
 const deleteQueue = new Map<string, vscode.Uri>();
 
 // less than 550 will not work
@@ -87,45 +102,6 @@ function serviceNameOf(uri: vscode.Uri): string | undefined {
   return fileService ? fileService.name : undefined;
 }
 
-function doUpload() {
-  const files = Array.from(uploadQueue.values()).sort(
-    (a, b) => fileDepth(b.fsPath) - fileDepth(a.fsPath)
-  );
-  uploadQueue.clear();
-  if (files.length <= 0) {
-    return;
-  }
-
-  const suspended = suspendReason();
-  if (suspended) {
-    logger.info(`[watcher/updated] skip ${files.length} file(s), ${suspended}`);
-    return;
-  }
-
-  const currentDownloadTasks = getRunningTransformTasks().filter(
-    task => task.transferType === TransferDirection.REMOTE_TO_LOCAL
-  );
-
-  // uploads stay parallel: they are independent writes and the transfer
-  // scheduler already caps the real concurrency. Every path of the callback is
-  // inside the try, so no rejection escapes as an unhandled one.
-  files.forEach(async uri => {
-    const fspath = uri.fsPath;
-    try {
-      // current target is still in downloading, so don't upload it.
-      if (currentDownloadTasks.find(task => isSamePath(task.localFsPath, uri.fsPath))) {
-        return;
-      }
-
-      logger.info(`[watcher/updated] ${fspath}`);
-      await upload(uri);
-    } catch (error) {
-      logger.error(error, `upload ${fspath}`);
-      app.sftpBarItem.updateStatus(StatusBarItem.Status.error);
-    }
-  });
-}
-
 async function doDelete() {
   const files = Array.from(deleteQueue.values()).sort(
     (a, b) => fileDepth(b.fsPath) - fileDepth(a.fsPath)
@@ -151,10 +127,10 @@ async function doDelete() {
     return;
   }
 
-  // symmetric to doUpload: a `sync remote ➞ local` with `syncOption.delete`
-  // removes local files as it goes and a download replaces them, so mirroring
-  // those events back would destroy what was just transferred. Both directions
-  // matter here, unlike in doUpload.
+  // symmetric to the change collector's guard: a `sync remote ➞ local` with
+  // `syncOption.delete` removes local files as it goes and a download replaces
+  // them, so mirroring those events back would destroy what was just
+  // transferred. Both directions matter here, unlike for uploads.
   const runningTasks = getRunningTransformTasks();
   const targets = dropDescendants(files).filter(uri => {
     if (runningTasks.find(task => isSamePath(task.localFsPath, uri.fsPath))) {
@@ -187,7 +163,6 @@ async function doDelete() {
   }
 }
 
-const debouncedUpload = debounce(doUpload, ACTION_INTEVAL, { leading: true, trailing: true });
 // doDelete is async and the debounced call site can't await it, so the last
 // rejection barrier has to live here
 const debouncedDelete = debounce(
@@ -203,8 +178,9 @@ function uploadHandler(uri: vscode.Uri) {
     return;
   }
 
-  uploadQueue.set(queueKey(uri.fsPath), uri);
-  debouncedUpload();
+  // the collector dedupes this against an in-editor save of the same file,
+  // applies pause/suppression/ignore and skips paths being downloaded
+  enqueueChange(uri, 'watcher');
 }
 
 function addWatcher(id, watcher) {

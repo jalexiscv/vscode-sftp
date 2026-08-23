@@ -1,6 +1,27 @@
+import { TransferResult, TransferFailedError } from '../../core';
+import { markReported } from '../../helper';
 import { refreshRemoteExplorer } from '../shared';
 import createFileHandler, { FileHandlerContext } from '../createFileHandler';
 import { transfer, sync, TransferOption, SyncOption, TransferDirection } from './transfer';
+
+type TransferAction = 'upload' | 'download' | 'sync';
+
+/**
+ * Turns a batch with failures into a rejection, so a handler can no longer
+ * resolve after a failed put. Cancelled tasks are not failures.
+ *
+ * Each failed task was already reported by the service's `afterTransfer` hook,
+ * so the aggregate is flagged as reported: callers log it, they do not show
+ * it again.
+ */
+function assertTransferSucceeded(result: TransferResult, action: TransferAction) {
+  if (result.failed.length === 0) {
+    return;
+  }
+
+  const total = result.succeeded.length + result.failed.length + result.cancelled.length;
+  throw markReported(new TransferFailedError(result.failed, total, action));
+}
 
 function createTransferHandle(direction: TransferDirection) {
   return async function handle(this: FileHandlerContext, option) {
@@ -33,7 +54,11 @@ function createTransferHandle(direction: TransferDirection) {
     }
     // todo: abort at here. we should stop collect task
     await transfer(transferConfig, t => scheduler.add(t));
-    await scheduler.run();
+    const result = await scheduler.run();
+    assertTransferSucceeded(
+      result,
+      direction === TransferDirection.REMOTE_TO_LOCAL ? 'download' : 'upload'
+    );
   };
 }
 
@@ -61,7 +86,8 @@ export const sync2Remote = createFileHandler<SyncOption>({
       },
       t => scheduler.add(t)
     );
-    await scheduler.run();
+    const result = await scheduler.run();
+    assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'upload');
   },
   transformOption() {
     const config = this.config;
@@ -101,7 +127,8 @@ export const sync2Local = createFileHandler<SyncOption>({
       },
       t => scheduler.add(t)
     );
-    await scheduler.run();
+    const result = await scheduler.run();
+    assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'download');
   },
   transformOption() {
     const config = this.config;
