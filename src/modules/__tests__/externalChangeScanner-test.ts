@@ -17,6 +17,8 @@ jest.mock('../planConfirmation', () => ({
 jest.mock('../../host', () => ({
   ...jest.requireActual('../../host'),
   showInformationMessage: jest.fn(() => Promise.resolve(undefined)),
+  showChoiceMessage: jest.fn(() => Promise.resolve(undefined)),
+  executeCommand: jest.fn(() => Promise.resolve()),
   withProgress: jest.fn((_options: any, task: any) =>
     task(
       { report: () => undefined },
@@ -28,13 +30,15 @@ jest.mock('../../host', () => ({
 import * as path from 'path';
 import { vol } from 'memfs';
 import app from '../../app';
+import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../../constants';
 import { getAllFileService } from '../serviceManager';
 import { confirmAndRunPlan } from '../planConfirmation';
-import { showInformationMessage } from '../../host';
+import { showInformationMessage, showChoiceMessage } from '../../host';
 import { setPaused, __resetForTest as resetSyncControl } from '../syncControl';
 import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
 import { indexFor } from '../syncIndexFeeder';
 import { getPlans, createPlan, __resetForTest as resetPlans } from '../uploadPlan';
+import { computeCounters } from '../uploadStatus';
 import RemoteFs from '../../../test/helper/localRemoteFs';
 import {
   runScan,
@@ -50,16 +54,42 @@ import {
 } from '../externalChangeScanner';
 
 /**
- * Reconciliation by scan: what gets planned, what gets skipped, and how the
- * index is seeded from the server.
+ * Reconciliation by scan: what gets planned, what gets skipped, what an
+ * unbuilt index holds back, and how the index is seeded from the server.
  */
 
-const { isTriggerEnabled, pollTick, onWindowStateChanged, onPauseStateChanged, FOCUS_MIN_INTERVAL_MS } =
-  testHooks;
+const {
+  isTriggerEnabled,
+  pollTick,
+  onWindowStateChanged,
+  onPauseStateChanged,
+  FOCUS_MIN_INTERVAL_MS,
+  BUILD_INDEX_LABEL,
+  DONT_SHOW_AGAIN_LABEL,
+} = testHooks;
 
 const getAllFileServiceMock = getAllFileService as jest.Mock;
 const confirmAndRunPlanMock = confirmAndRunPlan as jest.Mock;
 const showInformationMessageMock = showInformationMessage as jest.Mock;
+const showChoiceMessageMock = showChoiceMessage as jest.Mock;
+
+// the real gate, for the cases where the answer matters (it is mocked above
+// so the rest of the file can observe what it is handed)
+const realConfirmAndRunPlan = jest.requireActual('../planConfirmation').confirmAndRunPlan;
+
+// a context whose workspaceState remembers what it is told
+function fakeContext(state: { [key: string]: any } = {}) {
+  return {
+    subscriptions: [],
+    workspaceState: {
+      get: jest.fn((key: string) => state[key]),
+      update: jest.fn((key: string, value: any) => {
+        state[key] = value;
+        return Promise.resolve();
+      }),
+    },
+  } as any;
+}
 
 const baseDir = path.resolve(path.sep, 'ws');
 const p = (...segments: string[]) => path.join(baseDir, ...segments);
@@ -128,6 +158,8 @@ beforeEach(() => {
   initSyncIndex({ storagePath: undefined });
   confirmAndRunPlanMock.mockClear();
   showInformationMessageMock.mockClear();
+  showChoiceMessageMock.mockReset();
+  showChoiceMessageMock.mockImplementation(() => Promise.resolve(undefined));
   getAllFileServiceMock.mockReset();
   getAllFileServiceMock.mockImplementation(() => []);
   app.state.profile = null;
@@ -150,7 +182,10 @@ describe('runScan', () => {
     expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
     expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
     expect(showInformationMessageMock.mock.calls[0][0]).toContain('sync index for staging is empty');
-    expect(showInformationMessageMock.mock.calls[0].slice(1)).toEqual(['Build index now', 'Later']);
+    expect(showInformationMessageMock.mock.calls[0].slice(1)).toEqual([
+      BUILD_INDEX_LABEL,
+      DONT_SHOW_AGAIN_LABEL,
+    ]);
 
     await runScan(service, 'resume');
     expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
@@ -215,10 +250,12 @@ describe('runScan', () => {
       reason: 'modified',
       localSize: 2,
     });
+    // the service goes along so a "Skip" can be remembered in its index
     expect(confirmAndRunPlanMock).toHaveBeenCalledWith(plan, {
       serviceName: 'staging',
       host: 'example.test',
       confirmThreshold: 7,
+      service,
     });
     expect(await scanService(service, 'manual')).not.toBeNull();
   });
@@ -344,6 +381,250 @@ describe('runScan', () => {
   });
 });
 
+describe('first use: an index that was never built', () => {
+  // five files the index has never seen, one it knows and that matches
+  async function freshCheckout() {
+    vol.fromJSON({
+      [p('known.ts')]: 'k',
+      [p('n1.ts')]: '1',
+      [p('n2.ts')]: '2',
+      [p('n3.ts')]: '3',
+      [p('dir', 'n4.ts')]: '4',
+      [p('dir', 'n5.ts')]: '5',
+    });
+    const service = fakeService();
+    const index = await indexed(service, 'known.ts');
+    return { service, index };
+  }
+
+  test('an automatic scan neither uploads nor asks about unindexed files; it says so once', async () => {
+    const { service, index } = await freshCheckout();
+    expect(index.isSeeded()).toBe(false);
+
+    const outcome = await runScan(service, 'startup');
+
+    expect(outcome.status).toBe('up-to-date');
+    expect(outcome.plan).toBeNull();
+    expect(outcome.ignoredNew).toBe(5);
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+    expect(getPlans()).toEqual([]);
+    // nothing for the status bar to count as pending either
+    expect(computeCounters(0, getPlans())).toEqual({ pending: 0, failed: 0 });
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+    expect(showInformationMessageMock.mock.calls[0][0]).toContain('is not built yet; 5 unindexed file(s)');
+    expect(showInformationMessageMock.mock.calls[0].slice(1)).toEqual([
+      BUILD_INDEX_LABEL,
+      DONT_SHOW_AGAIN_LABEL,
+    ]);
+
+    // the next automatic scans stay quiet this session
+    await runScan(service, 'focus');
+    await runScan(service, 'poll');
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+    expect(getPlans()).toEqual([]);
+  });
+
+  test('an automatic scan still plans the files the index knows and that changed', async () => {
+    const { service } = await freshCheckout();
+    vol.writeFileSync(p('known.ts'), 'known, but longer');
+
+    const outcome = await runScan(service, 'resume');
+
+    expect(outcome.status).toBe('planned');
+    expect(outcome.ignoredNew).toBe(5);
+    expect(outcome.plan!.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+      ['known.ts', 'modified'],
+    ]);
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('a manual scan plans everything, and a confirmed run that finishes seeds the index', async () => {
+    const { service, index } = await freshCheckout();
+    confirmAndRunPlanMock.mockImplementationOnce((plan: any) => {
+      // the run went through: every item verified (and, as the feeder would,
+      // recorded in the index), the plan closed
+      const { updateItem, summarize } = require('../uploadPlan');
+      const { toRelPath } = require('../syncIndex');
+      plan.items.forEach((item: any) => {
+        updateItem(plan.id, item.localPath, { status: 'verified' });
+        index.set(toRelPath(baseDir, item.localPath), {
+          size: item.localSize,
+          mtime: item.localMtime,
+          verifiedAt: 1,
+          status: 'verified',
+        });
+      });
+      return Promise.resolve({ decision: 'run', summary: summarize(plan) });
+    });
+
+    const outcome = await runScan(service, 'manual');
+
+    expect(outcome.status).toBe('planned');
+    expect(outcome.ignoredNew).toBeUndefined();
+    expect(outcome.plan!.items.length).toBe(5);
+    expect(outcome.plan!.items.every(i => i.reason === 'new')).toBe(true);
+    expect(index.isSeeded()).toBe(true);
+    expect(showInformationMessageMock).not.toHaveBeenCalled();
+
+    // from now on an automatic scan treats unindexed files as new (and asks
+    // about them: see planConfirmation)
+    vol.writeFileSync(p('later.ts'), 'later');
+    const next = await runScan(service, 'startup');
+    expect(next.status).toBe('planned');
+    expect(next.plan!.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+      ['later.ts', 'new'],
+    ]);
+    expect(next.ignoredNew).toBeUndefined();
+  });
+
+  test('a manual scan that was skipped, reviewed or cancelled does not seed the index', async () => {
+    const { service, index } = await freshCheckout();
+    confirmAndRunPlanMock.mockImplementationOnce((plan: any) =>
+      Promise.resolve({ decision: 'review', summary: require('../uploadPlan').summarize(plan) })
+    );
+
+    await runScan(service, 'manual');
+    expect(index.isSeeded()).toBe(false);
+
+    // the run was interrupted: items still pending
+    confirmAndRunPlanMock.mockImplementationOnce((plan: any) =>
+      Promise.resolve({ decision: 'run', summary: require('../uploadPlan').summarize(plan) })
+    );
+    await runScan(service, 'manual');
+    expect(index.isSeeded()).toBe(false);
+  });
+
+  test('a manual scan that finds the tree up to date seeds the index', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'a' });
+    const service = fakeService();
+    const index = await indexed(service, 'a.ts');
+
+    expect((await runScan(service, 'startup')).status).toBe('up-to-date');
+    expect(index.isSeeded()).toBe(false);
+    expect((await runScan(service, 'manual')).status).toBe('up-to-date');
+    expect(index.isSeeded()).toBe(true);
+  });
+
+  test('"Don\'t show again" is remembered per workspace; a dismissed notice comes back next session only', async () => {
+    const { service, index } = await freshCheckout();
+    getAllFileServiceMock.mockImplementation(() => [service]);
+    const state: { [key: string]: any } = {};
+    init(fakeContext(state));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // the startup scan of init already showed the notice once
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+    await runScan(service, 'focus');
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+
+    // a new session: shown again, and this time dismissed for good
+    __resetForTest();
+    showInformationMessageMock.mockClear();
+    showInformationMessageMock.mockResolvedValueOnce(DONT_SHOW_AGAIN_LABEL);
+    init(fakeContext(state));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+    expect(state[STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED]).toEqual([index.key]);
+
+    // the session after that: nothing
+    __resetForTest();
+    showInformationMessageMock.mockClear();
+    init(fakeContext(state));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await runScan(service, 'focus');
+    expect(showInformationMessageMock).not.toHaveBeenCalled();
+
+    // building the index clears the mark: it has no reason to exist any more
+    await rebuildSyncIndex(service);
+    expect(state[STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED]).toEqual([]);
+  });
+
+  test('"Skip" on a scan plan is remembered: the same versions are not planned again', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'aa', [p('b.ts')]: 'bbb' });
+    const service = fakeService({ externalChanges: { confirmThreshold: 0 } });
+    const index = await indexFor(service);
+    index.set('a.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    index.set('b.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    confirmAndRunPlanMock.mockImplementationOnce(realConfirmAndRunPlan);
+    showChoiceMessageMock.mockResolvedValueOnce('Skip');
+
+    const first = await runScan(service, 'startup');
+    expect(first.decision).toBe('skip');
+    expect(index.get('a.ts')).toMatchObject({ size: 2, status: 'skipped' });
+    expect(index.get('b.ts')).toMatchObject({ size: 3, status: 'skipped' });
+
+    // next startup: nothing to ask about
+    const second = await runScan(service, 'startup');
+    expect(second.status).toBe('up-to-date');
+    expect(getPlans().length).toBe(1);
+
+    // until one of them changes
+    vol.writeFileSync(p('b.ts'), 'b changed');
+    const third = await runScan(service, 'startup');
+    expect(third.status).toBe('planned');
+    expect(third.plan!.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+      ['b.ts', 'modified'],
+    ]);
+  });
+
+  test('once seeded, an automatic scan with new files asks even below the threshold', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'a', [p('fresh.ts')]: 'f' });
+    const service = fakeService({ externalChanges: { confirmThreshold: 20 } });
+    const index = await indexed(service, 'a.ts');
+    index.markSeeded();
+    confirmAndRunPlanMock.mockImplementationOnce(realConfirmAndRunPlan);
+    showChoiceMessageMock.mockResolvedValueOnce('Review plan');
+
+    const outcome = await runScan(service, 'startup');
+
+    expect(outcome.status).toBe('planned');
+    expect(outcome.decision).toBe('review');
+    expect(showChoiceMessageMock).toHaveBeenCalledTimes(1);
+    expect(showChoiceMessageMock.mock.calls[0][1][0]).toBe('Review plan');
+    expect(outcome.plan!.items[0].status).toBe('pending');
+  });
+
+  test('focus scans run one service after another, not in parallel', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'new' });
+    const one = fakeService();
+    const other = path.resolve(path.sep, 'other');
+    vol.fromJSON({ [path.join(other, 'b.ts')]: 'new' });
+    const two = { ...fakeService(), id: 2, name: 'other', baseDir: other };
+    (await indexFor(one)).set('a.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    (await indexFor(two)).set('b.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    getAllFileServiceMock.mockImplementation(() => [one, two]);
+
+    let release: () => void = () => undefined;
+    confirmAndRunPlanMock.mockImplementationOnce(
+      (plan: any) =>
+        new Promise(resolve => {
+          release = () =>
+            resolve({ decision: 'run', summary: require('../uploadPlan').summarize(plan) });
+        })
+    );
+
+    onWindowStateChanged({ focused: true } as any);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // the first confirmation is still open: the second service waits
+    expect(getPlans().length).toBe(1);
+    release();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(getPlans().length).toBe(2);
+  });
+
+  test('a scan that blows up restores the status bar', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'new' });
+    // no remote path: the plan items cannot be resolved, after "scanning…"
+    const service = fakeService({ remotePath: undefined });
+    (await indexFor(service)).set('a.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+
+    await expect(runScan(service, 'manual')).rejects.toBeDefined();
+
+    const lastMessage = showMsg.mock.calls[showMsg.mock.calls.length - 1];
+    expect(lastMessage[0]).toBe('scan of staging failed');
+    expect(lastMessage[1]).toBe(2000);
+  });
+});
+
 describe('triggers', () => {
   let now: number;
   let clock: jest.SpyInstance;
@@ -457,7 +738,7 @@ describe('rebuildSyncIndex', () => {
     vol.utimesSync(fsPath, new Date(ms), new Date(ms));
   }
 
-  test('records the files present on both sides with the same size and mtime', async () => {
+  test('records the files present on both sides with the same size, and marks the index as built', async () => {
     vol.fromJSON({
       [p('same.txt')]: 'same',
       [p('dir', 'deep.txt')]: 'deep',
@@ -480,26 +761,58 @@ describe('rebuildSyncIndex', () => {
 
     const summary = await rebuildSyncIndex(service);
 
-    expect(summary).toEqual({ indexed: 2, differ: 1, onlyLocal: 1, onlyRemote: 1, cancelled: false });
+    expect(summary).toEqual({
+      indexed: 2,
+      differ: 1,
+      mtimeDiffer: 0,
+      onlyLocal: 1,
+      onlyRemote: 1,
+      cancelled: false,
+    });
     const index = await indexFor(service);
     expect(index.get('same.txt')).toMatchObject({ size: 4, mtime: t, remoteSize: 4, status: 'verified' });
     expect(index.get('dir/deep.txt')).toBeDefined();
     expect(index.get('differ.txt')).toBeUndefined();
     expect(index.get('only-local.txt')).toBeUndefined();
     expect(index.size).toBe(2);
+    expect(index.isSeeded()).toBe(true);
   });
 
-  test('an mtime outside the tolerance is a difference on sftp, not on ftp', async () => {
+  test('a different mtime does not prevent indexing by size; it is only counted (not on ftp)', async () => {
     vol.fromJSON({ [p('a.txt')]: 'abc', '/remote/a.txt': 'abc' });
     const t = 1700000000000;
     setMtime(p('a.txt'), t);
+    // a git/rsync deploy: same content, another mtime on the server
     setMtime('/remote/a.txt', t + 3000);
 
-    expect(await rebuildSyncIndex(fakeService())).toMatchObject({ indexed: 0, differ: 1 });
+    const sftp = await rebuildSyncIndex(fakeService());
+    expect(sftp).toMatchObject({ indexed: 1, differ: 0, mtimeDiffer: 1 });
+    // the LOCAL mtime is the baseline the next scans compare against
+    const index = await indexFor(fakeService());
+    expect(index.get('a.txt')).toMatchObject({ size: 3, mtime: t, remoteMtime: t + 3000 });
+    expect((await runScan(fakeService(), 'startup')).status).toBe('up-to-date');
+
     expect(await rebuildSyncIndex(fakeService({ protocol: 'ftp' }))).toMatchObject({
       indexed: 1,
       differ: 0,
+      mtimeDiffer: 0,
     });
+  });
+
+  test('a remote directory matched by a "dir/" pattern is pruned', async () => {
+    vol.fromJSON({
+      [p('a.txt')]: 'a',
+      '/remote/a.txt': 'a',
+      '/remote/cache/x.txt': 'x',
+      '/remote/cache/deep/y.txt': 'y',
+    });
+    const service = fakeService({
+      ignore: (fsPath: string, isDirectory?: boolean) => isDirectory === true && /\/cache$/.test(fsPath),
+    });
+
+    const summary = await rebuildSyncIndex(service);
+
+    expect(summary).toMatchObject({ indexed: 1, onlyRemote: 0 });
   });
 
   test('replaces the previous index, and leaves it alone when cancelled', async () => {
@@ -545,10 +858,37 @@ describe('rebuildSyncIndex', () => {
 
   test('formatRebuildSummary', () => {
     expect(
-      formatRebuildSummary({ indexed: 1234, differ: 12, onlyLocal: 3, onlyRemote: 0, cancelled: false })
-    ).toBe(`Indexed ${(1234).toLocaleString()} files; 12 differ, 3 only local.`);
+      formatRebuildSummary({
+        indexed: 1234,
+        differ: 12,
+        mtimeDiffer: 0,
+        onlyLocal: 3,
+        onlyRemote: 0,
+        cancelled: false,
+      })
+    ).toBe(`Indexed ${(1234).toLocaleString()} files; 12 differ in size, 3 only local.`);
     expect(
-      formatRebuildSummary({ indexed: 0, differ: 0, onlyLocal: 0, onlyRemote: 0, cancelled: true })
+      formatRebuildSummary({
+        indexed: 10,
+        differ: 0,
+        mtimeDiffer: 4,
+        onlyLocal: 0,
+        onlyRemote: 0,
+        cancelled: false,
+      })
+    ).toBe(
+      'Indexed 10 files; 0 differ in size. 4 of the indexed files have another mtime on the ' +
+        'server (matched by size).'
+    );
+    expect(
+      formatRebuildSummary({
+        indexed: 0,
+        differ: 0,
+        mtimeDiffer: 0,
+        onlyLocal: 0,
+        onlyRemote: 0,
+        cancelled: true,
+      })
     ).toMatch(/cancelled/);
   });
 
@@ -560,7 +900,9 @@ describe('rebuildSyncIndex', () => {
     await rebuildSyncIndexInteractive(fakeService());
 
     expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
-    expect(showInformationMessageMock.mock.calls[0][0]).toBe('SFTP: staging: Indexed 1 files; 0 differ.');
+    expect(showInformationMessageMock.mock.calls[0][0]).toBe(
+      'SFTP: staging: Indexed 1 files; 0 differ in size.'
+    );
   });
 
   test('createPlan is untouched by a rebuild (sanity)', () => {
