@@ -660,6 +660,53 @@ describe('TransferTask', () => {
       expect(error.reason).toBe(`bytes mismatch (sent 3, expected ${SIZE})`);
       expect(task.verification!.level).toBe('none');
     });
+
+    test('a source that grew since the listing is measured again on the retry', async () => {
+      // the listing saw three bytes; the file holds the whole content by now
+      const remoteFs = createRemoteFs(CountingLstatFs);
+      const task = createDownload(remoteFs, { size: 3, retries: 1 });
+
+      await task.run();
+
+      expect(fs.readFileSync('/local/a.txt', 'utf8')).toBe(CONTENT);
+      expect(task.attempts).toBe(2);
+      expect(task.expectedSize).toBe(SIZE);
+      expect(task.bytesTransferred).toBe(SIZE);
+      // the first attempt trusted the listing, the retry asked the source
+      expect(remoteFs.lstats).toEqual(['/remote/a.txt']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(
+        /^\[transfer\] retry 1\/1 for .*a\.txt: .*bytes mismatch \(sent \d+, expected 3\)/
+      );
+    });
+
+    test('without retries a stale listed size still fails, as there is no second measure', async () => {
+      const remoteFs = createRemoteFs(CountingLstatFs);
+      const task = createDownload(remoteFs, { size: 3, retries: 0 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe('EVERIFY');
+      expect(remoteFs.lstats).toEqual([]);
+    });
+
+    test('a source that vanished before the retry is measured is not retried again', async () => {
+      const remoteFs = createRemoteFs();
+      const statSize = jest
+        .spyOn(remoteFs, 'statSize')
+        .mockRejectedValue(Object.assign(new Error('No such file'), { code: 2 }));
+      const task = createDownload(remoteFs, { size: 3, retries: 2 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe(2);
+      expect(task.attempts).toBe(2);
+      expect(statSize).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map(call => call[0])).toEqual([
+        expect.stringMatching(/^\[transfer\] retry 1\/2 for .*a\.txt: .*bytes mismatch/),
+        '[transfer] not retrying /local/a.txt: No such file (code 2)',
+      ]);
+    });
   });
 
   test('the written file keeps the source mtime through the target fd', async () => {

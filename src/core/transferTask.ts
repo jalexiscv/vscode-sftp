@@ -208,13 +208,13 @@ class ByteCounter extends Transform {
  * reports on.
  *
  * Beyond streaming the bytes it is responsible for proving the transfer
- * landed: every attempt counts the bytes handed to the target against the
- * source size, an upload is then checked against the server according to
- * {@link TransferOption.verifyUpload}, and a failed attempt is retried with an
- * increasing delay unless the task was cancelled or the error is one no retry
- * can fix ({@link isRetryableTransferError}). The outcome is exposed through
- * {@link verification}, {@link bytesTransferred}, {@link expectedSize} and
- * {@link attempts}.
+ * landed: every attempt measures the source again and counts the bytes handed
+ * to the target against it, an upload is then checked against the server
+ * according to {@link TransferOption.verifyUpload}, and a failed attempt is
+ * retried with an increasing delay unless the task was cancelled or the error
+ * is one no retry can fix ({@link isRetryableTransferError}). The outcome is
+ * exposed through {@link verification}, {@link bytesTransferred},
+ * {@link expectedSize} and {@link attempts}.
  *
  * Key lifecycle methods:
  * - {@link run} transfers with retries; rejects with
@@ -531,16 +531,20 @@ export default class TransferTask implements Task {
     }
   }
 
-  // the remote stat taken while collecting is reused for downloads (over FTP
-  // an lstat is a LIST of the whole parent directory); a local stat is cheap
-  // and, unlike the collected one, sees a file rewritten since then
+  // uploads lstat the local source on every attempt: it is cheap and, unlike
+  // the size collected while listing, sees a file rewritten since then.
+  // Downloads trust the collected size on the first attempt (over FTP a stat
+  // is a SIZE or a LIST of the whole parent directory) and measure the source
+  // again on every retry: a remote file that grew since the listing (a log, a
+  // cache) would otherwise fail the byte count on every attempt although each
+  // download was complete
   private _measureSource(): Promise<number> {
     const { size } = this._TransferOption;
-    if (
-      this._transferDirection === TransferDirection.REMOTE_TO_LOCAL &&
-      typeof size === 'number'
-    ) {
-      return Promise.resolve(size);
+    if (this._transferDirection === TransferDirection.REMOTE_TO_LOCAL) {
+      if (this._attempts === 1 && typeof size === 'number') {
+        return Promise.resolve(size);
+      }
+      return this._srcFs.statSize(this._srcFsPath);
     }
 
     return this._srcFs.lstat(this._srcFsPath).then(stat => stat.size);
