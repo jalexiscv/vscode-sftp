@@ -118,7 +118,7 @@ v1.24.0 的重点是信任：让你确信本地改动的内容已经在服务器
 | **外部变更检测** | 一个持久化的同步索引按服务器记住每个文件最后一次上传并验证的版本。在启动时、重新加载 `sftp.json` 时、恢复自动同步时、窗口在五分钟后重新获得焦点时，以及按需执行（`SFTP: Scan for External Changes`）时，都会把本地目录树与该索引比较，把在编辑器之外改动的内容——终端里的 `git pull`、代码生成器、VS Code 关闭期间的编辑——通过计划上传，而无需列出服务器。`watcher.pollInterval` 为网络驱动器或 Docker/WSL 挂载增加定时轮询。配置键：`externalChanges.scanOnStartup`、`scanOnResume`、`confirmThreshold` |
 | **统一的变更收集器** | `uploadOnSave` 和 watcher 不再把同一次保存上传两次：编辑器的保存立即上传，外部变更会被合批（700 ms）并按路径去重。监视 `**/*` 时不再需要 `uploadOnSave: false` |
 | **上传计划** | 每个批次都是一个计划，包含来源、每个文件的原因（新增、修改）、状态、尝试次数和错误，显示在活动视图的 "Upload plans" 分组中（上传整个计划、按文件上传/跳过/对比、导出报告、移除）。`SFTP: Preview Upload (Dry Run)` 只显示将要上传什么而不上传；`SFTP: Upload Plan`、`SFTP: Export Last Upload Report`（Markdown）和 `SFTP: Clear Upload Plans` 补全这一组命令。状态栏显示 `↑N` 个待上传和 `✗N` 个失败 |
-| **上传验证** | 每次上传都会统计已发送的字节数，并在 `verifyUpload: "stat"`（默认）下检查远程大小是否完全一致（FTP 使用 `SIZE`）。`"hash"` 还会比较摘要（通过 SSH 运行 `sha256sum`/`shasum`/`openssl`/`md5sum` 得到 sha256/sha1/md5/crc32，或在 FTP 上使用 `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH`），服务器无法计算时自动降级为 `stat`。失败会以递增的等待重试（`uploadRetries`，2 次），然后带原因上报 |
+| **上传验证** | 每次上传都会统计已发送的字节数，并在 `verifyUpload: "stat"`（默认）下检查远程大小是否完全一致（FTP 使用 `SIZE`）。`"hash"` 还会比较摘要（通过 SSH 运行 `sha256sum`/`shasum`/`openssl`/`md5sum` 得到 sha256/sha1/md5/crc32，或在 FTP 上使用 `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH`），服务器无法计算时自动降级为 `stat`。暂时性失败（网络、超时、验证）会以递增的等待重试（`uploadRetries`，2 次），然后带原因上报；永久性错误（权限被拒、源文件不存在）不会重试 |
 | **持久化的活动记录** | 活动视图记录每个任务——无论来自命令、保存还是 watcher——包括远程路径和验证结果，并在窗口重新加载后保留（`activity-log.json`）：上一会话的失败仍可重试。传输开始前的失败（连接、凭据、权限）也会显示 |
 | **修复** | `uploadFile()` 在传输失败时会正确拒绝（此前视图可能把失败的上传标为成功）；下载和 `Sync Remote -> Local` 期间对自动同步的抑制此前从未被使用；`ignore` 中的 `dir/` 模式会整体剪除子树；防止符号链接循环；索引在文件损坏或 `rename` 失败时依然稳健；数字形式的 SFTP 错误有了描述；更多内容见 [CHANGELOG](CHANGELOG.md) |
 
@@ -126,9 +126,10 @@ v1.24.0 的重点是信任：让你确信本地改动的内容已经在服务器
 
 | 防线 | 行为 |
 |------|------|
-| **确认阈值** | 超过 `externalChanges.confirmThreshold`（默认 20）时不会不经询问就上传：模态对话框列出文件并提供 `Upload N file(s)`、`Review plan`（计划留在视图中待处理）或 `Skip` |
+| **确认阈值** | 超过 `externalChanges.confirmThreshold`（默认 20）时不会不经询问就上传：模态对话框列出文件并提供 `Review plan`（默认；计划留在视图中待处理）、`Upload N file(s)` 或 `Skip`。`Skip` 会被记住：这些文件在再次改动之前不会被重新提出 |
 | **感知 git** | 如果 HEAD 在变更与上传之间移动过（checkout、pull、rebase、merge 等），无论批次多大都会要求确认：切换分支永远不会意外上传数百个文件 |
-| **首次使用** | 索引为空时，自动扫描不会规划任何内容（否则一切都像是新文件）：会提示一次并提供 `Build index now`（`SFTP: Rebuild Sync Index`），它列出远程和本地，并把一致的文件记录为已验证 |
+| **新文件** | 自动批次若包含索引从未见过的文件，无论多小都会要求确认；只有已索引且被修改的文件才会在阈值以下自动上传 |
+| **首次使用** | 安装后，请对每个服务器执行一次 `SFTP: Rebuild Sync Index`（或先上传一次项目再运行一次手动扫描），让扩展知道服务器上已有什么。在此之前，自动扫描只会重新上传扩展自己上传过的文件；未索引的文件会被忽略，并且每个服务器只提示一次（`Build index now` / `Don't show again`）。重建会把本地与远程大小一致的文件加入索引 |
 | **哈希降级** | 如果服务器无法计算摘要（没有 shell 的 SFTP 账户、没有 `XSHA256`/`HASH` 的 FTP 等），上传按大小验证并在每个连接上只警告一次；只有摘要不同才算失败 |
 | **默认开启，无需配置** | 启动和恢复时扫描、按大小验证以及两次重试默认启用；`externalChanges.scanOnStartup: false`、`scanOnResume: false`、`verifyUpload: "none"` 和 `uploadRetries: 0` 可恢复以前的行为 |
 
