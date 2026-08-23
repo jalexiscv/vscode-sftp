@@ -9,6 +9,7 @@ import { reportError } from './helper';
 import logger from './logger';
 import fileActivityMonitor from './modules/fileActivityMonitor';
 import localDeleteMonitor from './modules/localDeleteMonitor';
+import changeCollector from './modules/changeCollector';
 import { tryLoadConfigs } from './modules/config';
 import { initSavedPasswords } from './modules/savedPasswords';
 import { initSyncControl, isPaused, onDidChangePauseState } from './modules/syncControl';
@@ -127,6 +128,7 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   fileActivityMonitor.destory();
   localDeleteMonitor.destroy();
+  changeCollector.destroy();
   if (activityView) {
     activityView.dispose();
     activityView = undefined;

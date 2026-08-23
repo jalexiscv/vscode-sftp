@@ -20,8 +20,23 @@ import {
   disposeFileService,
 } from './serviceManager';
 import { reportError, isValidFile, isConfigFile, isInWorkspace } from '../helper';
-import { downloadFile, uploadFile } from '../fileHandlers';
+import { downloadFile } from '../fileHandlers';
 import { isPaused, isSuppressed } from './syncControl';
+import { enqueueChange } from './changeCollector';
+
+/**
+ * Reacts to what happens inside the editor: a saved document, an opened one,
+ * and a saved or externally rewritten sftp.json.
+ *
+ * Saves are not uploaded from here. They go through the change collector,
+ * which is also fed by the filesystem watcher, so that an in-editor save with
+ * the watcher on produces one upload and not two. Opens still download
+ * directly, and a config change rebuilds the services of its workspace.
+ *
+ * Key lifecycle methods:
+ * - {@link init} subscribes to the editor events.
+ * - {@link destory} drops the subscriptions on deactivate.
+ */
 
 // vscode glob patterns always use forward slashes
 const CONFIG_GLOB = '**/' + CONFIG_PATH.split(path.sep).join('/');
@@ -71,7 +86,7 @@ async function handleConfigSave(uri: vscode.Uri) {
   }
 }
 
-async function handleFileSave(uri: vscode.Uri) {
+function handleFileSave(uri: vscode.Uri) {
   const fileService = getFileService(uri);
   if (!fileService) {
     return;
@@ -79,7 +94,8 @@ async function handleFileSave(uri: vscode.Uri) {
 
   const config = fileService.getConfig();
   if (config.uploadOnSave) {
-    // an explicit command is the user overriding the pause; this path is not
+    // an explicit command is the user overriding the pause; this path is not.
+    // The collector checks again when the batch runs; this keeps the log line.
     if (isPaused() || isSuppressed()) {
       logger.info('[file-save] skipped (auto sync paused)');
       return;
@@ -90,13 +106,16 @@ async function handleFileSave(uri: vscode.Uri) {
       // resolve the on-disk casing so the remote path matches it
       fspath = realpathSync.native(uri.fsPath);
       uri = vscode.Uri.file(fspath);
-      logger.info(`[file-save] ${fspath}`);
-      // the activity entry is opened by the transfer hooks, per task
-      await uploadFile(uri);
     } catch (error) {
       logger.error(error, `upload ${fspath}`);
       app.sftpBarItem.updateStatus(StatusBarItem.Status.error);
+      return;
     }
+
+    logger.info(`[file-save] ${fspath}`);
+    // the upload itself, and its activity entry, happen downstream: the
+    // collector dedupes this against the watcher's event for the same write
+    enqueueChange(uri, 'save');
   }
 }
 
