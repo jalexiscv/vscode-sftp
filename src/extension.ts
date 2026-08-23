@@ -13,6 +13,7 @@ import { tryLoadConfigs } from './modules/config';
 import { initSavedPasswords } from './modules/savedPasswords';
 import { initSyncControl, isPaused, onDidChangePauseState } from './modules/syncControl';
 import { initRemoteTrash, purgeExpired } from './modules/remoteTrash';
+import { initSyncIndex, flushSyncIndex } from './modules/syncIndex';
 import { getAllFileService, createFileService, disposeFileService } from './modules/serviceManager';
 import { getWorkspaceFolders, setContextValue } from './host';
 import RemoteExplorer from './modules/remoteExplorer';
@@ -59,6 +60,11 @@ export async function activate(context: vscode.ExtensionContext) {
   initSavedPasswords(context);
   initSyncControl(context);
   initRemoteTrash(context);
+  // `storageUri` (vscode 1.49+) is the supported per-workspace storage; the
+  // installed @types/vscode (1.40) only knows the deprecated `storagePath`,
+  // which points at the same folder and is the fallback on older hosts
+  const storageUri: { fsPath: string } | undefined = (context as any).storageUri;
+  initSyncIndex({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
 
   try {
     initCommands(context);
@@ -125,6 +131,9 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+  // not awaited: the debounced saves mean the index is normally on disk
+  // already, and a slow disk must not hold up the extension host shutdown
+  flushSyncIndex().catch(error => logger.error(error, 'flush sync index'));
   fileActivityMonitor.destory();
   localDeleteMonitor.destroy();
   if (activityView) {
