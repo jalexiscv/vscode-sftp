@@ -12,7 +12,12 @@ import { flatten } from '../../utils';
 import logger from '../../logger';
 import { getOpenTextDocuments } from '../../host';
 
-interface InternalTransferOption extends FileHandleOption, TransferTaskTransferOption {}
+interface InternalTransferOption extends FileHandleOption, TransferTaskTransferOption {
+  // same shape as ServiceConfig.ignore: the flag lets a gitignore-style
+  // `dir/` pattern match the directory itself, so a whole subtree is pruned
+  // here instead of filtered file by file
+  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
+}
 
 type ExternalTransferOption<T extends InternalTransferOption> = Pick<
   T,
@@ -82,7 +87,8 @@ async function transferFolder(
 ) {
   const { srcFsPath, targetFsPath, srcFs, targetFs, transferOption } = config;
 
-  if (transferOption.ignore && transferOption.ignore(srcFsPath)) {
+  // flagged as a directory so a `dir/` pattern prunes the subtree here
+  if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
     return;
   }
 
@@ -202,7 +208,7 @@ async function transferWithType(
 }
 
 async function removeFile(file: string, fs: FileSystem, fileType: FileType, option) {
-  if (option.ignore && option.ignore(file)) {
+  if (option.ignore && option.ignore(file, fileType === FileType.Directory)) {
     return;
   }
 
@@ -228,7 +234,8 @@ async function _sync(
 ) {
 
   const { srcFsPath, targetFsPath, srcFs, targetFs, transferOption, transferDirection } = config;
-  if (transferOption.ignore && transferOption.ignore(srcFsPath)) {
+  // always a directory here, see transferFolder
+  if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
     return;
   }
 
@@ -378,7 +385,10 @@ async function _sync(
         // hold entries that are really going to be removed. removeFile skips
         // ignored paths and unsupported types, so the push has to happen after
         // the same checks, not before them.
-        if (transferOption.ignore && transferOption.ignore(file.fspath)) {
+        if (
+          transferOption.ignore &&
+          transferOption.ignore(file.fspath, file.type === FileType.Directory)
+        ) {
           return;
         }
 
