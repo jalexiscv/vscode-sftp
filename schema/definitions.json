@@ -27,6 +27,12 @@
             "type": "boolean",
             "description": "delete when file changed.",
             "default": false
+          },
+          "pollInterval": {
+            "type": "integer",
+            "description": "Milliseconds between scans of the local tree against the sync index, for environments where filesystem events are unreliable (network drives, Docker or WSL mounts). Each scan uploads the files that changed since their last verified upload. 0 disables polling.",
+            "minimum": 0,
+            "default": 0
           }
         },
         "required": ["files"],
@@ -170,6 +176,28 @@
             "description": "Days to keep trashed files before they are purged. 0 disables automatic purging.",
             "minimum": 0,
             "default": 7
+          }
+        }
+      },
+      "externalChanges": {
+        "type": "object",
+        "description": "Detection of local changes made outside the editor (external tools, git, or while VS Code was closed) by comparing the local tree with the sync index of verified uploads.",
+        "properties": {
+          "scanOnStartup": {
+            "type": "boolean",
+            "description": "Scan the local tree for external changes when the extension activates and when sftp.json is reloaded, and upload what changed since the last verified upload.",
+            "default": true
+          },
+          "scanOnResume": {
+            "type": "boolean",
+            "description": "Scan for external changes when automatic sync is resumed and when the window regains focus after a while.",
+            "default": true
+          },
+          "confirmThreshold": {
+            "type": "integer",
+            "description": "Number of changed files above which SFTP shows the upload plan and asks for confirmation before uploading. Batches caused by a git operation always ask. Set to 0 to always ask.",
+            "minimum": 0,
+            "default": 20
           }
         }
       },
