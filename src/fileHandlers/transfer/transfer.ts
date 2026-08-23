@@ -16,7 +16,7 @@ interface InternalTransferOption extends FileHandleOption, TransferTaskTransferO
 
 type ExternalTransferOption<T extends InternalTransferOption> = Pick<
   T,
-  Exclude<keyof T, 'mtime' | 'atime' | 'mode' | 'fallbackMode'>
+  Exclude<keyof T, 'mtime' | 'atime' | 'size' | 'mode' | 'fallbackMode'>
 >;
 
 type TransferOption = ExternalTransferOption<InternalTransferOption>;
@@ -110,6 +110,7 @@ async function transferFolder(
             ...config.transferOption,
             mtime: file.mtime,
             atime: file.atime,
+            size: file.size,
           },
           srcFsPath: file.fspath,
           targetFsPath: targetFs.pathResolver.join(targetFsPath, file.name),
@@ -185,9 +186,10 @@ async function transferWithType(
         const document = textDocuments.find(doc => doc.fileName === config.srcFsPath);
         if (document && !document.isClosed && document.isDirty) {
           await document.save();
-          // Update mtime after file was saved
+          // Update mtime and size after file was saved
           const stat = await config.srcFs.lstat(config.srcFsPath);
           config.transferOption.mtime = stat.mtime;
+          config.transferOption.size = stat.size;
           logger.info('save before upload.');
         }
       }
@@ -298,6 +300,7 @@ async function _sync(
                   mode: to.mode, // prefer target mode
                   mtime: from.mtime,
                   atime: from.atime,
+                  size: from.size,
                 },
               ]);
             }
@@ -329,6 +332,7 @@ async function _sync(
               fallbackMode: srcFile.mode,
               mtime: srcFile.mtime,
               atime: srcFile.atime,
+              size: srcFile.size,
             },
           ]);
           break;
@@ -358,6 +362,7 @@ async function _sync(
                   fallbackMode: file.mode,
                   mtime: file.mtime,
                   atime: file.atime,
+                  size: file.size,
                 },
               ]);
               break;
@@ -468,6 +473,7 @@ export async function transfer(
     fallbackMode: stat.mode,
     mtime: stat.mtime,
     atime: stat.atime,
+    size: stat.size,
     filePerm: config?.filePerm,
     dirPerm: config?.dirPerm,
   };
