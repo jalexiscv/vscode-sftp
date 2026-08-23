@@ -22,7 +22,6 @@ import {
 import { reportError, isValidFile, isConfigFile, isInWorkspace } from '../helper';
 import { downloadFile, uploadFile } from '../fileHandlers';
 import { isPaused, isSuppressed } from './syncControl';
-import { ActivityKind, record, succeed, fail } from './activityLog';
 
 // vscode glob patterns always use forward slashes
 const CONFIG_GLOB = '**/' + CONFIG_PATH.split(path.sep).join('/');
@@ -87,25 +86,14 @@ async function handleFileSave(uri: vscode.Uri) {
     }
 
     let fspath = uri.fsPath;
-    let activityId: number | undefined;
     try {
       // resolve the on-disk casing so the remote path matches it
       fspath = realpathSync.native(uri.fsPath);
       uri = vscode.Uri.file(fspath);
       logger.info(`[file-save] ${fspath}`);
-      activityId = record({
-        kind: ActivityKind.Upload,
-        localPath: fspath,
-        serviceName: fileService.name,
-        profile: app.state.profile,
-        retry: () => uploadFile(uri),
-      });
+      // the activity entry is opened by the transfer hooks, per task
       await uploadFile(uri);
-      succeed(activityId);
     } catch (error) {
-      if (activityId !== undefined) {
-        fail(activityId, error);
-      }
       logger.error(error, `upload ${fspath}`);
       app.sftpBarItem.updateStatus(StatusBarItem.Status.error);
     }
