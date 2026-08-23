@@ -70,6 +70,17 @@
         "description": "True to download when a file opens.",
         "default": "confirm"
       },
+      "verifyUpload": {
+        "enum": ["none", "stat"],
+        "description": "What to check on the server after each upload. \"stat\" requires the remote file size to match the local one (the bytes sent are always counted); \"none\" trusts the protocol acknowledgement only. A failed check is retried (see uploadRetries) and then reported as a failed upload.",
+        "default": "stat"
+      },
+      "uploadRetries": {
+        "type": "integer",
+        "description": "How many times a failed transfer (network error, failed verification) is retried, with an increasing delay, before it is reported as failed. 0 disables retries.",
+        "minimum": 0,
+        "default": 2
+      },
       "syncOption": {
         "type": "object",
         "description": "Configuration the behavior of `Sync` command.",
