@@ -46,7 +46,7 @@ const configScheme = {
   openSsh: Joi.boolean(),
   downloadOnOpen: Joi.boolean().allow('confirm'),
   // post-upload check and retries; see core/transferTask
-  verifyUpload: Joi.string().valid('none', 'stat'),
+  verifyUpload: Joi.string().valid('none', 'stat', 'hash'),
   uploadRetries: Joi.number().integer().min(0),
 
   ignore: Joi.array()

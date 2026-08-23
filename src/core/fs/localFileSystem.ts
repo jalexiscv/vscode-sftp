@@ -1,7 +1,43 @@
 import * as fs from 'fs';
 import * as fse from 'fs-extra';
-import FileSystem, { FileEntry, FileStats, FileOption } from './fileSystem';
+import * as crypto from 'crypto';
+import FileSystem, {
+  FileEntry,
+  FileStats,
+  FileOption,
+  HashAlgorithm,
+} from './fileSystem';
+import Crc32 from './crc32';
 
+interface Digester {
+  update(chunk: Buffer): void;
+  digest(): string;
+}
+
+// crypto covers everything but crc32, which an FTP server may be the only
+// one to offer (XCRC)
+function createDigester(algorithm: HashAlgorithm): Digester {
+  if (algorithm === 'crc32') {
+    return new Crc32();
+  }
+
+  const hash = crypto.createHash(algorithm);
+  return {
+    update: chunk => hash.update(chunk),
+    digest: () => hash.digest('hex'),
+  };
+}
+
+/**
+ * The workspace side of every transfer: node's `fs` behind the FileSystem
+ * contract the remote implementations share, so the transfer code never has
+ * to know which end is local.
+ *
+ * Key lifecycle methods:
+ * - {@link get} / {@link put} stream a file in and out.
+ * - {@link hashFile} computes the local digest an upload is compared against,
+ *   in whichever algorithm the server could answer with.
+ */
 export default class LocalFileSystem extends FileSystem {
   constructor(pathResolver: any) {
     super(pathResolver);
@@ -56,6 +92,32 @@ export default class LocalFileSystem extends FileSystem {
 
   futimes(fd: number, atime: number, mtime: number): Promise<void> {
     return fse.futimes(fd, atime, mtime);
+  }
+
+  // the local side can answer any of them; sha256 is what it prefers when
+  // asked on its own
+  supportsHash(): Promise<HashAlgorithm | null> {
+    return Promise.resolve('sha256');
+  }
+
+  hashFile(path: string, algorithm: HashAlgorithm): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let digester: Digester;
+      try {
+        digester = createDigester(algorithm);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      // streamed, so a large file never has to fit in memory. A stream that
+      // fails can report it more than once (the read, then the close): keep
+      // listening or the second one would be an uncaught 'error'
+      const stream = fs.createReadStream(path);
+      stream.on('data', (chunk: Buffer) => digester.update(chunk));
+      stream.on('error', reject);
+      stream.once('end', () => resolve(digester.digest()));
+    });
   }
 
   get(path, option?): Promise<fs.ReadStream> {

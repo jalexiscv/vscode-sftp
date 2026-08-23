@@ -71,8 +71,8 @@
         "default": "confirm"
       },
       "verifyUpload": {
-        "enum": ["none", "stat"],
-        "description": "What to check on the server after each upload. \"stat\" requires the remote file size to match the local one (the bytes sent are always counted); \"none\" trusts the protocol acknowledgement only. A failed check is retried (see uploadRetries) and then reported as a failed upload.",
+        "enum": ["none", "stat", "hash"],
+        "description": "What to check on the server after each upload. \"stat\" requires the remote file size to match the local one (the bytes sent are always counted); \"hash\" additionally compares a digest of the remote file with the local one (SFTP: sha256sum/shasum/openssl/md5sum run over SSH, so the account needs a shell; FTP: XSHA256/XSHA1/XMD5/XCRC/HASH when the server advertises them) and falls back to \"stat\" with a warning when the server cannot compute one; \"none\" trusts the protocol acknowledgement only. A failed check is retried (see uploadRetries) and then reported as a failed upload.",
         "default": "stat"
       },
       "uploadRetries": {

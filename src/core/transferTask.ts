@@ -2,19 +2,26 @@ import { Readable, Transform, TransformCallback } from 'stream';
 import * as fileOperations from './fileBaseOperations';
 import CustomError from './customError';
 import { FileSystem, FileType } from './fs';
+import { HashAlgorithm } from './fs/fileSystem';
 import { Task } from './scheduler';
 import logger from '../logger';
 import { isNotFoundError } from '../helper';
 
 let hasWarnedModifedTimePermission = false;
+// remote file systems already told once that they cannot hash (one per connection)
+const hasWarnedHashUnavailable = new WeakSet<FileSystem>();
 
 export enum TransferDirection {
   LOCAL_TO_REMOTE = 'local ➞ remote',
   REMOTE_TO_LOCAL = 'remote ➞ local',
 }
 
-/** Post-upload checks a transfer can run; `hash` is planned, not offered yet. */
-export type VerifyUploadLevel = 'none' | 'stat';
+/**
+ * Post-upload checks a transfer can run: `stat` compares the remote size,
+ * `hash` also compares a digest and degrades to `stat` when the server cannot
+ * compute one.
+ */
+export type VerifyUploadLevel = 'none' | 'stat' | 'hash';
 
 export const DEFAULT_VERIFY_UPLOAD: VerifyUploadLevel = 'stat';
 export const DEFAULT_TRANSFER_RETRIES = 2;
@@ -50,9 +57,13 @@ export interface TransferOption {
 }
 
 export interface TransferVerification {
+  // the check that was actually run: a 'hash' request that degraded reports 'stat'
   level: VerifyUploadLevel;
   ok: boolean;
+  // why it failed, or why a 'hash' request was answered by 'stat'
   reason?: string;
+  // digest the file was compared with, when level is 'hash'
+  algorithm?: HashAlgorithm;
 }
 
 /**
@@ -370,10 +381,15 @@ export default class TransferTask implements Task {
       }
 
       // the final path is what gets checked, not the temp file
-      if (this._verifyLevel() === 'stat') {
-        await this._verifyUpload(target, expectedSize, mtimeApplied);
+      const level = this._verifyLevel();
+      if (level === 'none') {
+        this._verification = { level, ok: true };
       } else {
-        this._verification = { level: this._verifyLevel(), ok: true };
+        // 'hash' builds on the size check: a wrong size needs no digest
+        await this._verifyUpload(target, expectedSize, mtimeApplied);
+        if (level === 'hash') {
+          await this._verifyHash(target);
+        }
       }
 
     } finally {
@@ -493,8 +509,62 @@ export default class TransferTask implements Task {
     }
   }
 
-  private _verificationError(reason: string): TransferVerificationError {
-    this._verification = { level: this._verifyLevel(), ok: false, reason };
+  // the digest is the only check that sees the content. When the server
+  // cannot produce one, or fails to for this file, the upload is still as good
+  // as 'stat' found it, so the level degrades instead of the upload failing;
+  // only a digest that differs is a failure (and enters the retries)
+  private async _verifyHash(target: string) {
+    const targetFs = this._targetFs;
+    let algorithm: HashAlgorithm | null;
+    try {
+      algorithm = await targetFs.supportsHash();
+    } catch (error) {
+      algorithm = null;
+    }
+    if (!algorithm) {
+      this._degradeToStat('hash not available on this server, verified by size', true);
+      return;
+    }
+
+    let local: string;
+    let remote: string;
+    try {
+      [remote, local] = await Promise.all([
+        targetFs.hashFile(target, algorithm),
+        this._srcFs.hashFile(this._srcFsPath, algorithm),
+      ]);
+    } catch (error) {
+      this._degradeToStat(`hash check failed (${error.message}), verified by size`, false);
+      return;
+    }
+
+    if (remote !== local) {
+      throw this._verificationError(
+        `hash mismatch (${algorithm}: local ${local.slice(0, 8)}…, remote ${remote.slice(0, 8)}…)`,
+        { algorithm }
+      );
+    }
+    this._verification = { level: 'hash', ok: true, algorithm };
+  }
+
+  // the size check already passed when this is called; `once` keeps a server
+  // that cannot hash at all from warning on every file of the batch
+  private _degradeToStat(reason: string, once: boolean) {
+    this._verification = { level: 'stat', ok: true, reason };
+    if (once) {
+      if (hasWarnedHashUnavailable.has(this._targetFs)) {
+        return;
+      }
+      hasWarnedHashUnavailable.add(this._targetFs);
+    }
+    logger.warn(`[transfer] ${this.localFsPath}: ${reason}`);
+  }
+
+  private _verificationError(
+    reason: string,
+    extra: Partial<TransferVerification> = {}
+  ): TransferVerificationError {
+    this._verification = { level: this._verifyLevel(), ok: false, reason, ...extra };
     return new TransferVerificationError(reason, this.localFsPath);
   }
 
@@ -503,7 +573,11 @@ export default class TransferTask implements Task {
     if (this._transferDirection !== TransferDirection.LOCAL_TO_REMOTE) {
       return 'none';
     }
-    return this._TransferOption.verifyUpload === 'none' ? 'none' : DEFAULT_VERIFY_UPLOAD;
+    const { verifyUpload } = this._TransferOption;
+    if (verifyUpload === 'none' || verifyUpload === 'hash') {
+      return verifyUpload;
+    }
+    return DEFAULT_VERIFY_UPLOAD;
   }
 
   private _maxRetries(): number {

@@ -4,9 +4,12 @@ import FileSystem, {
   FileType,
   FileStats,
   FileOption,
+  HashAlgorithm,
+  isHashDigest,
 } from './fileSystem';
 import RemoteFileSystem from './remoteFileSystem';
 import { SSHClient } from '../remote-client';
+import logger from '../../logger';
 
 type FileHandle = Buffer;
 
@@ -28,7 +31,69 @@ function toSimpleFileMode(mode: number) {
   return mode & parseInt('777', 8); // tslint:disable-line:no-bitwise
 }
 
+/**
+ * A digest tool that may exist on the server. `probe` runs it against
+ * /dev/null, so a tool is only chosen when it is there *and* its output
+ * parses to the digest of the empty input; `parse` pulls the hex out of one
+ * line of output.
+ */
+interface HashCommand {
+  algorithm: HashAlgorithm;
+  command: string;
+  emptyDigest: string;
+  parse(stdout: string): string;
+}
+
+// GNU coreutils >= 9 prefix the line with a backslash when the file name
+// needed escaping; shasum and BusyBox print the digest first as well
+function firstToken(stdout: string): string {
+  return stdout.trim().split(/\s+/)[0].replace(/^\\/, '');
+}
+
+// `SHA256(path)= hex` (OpenSSL 1.x, LibreSSL) or `SHA2-256(path)= hex` (3.x)
+function afterEquals(stdout: string): string {
+  const index = stdout.lastIndexOf('= ');
+  return index === -1 ? '' : stdout.slice(index + 2).trim();
+}
+
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
+
+// tried in this order, once per connection; sha256 wherever a tool gives it
+// (coreutils, perl's shasum, openssl) and md5 only as a last resort
+export const SFTP_HASH_COMMANDS: HashCommand[] = [
+  { algorithm: 'sha256', command: 'sha256sum', emptyDigest: EMPTY_SHA256, parse: firstToken },
+  { algorithm: 'sha256', command: 'shasum -a 256', emptyDigest: EMPTY_SHA256, parse: firstToken },
+  { algorithm: 'sha256', command: 'openssl dgst -sha256', emptyDigest: EMPTY_SHA256, parse: afterEquals },
+  { algorithm: 'md5', command: 'md5sum', emptyDigest: EMPTY_MD5, parse: firstToken },
+];
+
+// single quotes keep every shell metacharacter literal; an embedded quote
+// closes, escapes and reopens them
+export function quoteForShell(path: string): string {
+  return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Remote file system over SFTP, speaking to the ssh2 sftp channel that
+ * SSHClient opened. Paths are the server's own; times go through
+ * `remoteTimeOffsetInHours` on the way in and out.
+ *
+ * Besides the SFTP protocol it can lean on the SSH shell, when the account
+ * has one, to verify an upload by digest ({@link supportsHash} probes the
+ * usual checksum tools once per connection; {@link hashFile} runs the one
+ * found). Without a shell both degrade to "not available" instead of failing.
+ *
+ * Key lifecycle methods:
+ * - {@link get} / {@link put} stream files through the sftp channel.
+ * - {@link supportsHash} / {@link hashFile} answer the hash level of the
+ *   upload verification.
+ */
 export default class SFTPFileSystem extends RemoteFileSystem {
+  // undefined: not probed yet; null: no usable tool on this server
+  private _hashCommand: HashCommand | null | undefined;
+  private _hashProbe: Promise<HashAlgorithm | null> | undefined;
+
   get sftp() {
     return this.getClient().getFsClient();
   }
@@ -397,6 +462,70 @@ export default class SFTPFileSystem extends RemoteFileSystem {
         }
       );
     });
+  }
+
+  /**
+   * First checksum tool of {@link SFTP_HASH_COMMANDS} the server runs, probed
+   * once per connection (parallel uploads share the probe). A server that
+   * refuses `exec` altogether (SFTP-only accounts, chrooted internal-sftp)
+   * answers null on the first attempt and is never asked again.
+   */
+  supportsHash(): Promise<HashAlgorithm | null> {
+    if (this._hashCommand !== undefined) {
+      return Promise.resolve(this._hashCommand ? this._hashCommand.algorithm : null);
+    }
+    if (!this._hashProbe) {
+      this._hashProbe = this._probeHashCommand().then(command => {
+        this._hashCommand = command;
+        this._hashProbe = undefined;
+        return command ? command.algorithm : null;
+      });
+    }
+    return this._hashProbe;
+  }
+
+  async hashFile(path: string, algorithm: HashAlgorithm): Promise<string> {
+    await this.supportsHash();
+    const command = this._hashCommand;
+    if (!command || command.algorithm !== algorithm) {
+      throw new Error(`${algorithm} is not available on this server`);
+    }
+
+    const result = await this._ssh.exec(`${command.command} ${quoteForShell(path)}`);
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim();
+      throw new Error(`${command.command} exited with ${result.code}${detail ? ': ' + detail : ''}`);
+    }
+
+    const digest = command.parse(result.stdout).toLowerCase();
+    if (!isHashDigest(digest, algorithm)) {
+      throw new Error(`unexpected ${command.command} output: ${result.stdout.trim().slice(0, 80)}`);
+    }
+    return digest;
+  }
+
+  private get _ssh(): SSHClient {
+    return this.getClient() as SSHClient;
+  }
+
+  // each tool hashes /dev/null: present and parsable, or on to the next one.
+  // An exec the server refuses ends the probe there and then
+  private async _probeHashCommand(): Promise<HashCommand | null> {
+    for (const candidate of SFTP_HASH_COMMANDS) {
+      let result;
+      try {
+        result = await this._ssh.exec(`${candidate.command} /dev/null`);
+      } catch (error) {
+        logger.debug(`[sftp] exec not available, hash verification disabled: ${error.message}`);
+        return null;
+      }
+
+      if (result.code === 0 && candidate.parse(result.stdout).toLowerCase() === candidate.emptyDigest) {
+        logger.debug(`[sftp] hashing uploads with ${candidate.command}`);
+        return candidate;
+      }
+    }
+    return null;
   }
 
   private _put(

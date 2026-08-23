@@ -8,6 +8,18 @@ import CustomError from '../customError';
 
 let MAX_OPEN_FD_NUM = 222;
 
+// a remote command that has not finished by then is closed and reported as failed
+const EXEC_TIMEOUT_MS = 30 * 1000;
+
+/** What a command run through {@link SSHClient.exec} left behind. */
+export interface ExecResult {
+  // exit status, or null when the server sent none (killed by a signal,
+  // channel closed without an exit-status request)
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
 /**
  * SSH/SFTP transport for the extension, wrapping an ssh2 Client.
  *
@@ -19,6 +31,7 @@ let MAX_OPEN_FD_NUM = 222;
  *
  * Key lifecycle methods:
  * - {@link _doConnect} resolves hops/keys and opens the SFTP channel.
+ * - {@link exec} runs one command on the host the SFTP channel talks to.
  * - {@link end} tears down this client and any hopping clients.
  */
 export default class SSHClient extends RemoteClient {
@@ -368,6 +381,91 @@ export default class SSHClient extends RemoteClient {
           resolve(stream);
         }
       );
+    });
+  }
+
+  /**
+   * Runs `command` on the server this client is connected to and resolves
+   * once its channel closes, with the exit code and whatever was written to
+   * stdout and stderr. With `hop`, `_client` is the connection of the last
+   * hop (the intermediate ones only forward its socket), so the command runs
+   * where the SFTP channel does.
+   *
+   * A non-zero exit code is an answer, not a rejection. It rejects when the
+   * server refuses the exec request (SFTP-only accounts, no shell), when the
+   * client is not connected, or when the command outlives `timeout` ms; in
+   * the latter case the channel is closed so nothing is left open.
+   */
+  exec(command: string, timeout: number = EXEC_TIMEOUT_MS): Promise<ExecResult> {
+    return new Promise<ExecResult>((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timer | undefined;
+      let channel: any;
+      const settle = (fn: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        fn();
+      };
+
+      // armed before exec() so a callback that answers synchronously (a
+      // refused request, a client not connected) clears it instead of
+      // leaving a dangling 30 s timer; unref'd so it never holds the process
+      timer = setTimeout(() => {
+        settle(() => {
+          if (channel && typeof channel.close === 'function') {
+            try {
+              channel.close();
+            } catch (_error) {
+              // the channel is gone already; nothing to release
+            }
+          }
+          reject(new Error(`exec timed out after ${timeout} ms: ${command}`));
+        });
+      }, timeout);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+
+      try {
+        this._client.exec(command, (err, stream) => {
+          if (err) {
+            settle(() => reject(err));
+            return;
+          }
+
+          channel = stream;
+          const stdout: Buffer[] = [];
+          const stderr: Buffer[] = [];
+          let code: number | null = null;
+          stream.on('data', chunk => stdout.push(chunk));
+          stream.stderr.on('data', chunk => stderr.push(chunk));
+          // ssh2 emits 'exit' with the status when the server sends one and
+          // repeats it on 'close'; a signal or a plain close leave it null
+          stream.on('exit', exitCode => {
+            code = typeof exitCode === 'number' ? exitCode : null;
+          });
+          stream.on('close', closeCode => {
+            if (typeof closeCode === 'number') {
+              code = closeCode;
+            }
+            settle(() =>
+              resolve({
+                code,
+                stdout: Buffer.concat(stdout).toString('utf8'),
+                stderr: Buffer.concat(stderr).toString('utf8'),
+              })
+            );
+          });
+          stream.on('error', error => settle(() => reject(error)));
+        });
+      } catch (error) {
+        settle(() => reject(error));
+      }
     });
   }
 

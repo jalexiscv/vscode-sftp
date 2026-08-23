@@ -39,6 +39,22 @@ export type FileEntry = FileStats & {
   name: string;
 };
 
+/** Digests a file system can compute, strongest first. */
+export type HashAlgorithm = 'sha256' | 'sha1' | 'md5' | 'crc32';
+
+/** Hex digest length of each algorithm; what a server answers is checked against it. */
+export const HASH_HEX_LENGTH: { [algorithm in HashAlgorithm]: number } = {
+  sha256: 64,
+  sha1: 40,
+  md5: 32,
+  crc32: 8,
+};
+
+/** True for a lowercase hex digest of the length `algorithm` produces. */
+export function isHashDigest(value: string, algorithm: HashAlgorithm): boolean {
+  return new RegExp(`^[0-9a-f]{${HASH_HEX_LENGTH[algorithm]}}$`).test(value);
+}
+
 export default abstract class FileSystem {
   static getFileTypecharacter(stat: fs.Stats): FileType {
     if (stat.isDirectory()) {
@@ -105,6 +121,26 @@ export default abstract class FileSystem {
    */
   statMtime(path: string): Promise<number | undefined> {
     return this.lstat(path).then(stat => stat.mtime);
+  }
+
+  /**
+   * Strongest digest this file system can compute for its files, or `null`
+   * when it cannot compute any (no shell on the SSH server, no hash command
+   * in FTP's FEAT). Implementations probe once and cache the answer for the
+   * life of the connection; the default is "no".
+   */
+  supportsHash(): Promise<HashAlgorithm | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * Lowercase hex digest of `path` with `algorithm`, which should be the one
+   * {@link supportsHash} reported. Rejects when the file system cannot hash
+   * (the default) or when the server's answer cannot be trusted; the caller
+   * decides whether that degrades to a weaker check or fails.
+   */
+  hashFile(_path: string, _algorithm: HashAlgorithm): Promise<string> {
+    return Promise.reject(new Error('hash not supported'));
   }
   abstract readlink(path: string): Promise<string>;
   abstract symlink(targetPath: string, path: string): Promise<void>;
