@@ -36,12 +36,23 @@ export const ETRANSFER_FAILED = 'ETRANSFER_FAILED';
 // how many failed files the aggregated message names before "and N more"
 const MAX_NAMED_FAILURES = 5;
 
+// a message stands in for a missing code; long ones are cut so the summary
+// stays one line
+const MAX_REASON_LENGTH = 80;
+
 function reasonOf(error: any): string {
-  if (error && error.code !== undefined && error.code !== null && error.code !== '') {
-    return String(error.code);
+  // only a textual code (EACCES, ECONNRESET) says more than the message: ssh2
+  // reports SFTP status codes as bare numbers, and "a.txt (3)" tells nothing
+  if (error && typeof error.code === 'string' && error.code !== '') {
+    return error.code;
   }
 
-  return error && error.message ? error.message : String(error);
+  const message = String(error && error.message ? error.message : error)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return message.length > MAX_REASON_LENGTH
+    ? message.slice(0, MAX_REASON_LENGTH - 3) + '...'
+    : message;
 }
 
 /**
