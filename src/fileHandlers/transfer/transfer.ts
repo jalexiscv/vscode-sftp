@@ -473,9 +473,20 @@ async function _sync(
 
 export { TransferOption, SyncOption, TransferDirection };
 
+/** Per-call knobs of {@link transfer}, on top of the transfer options themselves. */
+export interface TransferCallOptions {
+  // whether the parent directory of a file target is ensured (and chmod'ed
+  // per dirPerm) before collecting its task; true when omitted. A caller that
+  // already ensured every directory once for a whole batch (the plan runner)
+  // turns it off to save a round trip per file. Folders ensure their own
+  // directory regardless.
+  ensureDirExist?: boolean;
+}
+
 export async function transfer(
   config: TransferHandleConfig<TransferOption>,
-  collect: (t: TransferTask) => void
+  collect: (t: TransferTask) => void,
+  options?: TransferCallOptions
 ) {
   const stat = await config.srcFs.lstat(config.srcFsPath);
   const transferOption = {
@@ -487,7 +498,8 @@ export async function transfer(
     filePerm: config?.filePerm,
     dirPerm: config?.dirPerm,
   };
-  await transferWithType({ ...config, transferOption, ensureDirExist: true }, stat.type, collect);
+  const ensureDirExist = options && options.ensureDirExist === false ? false : true;
+  await transferWithType({ ...config, transferOption, ensureDirExist }, stat.type, collect);
 }
 
 export async function sync(
