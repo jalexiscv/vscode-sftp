@@ -9,6 +9,9 @@ import {
   formatReport,
   onDidChange,
   clearPlans,
+  removePlan,
+  formatSummary,
+  formatBytes,
   diffAgainstIndex,
   UploadPlanItemDraft,
   __resetForTest,
@@ -121,6 +124,29 @@ describe('uploadPlan', () => {
       clearPlans();
       expect(getPlans()).toEqual([]);
     });
+
+    test('removePlan drops just that plan and notifies', () => {
+      const first = createPlan(draft([]), at);
+      const second = createPlan(draft([]), at);
+      const third = createPlan(draft([]), at);
+      const listener = jest.fn();
+      onDidChange(listener);
+
+      expect(removePlan(second.id)).toBe(true);
+      expect(getPlans().map(p => p.id)).toEqual([third.id, first.id]);
+      expect(getPlan(second.id)).toBeUndefined();
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    test('removePlan of an unknown id is a no-op that says so', () => {
+      createPlan(draft([]), at);
+      const listener = jest.fn();
+      onDidChange(listener);
+
+      expect(removePlan('nope')).toBe(false);
+      expect(getPlans()).toHaveLength(1);
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateItem', () => {
@@ -216,6 +242,42 @@ describe('uploadPlan', () => {
         stale: 1,
         bytes: 210,
       });
+    });
+  });
+
+  describe('formatSummary', () => {
+    test('always shows verified, failed and pending, the rest only when non-zero', () => {
+      const plan = createPlan(draft([item('a.php'), item('b.php'), item('c.php')]), at);
+      expect(formatSummary(summarize(plan))).toBe('3 files — 0 verified, 0 failed, 3 pending');
+
+      updateItem(plan.id, local('a.php'), { status: 'verified' });
+      updateItem(plan.id, local('b.php'), { status: 'uploading' });
+      updateItem(plan.id, local('c.php'), { status: 'skipped' });
+      expect(formatSummary(summarize(plan))).toBe(
+        '3 files — 1 verified, 0 failed, 0 pending, 1 uploading, 1 skipped'
+      );
+
+      updateItem(plan.id, local('b.php'), { status: 'stale' });
+      expect(formatSummary(summarize(plan))).toBe(
+        '3 files — 1 verified, 0 failed, 0 pending, 1 skipped, 1 stale'
+      );
+    });
+
+    test('uses the singular for one file', () => {
+      const plan = createPlan(draft([item('a.php')]), at);
+      expect(formatSummary(summarize(plan))).toBe('1 file — 0 verified, 0 failed, 1 pending');
+    });
+  });
+
+  describe('formatBytes', () => {
+    test('picks the unit and the precision', () => {
+      expect(formatBytes(0)).toBe('0 B');
+      expect(formatBytes(1023)).toBe('1023 B');
+      expect(formatBytes(1024)).toBe('1.0 KB');
+      expect(formatBytes(1536)).toBe('1.5 KB');
+      expect(formatBytes(100 * 1024)).toBe('100 KB');
+      expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
+      expect(formatBytes(2 * 1024 * 1024 * 1024)).toBe('2.0 GB');
     });
   });
 
