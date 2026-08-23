@@ -12,16 +12,28 @@ jest.mock('vscode', () => {
   }
   return new Proxy({ Uri }, { get: (target, key) => (key in target ? target[key] : Nothing) });
 });
-// the rebuilt retries call the handlers; here they only need to be observable
-jest.mock('../../fileHandlers', () => ({
-  uploadFile: jest.fn(() => Promise.resolve()),
-  downloadFile: jest.fn(() => Promise.resolve()),
-}));
-
 import * as path from 'path';
 import { vol } from 'memfs';
-import { uploadFile, downloadFile } from '../../fileHandlers';
 import * as activityLog from '../activityLog';
+
+// the rebuilt retries call the handlers; here they only need to be observable.
+// Production installs the resolver from extension.ts (the log must not import
+// the handlers itself), so the test installs an equivalent one.
+const uploadFile = jest.fn((_uri: any) => Promise.resolve());
+const downloadFile = jest.fn((_uri: any) => Promise.resolve());
+activityLog.setRetryResolver(entry => {
+  if (!entry.localPath) {
+    return undefined;
+  }
+  const uri = { fsPath: entry.localPath };
+  if (entry.kind === activityLog.ActivityKind.Upload) {
+    return () => uploadFile(uri);
+  }
+  if (entry.kind === activityLog.ActivityKind.Download) {
+    return () => downloadFile(uri);
+  }
+  return undefined;
+});
 
 const { ActivityKind, ActivityStatus } = activityLog;
 

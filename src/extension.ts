@@ -19,7 +19,13 @@ import { getAllFileService, createFileService, disposeFileService } from './modu
 import { getWorkspaceFolders, setContextValue } from './host';
 import RemoteExplorer from './modules/remoteExplorer';
 import ActivityView from './modules/activityView';
-import { initActivityLog, flushActivityLog } from './modules/activityLog';
+import {
+  ActivityKind,
+  initActivityLog,
+  flushActivityLog,
+  setRetryResolver,
+} from './modules/activityLog';
+import { uploadFile, downloadFile } from './fileHandlers';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -69,6 +75,21 @@ export async function activate(context: vscode.ExtensionContext) {
   initSyncIndex({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
   // before the view and the services exist: the loaded entries must be there
   // when the tree first renders, and nothing may be recorded before the load
+  // the log can't import the handlers itself (they import it back), so the
+  // composition root hands it the way to rebuild a persisted retry
+  setRetryResolver(entry => {
+    const localPath = entry.localPath;
+    if (!localPath) {
+      return undefined;
+    }
+    if (entry.kind === ActivityKind.Upload) {
+      return () => uploadFile(vscode.Uri.file(localPath));
+    }
+    if (entry.kind === ActivityKind.Download) {
+      return () => downloadFile(vscode.Uri.file(localPath));
+    }
+    return undefined;
+  });
   await initActivityLog({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
 
   try {

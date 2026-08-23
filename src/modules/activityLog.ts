@@ -2,10 +2,6 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
-// used at call time only, to rebuild the retry of a persisted entry:
-// fileHandlers imports serviceManager, which imports this module back, and the
-// cycle resolves as long as neither side touches the other while loading
-import { uploadFile, downloadFile } from '../fileHandlers';
 
 /**
  * Record of every transfer, deletion and rename the extension performs,
@@ -81,7 +77,23 @@ export type ActivityDraft = Omit<ActivityEntry, 'id' | 'startedAt' | 'status'> &
 };
 
 /** What goes to disk: an entry minus its retry thunk. */
-type PersistedEntry = Omit<ActivityEntry, 'retry'>;
+export type PersistedEntry = Omit<ActivityEntry, 'retry'>;
+
+/**
+ * Rebuilds the retry of an entry read back from disk, or returns undefined
+ * when the operation can't be replayed. Installed by the extension's
+ * activation code: this module must not import the file handlers itself,
+ * because they import it back (through createFileHandler) and the cycle would
+ * leave one side half-initialised at load time.
+ */
+export type RetryResolver = (entry: PersistedEntry) => (() => Promise<void>) | undefined;
+
+let retryResolver: RetryResolver | null = null;
+
+/** Sets the resolver used by {@link initActivityLog} to revive retries; call before it. */
+export function setRetryResolver(resolver: RetryResolver | null) {
+  retryResolver = resolver;
+}
 
 interface ActivityLogFile {
   version: number;
@@ -397,12 +409,10 @@ function revive(persisted: PersistedEntry): ActivityEntry {
     entry.error = INTERRUPTED_ERROR;
   }
 
-  const localPath = entry.localPath;
-  if (localPath) {
-    if (entry.kind === ActivityKind.Upload) {
-      entry.retry = () => uploadFile(vscode.Uri.file(localPath));
-    } else if (entry.kind === ActivityKind.Download) {
-      entry.retry = () => downloadFile(vscode.Uri.file(localPath));
+  if (retryResolver) {
+    const retry = retryResolver(persisted);
+    if (retry) {
+      entry.retry = retry;
     }
   }
 
