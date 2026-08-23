@@ -127,10 +127,10 @@ async function doDelete() {
     return;
   }
 
-  // symmetric to doUpload: a `sync remote ➞ local` with `syncOption.delete`
-  // removes local files as it goes and a download replaces them, so mirroring
-  // those events back would destroy what was just transferred. Both directions
-  // matter here, unlike in doUpload.
+  // symmetric to the change collector's guard: a `sync remote ➞ local` with
+  // `syncOption.delete` removes local files as it goes and a download replaces
+  // them, so mirroring those events back would destroy what was just
+  // transferred. Both directions matter here, unlike for uploads.
   const runningTasks = getRunningTransformTasks();
   const targets = dropDescendants(files).filter(uri => {
     if (runningTasks.find(task => isSamePath(task.localFsPath, uri.fsPath))) {
