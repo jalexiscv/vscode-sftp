@@ -8,6 +8,8 @@
 - [How do I upload content inside a folder, but not the folder itself?](#how-do-i-upload-content-inside-a-folder-but-not-the-folder-itself)
 - [How can I upload files as root?](#how-can-i-upload-files-as-root)
 - [Automatically sync both ways without user interaction](#automatically-sync-both-ways-without-user-interaction)
+- [How do I upload files that changed while VS Code was closed?](#how-do-i-upload-files-that-changed-while-vs-code-was-closed)
+- [How do I know an upload really succeeded?](#how-do-i-know-an-upload-really-succeeded)
 - [Show dotfiles/hidden files in remote explorer](#show-dotfileshidden-files-in-remote-explorer)
 
 ## Error: Failure
@@ -143,7 +145,7 @@ See [vscode-sftp issue #136](https://github.com/Natizyskunk/vscode-sftp/issues/1
   "port": 22,
   "username": "user1",
   "remotePath": "/folder1/folder2/folder3",
-  "uploadOnSave": false, // Set to false if watcher `autoUpload` is set to true & `files` is set to "**/*".
+  "uploadOnSave": true, // Since 1.24.0 this can stay on: saves and watcher events share one change collector, so a save is uploaded once.
   "watcher": {
     "files": "**/*",
     "autoUpload": true,
@@ -154,6 +156,18 @@ See [vscode-sftp issue #136](https://github.com/Natizyskunk/vscode-sftp/issues/1
   },
 }
 ```
+
+Since 1.24.0 a batch of more than `externalChanges.confirmThreshold` files (20 by default), or one caused by a git operation such as a checkout, asks for confirmation before uploading — see [externalChanges](docs/configuration.md#externalchanges). Deletions go through the safeguards of [deleteRemoteOnLocalDelete](docs/configuration.md#deleteremoteonlocaldelete).
+
+## How do I upload files that changed while VS Code was closed?
+
+Nothing to configure. Since 1.24.0 the extension keeps a **sync index** of what was last uploaded and verified, file by file, and compares the local tree with it when it activates, when `sftp.json` is reloaded, when auto sync is resumed and when the window regains focus after a while. Whatever changed since its last verified upload — a `git pull` in a terminal, a code generator, edits made with the window closed — is uploaded through an upload plan; above `externalChanges.confirmThreshold` files (20 by default), or when git moved HEAD, you are asked first. You can also run it by hand with `SFTP: Scan for External Changes`, and preview it with `SFTP: Preview Upload (Dry Run)`.
+
+On a fresh install the index is empty, so the first automatic scan plans nothing and offers `Build index now`; accept it (or run `SFTP: Rebuild Sync Index`) once and every verified upload keeps the index current from then on. See [externalChanges](docs/configuration.md#externalchanges) and [External changes and upload verification](docs/configuration.md#external-changes-and-upload-verification).
+
+## How do I know an upload really succeeded?
+
+Every upload is verified after the protocol acknowledges it: the bytes sent are counted against the local size and, with the default `verifyUpload: "stat"`, the remote size must match exactly (`SIZE` over FTP). `verifyUpload: "hash"` additionally compares a digest of the remote file with the local one (over SSH with `sha256sum`/`shasum`/`openssl`/`md5sum`, over FTP with `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH`) and falls back to `stat` when the server cannot compute one. A failed check is retried (`uploadRetries`, 2 by default) and then shown as a failed upload in the **SFTP Activity** view, with its reason and a `Retry`, and counted in the `✗N` marker of the status bar. The activity log survives a window reload, and `SFTP: Export Last Upload Report` writes the result of the last batch as Markdown. See [verifyUpload](docs/configuration.md#verifyupload).
 
 ## Show dotfiles/hidden files in remote explorer
 
