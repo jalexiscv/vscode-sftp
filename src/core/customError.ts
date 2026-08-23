@@ -1,6 +1,11 @@
 import * as path from 'path';
 import TransferTask from './transferTask';
 
+/**
+ * An Error with a machine-readable `code`, so callers can branch on what went
+ * wrong without parsing messages. The remote clients raise it for a cancelled
+ * connection; the transfer handlers for a failed batch.
+ */
 class CustomError extends Error {
   code: string;
 
