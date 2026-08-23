@@ -5,10 +5,12 @@ import app from '../app';
 import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
 import { FileService, ServiceConfig, UResource, TransferDirection, FileSystem } from '../core';
+import { getOpenTextDocuments } from '../host';
 import { transfer } from '../fileHandlers/transfer/transfer';
 import { handleCtxFromUri } from '../fileHandlers';
 import { refreshRemoteExplorer } from '../fileHandlers/shared';
 import { getFileService } from './serviceManager';
+import { rememberSkipped } from './syncIndexFeeder';
 import {
   UploadPlan,
   UploadPlanItem,
@@ -36,17 +38,27 @@ import {
  *   selection with {@link RunPlanOptions.itemPaths};
  * - a file that vanished locally is `skipped`, one whose size or mtime moved
  *   before the upload just gets its item refreshed (it had not been sent yet);
+ * - in a plan the user did not trigger (anything but `command`), a file that
+ *   is open in the editor with unsaved changes is `skipped`: the transfer
+ *   layer would save the document to upload it, and a startup scan must not
+ *   write a hot-exit draft to disk and ship it;
  * - a file rewritten *during* its upload is `stale` and re-run once; if it
  *   changes again it stays `stale` for a later run;
  * - a plan built under another profile is not run against the active one (its
  *   items fail with a clear message) — the index would otherwise record the
  *   upload under the wrong destination;
+ * - `Cancel All Transfers` puts every item whose task did not finish — not
+ *   only the ones that were running — back to `pending`, so the plan closes
+ *   cleanly and can be run again;
+ * - the remote parent directory of each item is ensured once per directory
+ *   and per run, not once per file;
  * - {@link runPlan} always resolves with the summary; a second call for a plan
  *   already running waits for that run instead of starting another.
  *
  * Key lifecycle methods:
  * - {@link runPlan} runs (a subset of) a plan.
- * - {@link skipItem} takes an item out of a plan.
+ * - {@link skipItem} takes an item out of a plan and remembers the skip in the
+ *   sync index.
  * - {@link isPlanRunning} / {@link onDidChangeRunning} expose the running state
  *   to the view.
  * - {@link whenIdle} resolves once no plan is running (deactivate waits on it).
@@ -138,13 +150,55 @@ function differs(item: UploadPlanItem, stat: LocalStat): boolean {
 }
 
 /**
+ * Whether `localPath` is open in the editor with unsaved changes. The transfer
+ * layer saves such a document before uploading it ("save before upload"),
+ * which is right for a command the user just ran and wrong for a plan that
+ * runs on its own: a draft restored by hot exit at startup would be written to
+ * disk and uploaded without anyone asking for it.
+ */
+function hasUnsavedChanges(localPath: string): boolean {
+  let documents: ReturnType<typeof getOpenTextDocuments>;
+  try {
+    documents = getOpenTextDocuments();
+  } catch (error) {
+    // no editor host (tests, a headless run): nothing can be dirty
+    return false;
+  }
+  if (!Array.isArray(documents)) {
+    return false;
+  }
+  return documents.some(
+    document =>
+      Boolean(document) &&
+      typeof document.fileName === 'string' &&
+      samePath(document.fileName, localPath) &&
+      !document.isClosed &&
+      document.isDirty === true
+  );
+}
+
+/**
  * The pre-flight check of a run: a missing file is skipped, a file that moved
  * on since the plan was built is refreshed (it was never uploaded, so it is not
- * stale). Returns the items that are still going.
+ * stale), and — unless the user ran the plan as a command — a file with unsaved
+ * changes in the editor is skipped rather than saved behind their back.
+ * Returns the items that are still going.
  */
 async function prepareItems(plan: UploadPlan, items: UploadPlanItem[]): Promise<UploadPlanItem[]> {
   const ready: UploadPlanItem[] = [];
+  const automatic = plan.source !== 'command';
   for (const item of items) {
+    if (automatic && hasUnsavedChanges(item.localPath)) {
+      logger.info(
+        `[plan ${plan.id}] ${item.localPath} skipped: unsaved changes in the editor`
+      );
+      updateItem(plan.id, item.localPath, {
+        status: 'skipped',
+        error: 'unsaved changes in the editor',
+      });
+      continue;
+    }
+
     let stat: LocalStat | null;
     try {
       stat = await statLocal(item.localPath);
@@ -256,6 +310,29 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     remote: { host: config.host, port: config.port },
   };
 
+  // One ensureDir per distinct remote directory for the whole batch: a plan of
+  // 400 files in a dozen folders used to cost 400 mkdir round trips (each a
+  // failed mkdir plus an lstat over SFTP). The promise is cached, so the items
+  // of one folder collected in parallel share the same call.
+  const ensuredDirs = new Map<string, Promise<void>>();
+  const ensureRemoteDir = (dir: string): Promise<void> => {
+    let ensured = ensuredDirs.get(dir);
+    if (!ensured) {
+      ensured = remoteFs.ensureDir(dir).then(() => {
+        if (!config.dirPerm) {
+          return;
+        }
+        // what transferWithType does after creating the directory; non-fatal,
+        // FTP servers commonly refuse SITE CHMOD
+        return remoteFs
+          .chmod(dir, parseInt(String(config.dirPerm), 8))
+          .catch(error => logger.warn(`chmod ${dir} failed: ${error.message}`));
+      });
+      ensuredDirs.set(dir, ensured);
+    }
+    return ensured;
+  };
+
   await mapWithConcurrency(items, COLLECT_CONCURRENCY, async item => {
     try {
       // resolved against the live config: remotePath may have changed since
@@ -264,6 +341,8 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
       if (target.remoteFsPath !== item.remotePath) {
         updateItem(plan.id, item.localPath, { remotePath: target.remoteFsPath });
       }
+
+      await ensureRemoteDir(remoteFs.pathResolver.dirname(target.remoteFsPath));
 
       let collected = false;
       await transfer(
@@ -281,7 +360,8 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
           collected = true;
           scheduler.add(task);
           itemsByTaskPath.set(pathKey(task.localFsPath), item);
-        }
+        },
+        { ensureDirExist: false }
       );
 
       if (!collected) {
@@ -296,10 +376,14 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
 
   const result = await scheduler.run();
   const verified: UploadPlanItem[] = [];
+  // items whose task reported an outcome; whatever is still "uploading"
+  // afterwards had no task run at all (see below)
+  const settled = new Set<UploadPlanItem>();
 
   result.succeeded.forEach(task => {
     const item = itemsByTaskPath.get(pathKey(task.localFsPath));
     if (item) {
+      settled.add(item);
       updateItem(plan.id, item.localPath, {
         status: 'verified',
         attempts: task.attempts,
@@ -311,6 +395,7 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
   result.failed.forEach(({ task, error }) => {
     const item = itemsByTaskPath.get(pathKey(task.localFsPath));
     if (item) {
+      settled.add(item);
       updateItem(plan.id, item.localPath, {
         status: 'failed',
         attempts: task.attempts,
@@ -321,8 +406,18 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
   result.cancelled.forEach(task => {
     const item = itemsByTaskPath.get(pathKey(task.localFsPath));
     if (item) {
+      settled.add(item);
       // the user's choice, not an outcome: the item is due again
       updateItem(plan.id, item.localPath, { status: 'pending', attempts: task.attempts });
+    }
+  });
+  // `Cancel All Transfers` empties the queue without a task.done per queued
+  // task (and a scheduler already stopped ignores add()): those items would
+  // otherwise stay "uploading" for ever, the plan never closing and never
+  // runnable again. They never started, so they are simply due again.
+  items.forEach(item => {
+    if (item.status === 'uploading' && !settled.has(item)) {
+      updateItem(plan.id, item.localPath, { status: 'pending' });
     }
   });
 
@@ -480,7 +575,12 @@ export function runPlan(planId: string, options: RunPlanOptions = {}): Promise<P
   return run;
 }
 
-/** Takes a pending, failed or stale item out of the plan. */
+/**
+ * Takes a pending, failed or stale item out of the plan, and remembers in the
+ * sync index that this version was declined, so the next scan does not plan
+ * it again until the file changes. The index write is best effort: it never
+ * delays or fails the skip itself.
+ */
 export function skipItem(planId: string, localPath: string): void {
   const plan = getPlan(planId);
   if (!plan) {
@@ -491,6 +591,13 @@ export function skipItem(planId: string, localPath: string): void {
     return;
   }
   updateItem(planId, localPath, { status: 'skipped', error: 'skipped by user' });
+
+  const service: FileService | undefined = getFileService(Uri.file(item.localPath));
+  if (service) {
+    rememberSkipped(service, [item]).catch(error =>
+      logger.debug(`[plan ${planId}] cannot remember the skip of ${item.localPath}: ${error.message}`)
+    );
+  }
 }
 
 export function isPlanRunning(planId: string): boolean {

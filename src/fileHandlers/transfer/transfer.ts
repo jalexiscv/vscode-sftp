@@ -463,10 +463,15 @@ async function _sync(
 
 export { TransferOption, SyncOption, TransferDirection };
 
+export interface TransferCallOptions {
+  ensureDirExist?: boolean; // default true
+}
+
 export async function transfer(
   config: TransferHandleConfig<TransferOption>,
-  collect: (t: TransferTask) => void
-) {
+  collect: (t: TransferTask) => void,
+  options?: TransferCallOptions
+): Promise<void> {
   const stat = await config.srcFs.lstat(config.srcFsPath);
   const transferOption = {
     ...config.transferOption,
@@ -477,7 +482,15 @@ export async function transfer(
     filePerm: config?.filePerm,
     dirPerm: config?.dirPerm,
   };
-  await transferWithType({ ...config, transferOption, ensureDirExist: true }, stat.type, collect);
+  await transferWithType(
+    {
+      ...config,
+      transferOption,
+      ensureDirExist: options && options.ensureDirExist === false ? false : true,
+    },
+    stat.type,
+    collect
+  );
 }
 
 export async function sync(

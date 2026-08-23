@@ -14,6 +14,12 @@ jest.mock('../serviceManager', () => ({
   getRunningTransformTasks: jest.fn(() => []),
   getAllFileService: jest.fn(() => []),
 }));
+// the open documents decide whether an automatic plan may touch a file; the
+// default vscode mock has none
+jest.mock('../../host', () => ({
+  ...jest.requireActual('../../host'),
+  getOpenTextDocuments: jest.fn(() => []),
+}));
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -23,7 +29,10 @@ import app from '../../app';
 import FileService from '../../core/fileService';
 import RemoteFs from '../../../test/helper/localRemoteFs';
 import { refreshRemoteExplorer } from '../../fileHandlers/shared';
+import { getOpenTextDocuments } from '../../host';
 import { getFileService } from '../serviceManager';
+import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
+import { indexFor } from '../syncIndexFeeder';
 import {
   createPlan,
   getPlan,
@@ -146,13 +155,19 @@ afterAll(() => {
   stopSpinner.mockRestore();
 });
 
+const getOpenTextDocumentsMock = getOpenTextDocuments as jest.Mock;
+
 beforeEach(() => {
   vol.reset();
   fs.mkdirSync('/remote', { recursive: true } as any);
   resetPlans();
   resetRunner();
+  resetSyncIndex();
+  initSyncIndex({ storagePath: undefined });
   refreshMock.mockClear();
   getFileServiceMock.mockReset();
+  getOpenTextDocumentsMock.mockReset();
+  getOpenTextDocumentsMock.mockImplementation(() => []);
   app.state.profile = null;
 });
 
@@ -417,6 +432,94 @@ describe('runPlan', () => {
   });
 });
 
+  test('"Cancel All Transfers" puts every item whose task never ran back to pending, not only the running one', async () => {
+    vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b', '/local/c.txt': 'c' }, '/');
+    const remoteFs = createRemoteFs();
+    const service = createService(remoteFs, { concurrency: 1 });
+    let cancelled = false;
+    const put = remoteFs.put.bind(remoteFs);
+    override(remoteFs, 'put', (input: Readable, target: string, option: any) => {
+      if (cancelled) {
+        return put(input, target, option);
+      }
+      cancelled = true;
+      return new Promise<void>((resolve, reject) => {
+        input.once('error', reject);
+        // the user hits "Cancel All Transfers" while the first file uploads;
+        // the other two are still queued and never get a task.done
+        service.cancelTransferTasks();
+      });
+    });
+    const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+
+    const summary = await runPlan(plan.id);
+
+    expect(summary).toMatchObject({ pending: 3, uploading: 0, failed: 0, verified: 0 });
+    expect(getPlan(plan.id)!.items.map(item => item.status)).toEqual(['pending', 'pending', 'pending']);
+    // the plan is not left open for ever and can be run again
+    expect(isPlanRunning(plan.id)).toBe(false);
+    const again = await runPlan(plan.id);
+    expect(again).toMatchObject({ verified: 3, pending: 0 });
+    expect(fs.readFileSync('/remote/c.txt', 'utf8')).toBe('c');
+  });
+
+  test('an automatic plan skips a file that is open with unsaved changes; a command plan uploads it', async () => {
+    vol.fromJSON({ '/local/dirty.txt': 'on disk', '/local/clean.txt': 'clean' }, '/');
+    createService(createRemoteFs());
+    const save = jest.fn(() => Promise.resolve(true));
+    getOpenTextDocumentsMock.mockImplementation(() => [
+      { fileName: '/local/dirty.txt', isDirty: true, isClosed: false, save },
+      { fileName: '/local/clean.txt', isDirty: false, isClosed: false, save },
+    ]);
+
+    const scanPlan = planOf([draft('/local/dirty.txt'), draft('/local/clean.txt')]);
+    const summary = await runPlan(scanPlan.id);
+
+    expect(summary).toMatchObject({ verified: 1, skipped: 1, failed: 0 });
+    expect(itemOf(scanPlan, 'dirty.txt').status).toBe('skipped');
+    expect(itemOf(scanPlan, 'dirty.txt').error).toBe('unsaved changes in the editor');
+    expect(save).not.toHaveBeenCalled();
+    expect(fs.existsSync('/remote/dirty.txt')).toBe(false);
+    expect(fs.readFileSync('/remote/clean.txt', 'utf8')).toBe('clean');
+
+    // the user asked for it: the transfer layer saves the document first
+    const commandPlan = createPlan({
+      serviceName: 'staging',
+      profile: null,
+      source: 'command',
+      items: [draft('/local/dirty.txt')],
+    });
+    const commandSummary = await runPlan(commandPlan.id);
+    expect(commandSummary).toMatchObject({ verified: 1, skipped: 0 });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync('/remote/dirty.txt', 'utf8')).toBe('on disk');
+  });
+
+  test('the remote directory is ensured once per directory, not once per file', async () => {
+    const files: { [fsPath: string]: string } = {};
+    for (let i = 0; i < 10; i++) {
+      files[`/local/dir/f${i}.txt`] = `${i}`;
+    }
+    files['/local/other/x.txt'] = 'x';
+    vol.fromJSON(files, '/');
+    const remoteFs = createRemoteFs();
+    const ensured: string[] = [];
+    const ensureDir = remoteFs.ensureDir.bind(remoteFs);
+    override(remoteFs, 'ensureDir', (dir: string) => {
+      ensured.push(dir);
+      return ensureDir(dir);
+    });
+    createService(remoteFs);
+    const plan = planOf(Object.keys(files).map(fsPath => draft(fsPath)));
+
+    const summary = await runPlan(plan.id);
+
+    expect(summary).toMatchObject({ verified: 11, failed: 0 });
+    expect(ensured.sort()).toEqual(['/remote/dir', '/remote/other']);
+    expect(fs.readFileSync('/remote/dir/f9.txt', 'utf8')).toBe('9');
+  });
+});
+
 describe('skipItem', () => {
   test('takes a pending, failed or stale item out; leaves the others alone', async () => {
     vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
@@ -432,5 +535,22 @@ describe('skipItem', () => {
     expect(itemOf(plan, 'b.txt').error).toBe('skipped by user');
     expect(itemOf(plan, 'a.txt').status).toBe('verified');
     expect(getPlan(plan.id)!.finishedAt).toBeDefined();
+  });
+
+  test('remembers the skipped version in the sync index', async () => {
+    vol.fromJSON({ '/local/b.txt': 'bb' }, '/');
+    const service = createService(createRemoteFs());
+    const plan = planOf([draft('/local/b.txt')]);
+
+    skipItem(plan.id, '/local/b.txt');
+    // the index write is best effort and not awaited by skipItem
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const index = await indexFor(service);
+    expect(index.get('b.txt')).toMatchObject({
+      size: 2,
+      mtime: fs.statSync('/local/b.txt').mtime.getTime(),
+      status: 'skipped',
+    });
   });
 });
