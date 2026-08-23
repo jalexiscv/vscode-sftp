@@ -19,6 +19,7 @@ import { getAllFileService, createFileService, disposeFileService } from './modu
 import { getWorkspaceFolders, setContextValue } from './host';
 import RemoteExplorer from './modules/remoteExplorer';
 import ActivityView from './modules/activityView';
+import { initActivityLog, flushActivityLog } from './modules/activityLog';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -66,6 +67,9 @@ export async function activate(context: vscode.ExtensionContext) {
   // which points at the same folder and is the fallback on older hosts
   const storageUri: { fsPath: string } | undefined = (context as any).storageUri;
   initSyncIndex({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
+  // before the view and the services exist: the loaded entries must be there
+  // when the tree first renders, and nothing may be recorded before the load
+  await initActivityLog({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
 
   try {
     initCommands(context);
@@ -135,6 +139,7 @@ export function deactivate() {
   // not awaited: the debounced saves mean the index is normally on disk
   // already, and a slow disk must not hold up the extension host shutdown
   flushSyncIndex().catch(error => logger.error(error, 'flush sync index'));
+  flushActivityLog().catch(error => logger.error(error, 'flush activity log'));
   fileActivityMonitor.destory();
   localDeleteMonitor.destroy();
   changeCollector.destroy();

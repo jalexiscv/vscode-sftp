@@ -95,3 +95,16 @@ export const COMMAND_ACTIVITY_REVEAL = 'sftp.activity.reveal';
 
 // nombre de la vista del registro de actividad (package.json > views)
 export const VIEW_ACTIVITY = 'sftpActivity';
+
+// planes de carga (vista de actividad)
+export const COMMAND_PLAN_PREVIEW = 'sftp.plan.preview';
+export const COMMAND_PLAN_UPLOAD_ALL = 'sftp.plan.uploadAll';
+export const COMMAND_PLAN_UPLOAD_ITEM = 'sftp.plan.uploadItem';
+export const COMMAND_PLAN_SKIP_ITEM = 'sftp.plan.skipItem';
+export const COMMAND_PLAN_DIFF_ITEM = 'sftp.plan.diffItem';
+export const COMMAND_PLAN_EXPORT_REPORT = 'sftp.plan.exportReport';
+export const COMMAND_PLAN_REMOVE = 'sftp.plan.remove';
+export const COMMAND_PLAN_CLEAR_ALL = 'sftp.plan.clearAll';
+
+// comando que VS Code genera por el id de la vista; no se declara en package.json
+export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;

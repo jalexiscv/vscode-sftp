@@ -25,8 +25,9 @@ import { LocalFileRecord } from './localScanner';
  * - {@link createPlan} registers a new plan from a draft.
  * - {@link updateItem} records an item's progress and closes the plan when
  *   nothing is left pending.
- * - {@link summarize} / {@link formatReport} turn a plan into numbers and into
- *   a Markdown report.
+ * - {@link summarize} / {@link formatSummary} / {@link formatReport} turn a
+ *   plan into numbers, into one line and into a Markdown report.
+ * - {@link removePlan} / {@link clearPlans} forget one plan or all of them.
  * - {@link diffAgainstIndex} is the pure comparison that turns a local scan
  *   into plan items.
  */
@@ -230,7 +231,33 @@ export function summarize(plan: UploadPlan): PlanSummary {
   return summary;
 }
 
-function formatBytes(bytes: number): string {
+/**
+ * One line of numbers for a plan, e.g. `12 files — 10 verified, 1 failed,
+ * 1 pending`. The three main counters are always there; uploading, skipped
+ * and stale only when non-zero, so the usual case stays short. Shared by the
+ * activity view and the end-of-run notification, so both read alike.
+ */
+export function formatSummary(summary: PlanSummary): string {
+  const parts = [
+    `${summary.verified} verified`,
+    `${summary.failed} failed`,
+    `${summary.pending} pending`,
+  ];
+  if (summary.uploading > 0) {
+    parts.push(`${summary.uploading} uploading`);
+  }
+  if (summary.skipped > 0) {
+    parts.push(`${summary.skipped} skipped`);
+  }
+  if (summary.stale > 0) {
+    parts.push(`${summary.stale} stale`);
+  }
+
+  return `${summary.total} ${summary.total === 1 ? 'file' : 'files'} — ${parts.join(', ')}`;
+}
+
+/** `512 B`, `2.0 KB`, `120 MB`: one decimal below 100, none above. */
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
   }
@@ -308,6 +335,18 @@ export function onDidChange(listener: () => void): vscode.Disposable {
 export function clearPlans(): void {
   plans.length = 0;
   notify();
+}
+
+/** Drops one plan from the registry. Returns false when the id is unknown. */
+export function removePlan(id: string): boolean {
+  const index = plans.findIndex(plan => plan.id === id);
+  if (index === -1) {
+    return false;
+  }
+
+  plans.splice(index, 1);
+  notify();
+  return true;
 }
 
 export interface DiffAgainstIndexInput {

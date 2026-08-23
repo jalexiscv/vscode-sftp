@@ -384,6 +384,53 @@
         "command": "sftp.activity.reveal",
         "title": "Open Local File",
         "category": "SFTP"
+      },
+      {
+        "command": "sftp.plan.preview",
+        "title": "Preview Upload (Dry Run)",
+        "category": "SFTP",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "sftp.plan.uploadAll",
+        "title": "Upload Plan",
+        "category": "SFTP",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "sftp.plan.uploadItem",
+        "title": "Upload This File",
+        "category": "SFTP",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "sftp.plan.skipItem",
+        "title": "Skip",
+        "category": "SFTP",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "sftp.plan.diffItem",
+        "title": "Diff with Remote",
+        "category": "SFTP"
+      },
+      {
+        "command": "sftp.plan.exportReport",
+        "title": "Export Last Upload Report",
+        "category": "SFTP",
+        "icon": "$(export)"
+      },
+      {
+        "command": "sftp.plan.remove",
+        "title": "Remove Plan",
+        "category": "SFTP",
+        "icon": "$(close)"
+      },
+      {
+        "command": "sftp.plan.clearAll",
+        "title": "Clear Upload Plans",
+        "category": "SFTP",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -583,6 +630,38 @@
         {
           "command": "sftp.remoteExplorer.refresh",
           "when": "false"
+        },
+        {
+          "command": "sftp.plan.preview",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.plan.uploadAll",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.plan.exportReport",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.plan.clearAll",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.plan.uploadItem",
+          "when": "false"
+        },
+        {
+          "command": "sftp.plan.skipItem",
+          "when": "false"
+        },
+        {
+          "command": "sftp.plan.diffItem",
+          "when": "false"
+        },
+        {
+          "command": "sftp.plan.remove",
+          "when": "false"
         }
       ],
       "explorer/context": [
@@ -726,6 +805,26 @@
           "command": "sftp.activity.clear",
           "when": "view == sftpActivity",
           "group": "navigation@3"
+        },
+        {
+          "command": "sftp.plan.uploadAll",
+          "when": "view == sftpActivity && sftp.hasUploadPlans",
+          "group": "navigation@4"
+        },
+        {
+          "command": "sftp.plan.preview",
+          "when": "view == sftpActivity",
+          "group": "sftp.plans@1"
+        },
+        {
+          "command": "sftp.plan.exportReport",
+          "when": "view == sftpActivity && sftp.hasUploadPlans",
+          "group": "sftp.plans@2"
+        },
+        {
+          "command": "sftp.plan.clearAll",
+          "when": "view == sftpActivity && sftp.hasUploadPlans",
+          "group": "sftp.plans@3"
         }
       ],
       "view/item/context": [
@@ -811,6 +910,56 @@
           "command": "sftp.activity.retry",
           "group": "inline",
           "when": "view == sftpActivity && viewItem == activity.failed"
+        },
+        {
+          "command": "sftp.plan.uploadAll",
+          "group": "inline@1",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
+          "command": "sftp.plan.exportReport",
+          "group": "inline@2",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
+          "command": "sftp.plan.uploadAll",
+          "group": "1_run@1",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
+          "command": "sftp.plan.exportReport",
+          "group": "2_report@1",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
+          "command": "sftp.plan.remove",
+          "group": "9_remove@1",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
+          "command": "sftp.plan.uploadItem",
+          "group": "inline@1",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
+          "command": "sftp.plan.skipItem",
+          "group": "inline@2",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
+          "command": "sftp.plan.uploadItem",
+          "group": "1_run@1",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
+          "command": "sftp.plan.skipItem",
+          "group": "1_run@2",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
+          "command": "sftp.plan.diffItem",
+          "group": "3_compare@1",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
         }
       ],
       "scm/title": [
