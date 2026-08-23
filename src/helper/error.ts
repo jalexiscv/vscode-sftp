@@ -27,6 +27,33 @@ export function isNotFoundError(error: any): boolean {
   return /no such file|not found|not exist|^550\b|\b550 /i.test(message);
 }
 
+/**
+ * Flags an error whose content has already been shown to the user, so that
+ * {@link reportError} logs it but does not open a second dialog for it.
+ *
+ * The transfer handlers use it for their aggregated failure: by the time it is
+ * thrown, `afterTransfer` has already reported every file it summarises. The
+ * flag is non-enumerable so it never leaks into a serialised error, and the
+ * call is idempotent because an error can cross several catch blocks.
+ */
+export function markReported<T extends Error>(err: T): T {
+  if (isReported(err)) {
+    return err;
+  }
+
+  Object.defineProperty(err, 'reported', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: true,
+  });
+  return err;
+}
+
+export function isReported(err: unknown): boolean {
+  return err instanceof Error && (err as any).reported === true;
+}
+
 export function reportError(err: Error | string, ctx?: string) {
   let errorString: string;
   if (err instanceof Error) {
@@ -35,6 +62,11 @@ export function reportError(err: Error | string, ctx?: string) {
   } else {
     errorString = err;
     logger.error(errorString, ctx);
+  }
+
+  // already on screen, one failure at a time; the summary only goes to the log
+  if (isReported(err)) {
+    return;
   }
 
   showErrorMessage(errorString, 'Detail').then(result => {

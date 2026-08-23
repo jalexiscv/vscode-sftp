@@ -14,6 +14,7 @@ import { FileSystem } from './fs';
 import Scheduler from './scheduler';
 import { createRemoteIfNoneExist, removeRemoteFs } from './remoteFs';
 import TransferTask from './transferTask';
+import { TransferFailure } from './customError';
 import localFs from './localFs';
 
 type Omit<T, U> = Pick<T, Exclude<keyof T, U>>;
@@ -121,11 +122,28 @@ export interface WatcherService {
   dispose(watcherBase: string): void;
 }
 
-interface TransferScheduler {
+/**
+ * Outcome of one scheduler run. A task lands in exactly one of the three lists.
+ */
+export interface TransferResult {
+  /** tasks whose run() completed */
+  succeeded: TransferTask[];
+  /** tasks whose run() threw; a cancelled task never counts as failed */
+  failed: TransferFailure[];
+  /** tasks aborted through cancelTransferTasks() */
+  cancelled: TransferTask[];
+}
+
+export interface TransferScheduler {
   // readonly _scheduler: Scheduler;
   size: number;
   add(x: TransferTask): void;
-  run(): Promise<void>;
+  /**
+   * Starts the queued tasks and resolves once all of them have finished.
+   * Never rejects because of a task: failures are reported in the result, so
+   * the caller decides what a partially failed batch means.
+   */
+  run(): Promise<TransferResult>;
   stop(): void;
 }
 
@@ -572,16 +590,31 @@ export default class FileService {
       autoStart: false,
       concurrency,
     });
+    // Collected per scheduler and handed back by run(). The underlying
+    // Scheduler swallows task errors (it only emits them through onTaskDone)
+    // and goes idle either way, so without this a batch with a failed put
+    // was indistinguishable from a clean one.
+    const result: TransferResult = { succeeded: [], failed: [], cancelled: [] };
     scheduler.onTaskStart(task => {
       this._pendingTransferTasks.add(task as TransferTask);
       this._eventEmitter.emit(Event.BEFORE_TRANSFER, task);
     });
     scheduler.onTaskDone((err, task) => {
-      this._pendingTransferTasks.delete(task as TransferTask);
+      const transferTask = task as TransferTask;
+      this._pendingTransferTasks.delete(transferTask);
+      if (transferTask.isCancelled()) {
+        // aborting the stream makes run() throw too; that is the user's
+        // choice, not a failure
+        result.cancelled.push(transferTask);
+      } else if (err) {
+        result.failed.push({ task: transferTask, error: err });
+      } else {
+        result.succeeded.push(transferTask);
+      }
       this._eventEmitter.emit(Event.AFTER_TRANSFER, err, task);
     });
 
-    let runningPromise: Promise<void> | null = null;
+    let runningPromise: Promise<TransferResult> | null = null;
     let isStopped: boolean = false;
     const transferScheduler: TransferScheduler = {
       get size() {
@@ -600,12 +633,12 @@ export default class FileService {
       },
       run() {
         if (isStopped) {
-          return Promise.resolve();
+          return Promise.resolve(result);
         }
 
         if (scheduler.size <= 0) {
           fileService._removeScheduler(transferScheduler);
-          return Promise.resolve();
+          return Promise.resolve(result);
         }
 
         if (!runningPromise) {
@@ -613,7 +646,7 @@ export default class FileService {
             scheduler.onIdle(() => {
               runningPromise = null;
               fileService._removeScheduler(transferScheduler);
-              resolve();
+              resolve(result);
             });
             scheduler.start();
           });
