@@ -27,7 +27,7 @@ describe('config: verifyUpload / uploadRetries', () => {
     expect(validate({ verifyUpload: level })).toBeNull();
   });
 
-  test.each([['foo'], ['hash'], [true], [1]])('rejects verifyUpload %p', level => {
+  test.each([['foo'], [true], [1]])('rejects verifyUpload %p', level => {
     const error = validate({ verifyUpload: level });
 
     expect(error).not.toBeNull();
@@ -43,5 +43,10 @@ describe('config: verifyUpload / uploadRetries', () => {
 
     expect(error).not.toBeNull();
     expect(error!.message).toMatch(/uploadRetries/);
+  });
+
+  test("accepts verifyUpload 'hash' without making it the default", () => {
+    expect(validate({ verifyUpload: 'hash' })).toBeNull();
+    expect(mergedDefault({}).verifyUpload).toBe('stat');
   });
 });
