@@ -324,6 +324,29 @@ function indexEntry(rel) {
   return readSyncIndex()[rel.toLowerCase()];
 }
 
+/** Per index file: its `seededAt` mark (set by a rebuild / confirmed manual scan) and entry count. */
+function readSyncIndexMeta() {
+  const dir = storageDir();
+  const meta = {};
+  if (!dir) {
+    return meta;
+  }
+  const indexDir = path.join(dir, 'sync-index');
+  let files;
+  try {
+    files = fs.readdirSync(indexDir).filter(name => /\.json$/.test(name));
+  } catch (error) {
+    return meta;
+  }
+  files.forEach(name => {
+    const data = readJsonSafe(path.join(indexDir, name));
+    if (data) {
+      meta[name] = { seededAt: data.seededAt, entries: data.entries ? Object.keys(data.entries).length : 0 };
+    }
+  });
+  return meta;
+}
+
 function activityEntriesFor(rel) {
   const wanted = localPath(rel);
   return readActivityLog().filter(entry => entry.localPath && sameFile(entry.localPath, wanted));
@@ -414,6 +437,118 @@ function errorLines(lines) {
   return lines.filter(line => /\[(error|critical)\]/.test(line));
 }
 
+/**
+ * Puts `.vscode/sftp.json` back when the runner held it back for this session
+ * (so that `workspaceContains:` did not activate the extension at startup and
+ * the startup scan runs only once this script, dialog driver included, is in
+ * place). Returns true when something was restored.
+ */
+function restoreHeldConfig() {
+  if (!FIXTURES.heldConfig) {
+    return false;
+  }
+  const held = localPath(FIXTURES.heldConfig);
+  const target = localPath('.vscode/sftp.json');
+  if (fs.existsSync(held)) {
+    fs.renameSync(held, target);
+    return true;
+  }
+  return fs.existsSync(target);
+}
+
+// ---------------------------------------------------------------------------
+// dialogs
+//
+// The extension host hands every module that lives under an extension's path
+// the same `vscode` API object (the API factory keeps one instance per
+// extension and picks it by the path of the requiring file). This script sits
+// under the extension development path, so wrapping `vscode.window.show*Message`
+// here wraps it for the extension too, and a modal confirmation the extension
+// asks for can be answered from this script the way a user would — the only
+// way to drive it: a modal dialog cannot be driven with commands.
+//
+// Modal calls are *held* (recorded, never shown) until a scenario answers them
+// with one of the offered buttons; a held call that nobody answers behaves
+// like a dialog that is never closed, which is what the scenarios assert
+// against. Non-modal messages are recorded and passed through. Everything is
+// recorded with the message, the buttons and the answer, as evidence.
+
+const dialogs = { calls: [], installed: false };
+
+function itemTitle(item) {
+  return typeof item === 'string' ? item : item && item.title !== undefined ? String(item.title) : String(item);
+}
+
+function installDialogDriver() {
+  if (dialogs.installed) {
+    return;
+  }
+  dialogs.installed = true;
+  ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'].forEach(method => {
+    const original = vscode.window[method];
+    if (typeof original !== 'function') {
+      return;
+    }
+    vscode.window[method] = function (message, ...rest) {
+      const first = rest[0];
+      const hasOptions = first !== null && typeof first === 'object' && !Array.isArray(first) && !('title' in first);
+      const options = hasOptions ? first : null;
+      const rawItems = hasOptions ? rest.slice(1) : rest;
+      const call = {
+        at: Date.now(),
+        method,
+        message: String(message),
+        modal: Boolean(options && options.modal),
+        items: rawItems.map(itemTitle),
+        answered: null,
+        answeredAt: null,
+      };
+      dialogs.calls.push(call);
+      if (!call.modal) {
+        return original.apply(vscode.window, [message].concat(rest));
+      }
+      log(`[dialog] held modal ${method}: "${call.message.split('\n')[0]}" buttons: ${call.items.join(' | ') || '(none)'}`);
+      return new Promise(resolve => {
+        call.answer = title => {
+          if (call.answered !== null) {
+            return false;
+          }
+          const chosen = title === undefined ? undefined : rawItems.find(item => itemTitle(item) === title);
+          if (title !== undefined && chosen === undefined) {
+            throw new Error(`dialog has no button "${title}" (buttons: ${call.items.join(' | ')})`);
+          }
+          call.answered = title === undefined ? '(dismissed)' : title;
+          call.answeredAt = Date.now();
+          log(`[dialog] answered "${call.message.split('\n')[0]}" with ${call.answered}`);
+          resolve(chosen);
+          return true;
+        };
+      });
+    };
+  });
+}
+
+/** The modal calls recorded so far (optionally only the ones matching `pattern`), oldest first. */
+function heldModals(pattern) {
+  return dialogs.calls.filter(call => call.modal && (!pattern || pattern.test(call.message)));
+}
+
+function pendingModal(pattern) {
+  return heldModals(pattern).find(call => call.answered === null) || null;
+}
+
+function describeDialog(call) {
+  if (!call) {
+    return '(none)';
+  }
+  return `${call.method} modal=${call.modal} answered=${call.answered || '(pending)'}\n` +
+    `message: ${call.message}\nbuttons: ${call.items.join(' | ') || '(none)'}`;
+}
+
+function describeDialogs(calls) {
+  return calls.length === 0 ? '(none)' : calls.map(call => `- [${call.modal ? 'modal' : 'toast'}] ${call.method} "${call.message.split('\n')[0]}" buttons: ${call.items.join(' | ') || '(none)'} -> ${call.answered || (call.modal ? '(pending)' : '(passed through)')}`).join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // scenario bookkeeping
 
@@ -438,6 +573,7 @@ async function scenario(id, title, fn) {
       log(`${id} FAIL: ${error && error.message ? error.message : error}`);
       // whatever the log says at the moment of failure is part of the evidence
       evidence('sftp output channel (last 60 lines at failure)', sftpLogLines().slice(-60).join('\n'));
+      evidence('dialogs recorded so far', describeDialogs(dialogs.calls));
     }
   }
   entry.finishedAt = Date.now();
@@ -476,6 +612,10 @@ function writeResults(final) {
     hostLog: hostLog.slice(-400),
     sftpOutputLogFiles: sftpOutputLogFiles(),
     storageDir: storageDir(),
+    dialogs: dialogs.calls.map(call => ({
+      at: call.at, method: call.method, modal: call.modal, message: call.message, items: call.items,
+      answered: call.answered, answeredAt: call.answeredAt,
+    })),
   };
   try {
     fs.mkdirSync(path.dirname(RESULT_FILE), { recursive: true });
@@ -540,7 +680,7 @@ async function sessionFresh() {
     assert(hostErrors.length === 0, 'exthost.log has no [error] lines mentioning the extension');
   });
 
-  await scenario('S7', 'First use: empty index -> startup scan uploads nothing; Rebuild Sync Index seeds it', async evidence => {
+  await scenario('S7', 'First use: empty (unbuilt) index -> startup scan leaves the unindexed files alone; Rebuild Sync Index (by size) builds and seeds it', async evidence => {
     const emptyLine = await waitFor(
       () => sftpLogLines().find(l => l.includes('[scan]') && l.includes('sync index is empty')),
       '"the sync index is empty" startup scan line',
@@ -554,22 +694,38 @@ async function sessionFresh() {
     evidence('server tree after startup (seeds only expected)', actual.join('\n'));
     assertEqual(actual.join('|'), expected.join('|'), 'the startup scan with an empty index uploaded nothing');
     assert(errorLines(sftpLogLines()).length === 0, 'no [error] lines after the startup scan');
+    assertEqual(heldModals().length, 0, 'no modal dialog at startup');
+    // the one-per-service notice (non-modal, passed through) is only seen here
+    // when the extension asked for it after this script was loaded
+    const notice = dialogs.calls.find(c => !c.modal && /sync index for .* is empty/.test(c.message));
+    evidence('unbuilt-index notice (as recorded by the dialog driver)', notice ? describeDialog(notice) : '(not recorded: shown before this script was loaded, or not shown)');
+    const metaBefore = readSyncIndexMeta();
+    evidence('sync-index files before the rebuild', metaBefore);
+    assert(Object.keys(metaBefore).every(name => metaBefore[name].seededAt === undefined), 'the index is not seeded before the rebuild');
 
     const mark = logMark();
     vscode.commands.executeCommand('sftp.rebuildSyncIndex').then(undefined, error => log(`rebuild command rejected: ${error.message}`));
     const summaryLine = await waitFor(
-      () => logSince(mark).find(l => /\[rebuild-index\] .*: \d+ indexed, \d+ differ/.test(l)),
+      () => logSince(mark).find(l => /\[rebuild-index\] .*: \d+ indexed \(\d+ with another mtime on the server\), \d+ differ in size/.test(l)),
       '[rebuild-index] summary line',
       60000
     );
     evidence('rebuild summary', summaryLine);
-    const match = summaryLine.match(/(\d+) indexed, (\d+) differ, (\d+) only local, (\d+) only remote/);
-    assert(match, 'summary line parses');
-    assertEqual(Number(match[1]), seeded.length, 'files identical on both sides were indexed');
-    assertEqual(Number(match[2]), seededDiffer.length, 'files that differ were left out');
-    assertEqual(Number(match[4]), serverOnly.length, 'server-only files counted');
+    const match = summaryLine.match(/(\d+) indexed \((\d+) with another mtime on the server\), (\d+) differ in size, (\d+) only local, (\d+) only remote; index marked as built/);
+    assert(match, 'summary line parses (…; index marked as built)');
+    assertEqual(Number(match[1]), seeded.length, 'files with the same size on both sides were indexed');
+    assertEqual(Number(match[2]), 0, 'the seeds keep their mtime, so none is reported with another mtime on the server');
+    assertEqual(Number(match[3]), seededDiffer.length, 'files whose size differs were left out');
+    assertEqual(Number(match[5]), serverOnly.length, 'server-only files counted');
     const onlyLocalExpected = allLocal.length - seeded.length - seededDiffer.length;
-    assertEqual(Number(match[3]), onlyLocalExpected, 'local-only files counted');
+    assertEqual(Number(match[4]), onlyLocalExpected, 'local-only files counted');
+    const summaryToast = await waitFor(() => dialogs.calls.find(c => !c.modal && /Indexed \d+ files;/.test(c.message)), 'the rebuild summary notification', 15000)
+      .catch(() => null);
+    evidence('rebuild summary notification', summaryToast ? summaryToast.message : '(not recorded)');
+    if (summaryToast) {
+      assert(new RegExp(`Indexed ${seeded.length} files; ${seededDiffer.length} differ in size, ${onlyLocalExpected} only local, ${serverOnly.length} only remote\\.`).test(summaryToast.message),
+        `the notification reports the same figures (got: ${summaryToast.message})`);
+    }
 
     const index = await waitFor(() => {
       const entries = readSyncIndex();
@@ -581,6 +737,11 @@ async function sessionFresh() {
       assertEqual(entry.size, localContent(rel).length, `${rel} indexed size`);
     });
     evidence('sync-index entries after rebuild', index);
+    const meta = await waitFor(() => {
+      const m = readSyncIndexMeta();
+      return Object.keys(m).some(name => typeof m[name].seededAt === 'number') ? m : null;
+    }, 'seededAt written to the index file', 15000);
+    evidence('sync-index files after the rebuild (seededAt)', meta);
   });
 
   await scenario('S2', 'Upload Project: every file reaches the server, is verified, indexed and logged', async evidence => {
@@ -826,13 +987,17 @@ async function sessionFresh() {
     evidence('resume scan line', resumeLine);
   });
 
-  await note('S1b', 'exthost.log [error] lines over the whole session (informational)', async evidence => {
+  await scenario('S1b', 'exthost.log has no [error] lines over the whole session (the Remote Explorer refresh with the view never opened no longer throws)', async evidence => {
     const lines = extHostLogLines().filter(line => /\[error\]/i.test(line));
     evidence('count', String(lines.length));
     evidence('lines', lines.map(l => l.slice(0, 300)).join('\n') || '(none)');
-    const knownRefresh = lines.filter(l => l.includes("Can't find config for remote resource"));
-    evidence('of which "Can\'t find config for remote resource" (remote explorer refresh after an upload while the view was never opened; src/modules/remoteExplorer/treeDataProvider.ts:140/196 via src/fileHandlers/shared.ts refreshRemoteExplorer)', String(knownRefresh.length));
-    evidence('[error]/[critical] lines in the sftp output channel over the session', errorLines(sftpLogLines()).join('\n') || '(none)');
+    const remoteExplorer = lines.filter(l => l.includes("Can't find config for remote resource"));
+    assertEqual(remoteExplorer.length, 0, 'no "Can\'t find config for remote resource" line (Remote Explorer refresh after an upload while the view was never opened)');
+    const extensionErrors = lines.filter(l => /sftp|jalexiscv/i.test(l));
+    assertEqual(extensionErrors.length, 0, 'no [error] line in exthost.log mentions the extension');
+    assertEqual(lines.length, 0, 'no [error] line at all in exthost.log during the session');
+    evidence('[error]/[critical] lines in the sftp output channel over the session (S3 provokes two on purpose)', errorLines(sftpLogLines()).join('\n') || '(none)');
+    evidence('dialogs recorded over the session', describeDialogs(dialogs.calls));
   });
 
   // let the debounced writers (activity log, sync index) land before the host exits
@@ -844,17 +1009,58 @@ async function sessionFresh() {
 
 async function sessionReconcile() {
   const offline = FIXTURES.offlineEdits || [];
+  const created = offline.filter(edit => edit.kind === 'new');
 
-  await scenario('S6', 'Startup scan uploads the files edited while VS Code was closed; a manual scan afterwards uploads nothing', async evidence => {
-    await activateExtension();
+  await scenario('S6', 'Startup scan after offline edits on a built index: the plan with new files asks first (nothing uploads until "Upload"); then everything is verified and a manual scan uploads nothing', async evidence => {
+    // The test module is loaded after the eager activation, so by the time this
+    // runs a startup scan triggered by `workspaceContains:` would already be
+    // past its dialog. The runner held .vscode/sftp.json back for this session;
+    // it is put back here and the extension activated from the script, dialog
+    // driver in place. The scan is still the startup scan (`trigger startup`).
+    const ext = vscode.extensions.getExtension(EXT_ID);
+    evidence('extension active before this script activated it', String(Boolean(ext && ext.isActive)));
+    const restored = restoreHeldConfig();
+    evidence('held .vscode/sftp.json restored by the script', String(restored));
     const cursor0 = await opsCursor();
+    await activateExtension();
+
     const changedLine = await waitFor(
       () => sftpLogLines().find(l => l.includes('[scan]') && l.includes(`${SERVICE_NAME}:`) && /file\(s\) changed since their last verified upload/.test(l)),
       'the startup scan to find the offline edits',
       60000
     );
     evidence('startup scan line', changedLine);
-    assertEqual(Number(changedLine.match(/: (\d+) file\(s\) changed/)[1]), offline.length, 'every offline edit was detected');
+    assert(/trigger startup/.test(changedLine), 'the scan is the startup scan');
+    assertEqual(Number(changedLine.match(/: (\d+) file\(s\) changed/)[1]), offline.length, 'every offline edit was detected (modified and new)');
+
+    // the plan contains files the index never saw: it must ask, whatever its size
+    const dialog = await waitFor(() => pendingModal(/changed outside the editor/), 'the confirmation dialog of the startup plan (held by the dialog driver)', 30000);
+    evidence('confirmation dialog', describeDialog(dialog));
+    assertEqual(dialog.method, 'showInformationMessage', 'asked through an information message');
+    assertEqual(dialog.items[0], 'Review plan', '"Review plan" is the first (default) button');
+    assertEqual(dialog.items.join('|'), `Review plan|Upload ${offline.length} file(s)|Skip`, 'the three buttons in order');
+    assert(dialog.message.startsWith(`SFTP: ${offline.length} local file(s) changed outside the editor.`), 'the message names the count and the origin');
+    created.forEach(edit => assert(dialog.message.includes(edit.rel.split('/').pop()), `the message lists ${edit.rel}`));
+
+    // while the dialog is open nothing moves: no upload, no plan run, the plan is pending
+    await sleep(4000);
+    const opsWhileOpen = await opsSince(cursor0);
+    evidence('server requests while the dialog is open', describeOps(opsWhileOpen.filter(op => op.op !== 'AUTH')).join('\n') || '(none)');
+    assertEqual(opsWhileOpen.filter(op => op.op === 'OPEN' && op.write).length, 0, 'nothing was uploaded while the dialog waits');
+    for (const edit of offline) {
+      assert(!(await serverHas(edit.rel, localContent(edit.rel))), `${edit.rel} is not on the server with the offline content yet`);
+    }
+    const linesWhileOpen = sftpLogLines();
+    assert(!linesWhileOpen.some(l => /\[plan [^\]]+\] uploading/.test(l)), 'no plan run started before the answer');
+    assert(!linesWhileOpen.some(l => /user chose/.test(l)), 'no answer recorded before the answer');
+    const indexWhileOpen = offline.map(edit => indexEntry(edit.rel));
+    evidence('index entries while the dialog is open', offline.map((edit, i) => `${edit.rel}: ${JSON.stringify(indexWhileOpen[i])}`).join('\n'));
+    created.forEach((edit, i) => assert(indexEntry(edit.rel) === undefined, `${edit.rel} is not in the index (new)`));
+
+    // the user uploads
+    dialog.answer(`Upload ${offline.length} file(s)`);
+    const choseLine = await waitFor(() => sftpLogLines().find(l => /\[plan [^\]]+\] \d+ file\(s\) from scan: user chose "run"/.test(l)), 'the "user chose" log line', 20000);
+    evidence('decision line', choseLine);
     const summaryLine = await waitFor(
       () => sftpLogLines().find(l => /\[plan [^\]]+\] \d+ verified, \d+ failed/.test(l)),
       'the startup plan summary',
@@ -896,6 +1102,63 @@ async function sessionReconcile() {
     const ops = await opsSince(cursor);
     evidence('server requests during the manual scan', describeOps(ops).join('\n') || '(none)');
     assertEqual(ops.filter(op => op.op === 'OPEN' && op.write).length, 0, 'the manual scan uploaded nothing');
+    assertEqual(heldModals().filter(c => c.answered === null).length, 0, 'no dialog left unanswered');
+  });
+
+  await scenario('S6c', 'Resume scan finds a file created outside the editor while paused: asks; "Skip" is remembered in the index and a manual scan leaves it alone', async evidence => {
+    const rel = 'offline/skip-me.txt';
+    const content = `created while auto sync was paused (${Date.now()})\n`;
+    await vscode.commands.executeCommand('sftp.pauseAutoSync');
+    await sleep(500);
+    const mark = logMark();
+    const cursor = await opsCursor();
+    await control.call('writeWorkspaceFiles', { files: [{ rel, content }] });
+    await sleep(3500);
+    assert(!(await serverHas(rel)), 'paused: the watcher did not upload the new file');
+    evidence('collector lines while paused', logSince(mark).filter(l => l.includes('change-collector')).join('\n') || '(none)');
+
+    vscode.commands.executeCommand('sftp.resumeAutoSync').then(undefined, error => log(`resume rejected: ${error.message}`));
+    const resumeLine = await waitFor(
+      () => logSince(mark).find(l => l.includes('[scan]') && l.includes(`${SERVICE_NAME}:`) && /file\(s\) changed since their last verified upload/.test(l)),
+      'the resume scan to find the new file',
+      45000
+    );
+    evidence('resume scan line', resumeLine);
+    assert(/trigger resume/.test(resumeLine), 'the scan is the resume scan');
+    assertEqual(Number(resumeLine.match(/: (\d+) file\(s\) changed/)[1]), 1, 'exactly the new file');
+    const dialog = await waitFor(() => pendingModal(/changed outside the editor/), 'the confirmation dialog of the resume plan', 30000);
+    evidence('confirmation dialog', describeDialog(dialog));
+    assertEqual(dialog.items.join('|'), 'Review plan|Upload 1 file(s)|Skip', 'the three buttons in order');
+    assert(dialog.message.includes('skip-me.txt'), 'the message lists the file');
+
+    dialog.answer('Skip');
+    const choseLine = await waitFor(() => logSince(mark).find(l => /\[plan [^\]]+\] 1 file\(s\) from scan: user chose "skip"/.test(l)), 'the "user chose skip" log line', 20000);
+    evidence('decision line', choseLine);
+    const entry = await waitFor(() => {
+      const found = indexEntry(rel);
+      return found && found.status === 'skipped' ? found : null;
+    }, 'a "skipped" entry in the sync index', 20000);
+    evidence('sync-index entry', entry);
+    assertEqual(entry.size, Buffer.byteLength(content), 'the skipped entry records the local size');
+    await sleep(1500);
+    assert(!(await serverHas(rel)), 'the skipped file was not uploaded');
+    const opsSoFar = await opsSince(cursor);
+    assertEqual(opsSoFar.filter(op => op.op === 'OPEN' && op.write).length, 0, 'no upload at all since the pause');
+
+    // the skip is remembered: a manual scan does not plan the file again
+    const mark2 = logMark();
+    const cursor2 = await opsCursor();
+    vscode.commands.executeCommand('sftp.scanExternalChanges').then(undefined, error => log(`scan rejected: ${error.message}`));
+    const upToDate = await waitFor(
+      () => logSince(mark2).find(l => l.includes('[scan]') && l.includes('up to date')),
+      'the manual scan to report up to date (skipped file left alone)',
+      45000
+    );
+    evidence('manual scan line', upToDate);
+    await sleep(1500);
+    assertEqual((await opsSince(cursor2)).filter(op => op.op === 'OPEN' && op.write).length, 0, 'the manual scan uploaded nothing');
+    assertEqual(pendingModal(), null, 'no dialog left unanswered');
+    assert(!(await serverHas(rel)), 'the skipped file is still not on the server');
   });
 
   await sleep(3000);
@@ -905,6 +1168,44 @@ async function sessionReconcile() {
 // SESSION "drain": save and close the window at once
 
 async function sessionDrain() {
+  const offlineModified = FIXTURES.offlineModified || [];
+
+  await scenario('S6b', 'Startup scan after an offline edit of indexed files only: uploads them on its own (no dialog), verified and indexed', async evidence => {
+    await activateExtension();
+    const cursor = await opsCursor();
+    const changedLine = await waitFor(
+      () => sftpLogLines().find(l => l.includes('[scan]') && l.includes(`${SERVICE_NAME}:`) && /file\(s\) changed since their last verified upload/.test(l)),
+      'the startup scan to find the offline modification',
+      60000
+    );
+    evidence('startup scan line', changedLine);
+    assert(/trigger startup/.test(changedLine), 'the scan is the startup scan');
+    assertEqual(Number(changedLine.match(/: (\d+) file\(s\) changed/)[1]), offlineModified.length, 'exactly the modified indexed files (the skipped one is left alone)');
+    const summaryLine = await waitFor(
+      () => sftpLogLines().find(l => /\[plan [^\]]+\] \d+ verified, \d+ failed/.test(l)),
+      'the startup plan summary',
+      60000
+    );
+    evidence('plan summary line', summaryLine);
+    assert(summaryLine.includes(`${offlineModified.length} verified, 0 failed`), 'the modified files uploaded and verified without asking');
+    assert(!sftpLogLines().some(l => /user chose|need confirmation/.test(l)), 'no confirmation was asked for the modified-only plan');
+    evidence('dialogs recorded so far', describeDialogs(dialogs.calls));
+    await waitFor(async () => {
+      for (const file of offlineModified) {
+        if (!(await serverHas(file.rel, localContent(file.rel)))) {
+          return false;
+        }
+      }
+      return true;
+    }, 'the offline modification on the server', 30000, 500);
+    await waitFor(() => offlineModified.every(f => {
+      const entry = indexEntry(f.rel);
+      return entry && entry.status === 'verified' && entry.size === localContent(f.rel).length;
+    }), 'index entries for the offline modification', 20000);
+    evidence('index entries', offlineModified.map(f => `${f.rel}: ${JSON.stringify(indexEntry(f.rel))}`).join('\n'));
+    evidence('server requests at startup', describeOps((await opsSince(cursor)).filter(op => op.op !== 'AUTH')).join('\n'));
+  });
+
   await scenario('S9-host', 'Save a file and close the window immediately (the runner checks the server after exit)', async evidence => {
     await activateExtension();
     const scanLine = await waitForStartupScanLine(evidence, 60000);
@@ -996,6 +1297,10 @@ async function sessionHash() {
 
 // ---------------------------------------------------------------------------
 
+// as early as possible: a dialog the extension asks for before this is in
+// place would be a real one, and nothing could answer it
+installDialogDriver();
+
 async function run() {
   log(`session "${SESSION}" starting; workspace ${WORKSPACE}; vscode ${vscode.version}; node ${process.version}`);
   if (CONTROL_PORT) {
@@ -1020,6 +1325,10 @@ async function run() {
         throw new Error(`unknown session ${SESSION}`);
     }
   } finally {
+    const unanswered = heldModals().filter(call => call.answered === null);
+    if (unanswered.length > 0) {
+      log(`${unanswered.length} modal dialog(s) left unanswered at the end of the session: ${unanswered.map(c => `"${c.message.split('\n')[0]}"`).join(', ')}`);
+    }
     writeResults(true);
     log(`session "${SESSION}" finished: ${results.map(r => `${r.id}=${r.status}`).join(' ')}`);
     if (control) {
