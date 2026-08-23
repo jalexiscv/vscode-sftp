@@ -23,6 +23,8 @@ runner.js  ──spawns──▶  Code.exe --extensionDevelopmentPath=<repo>
                        server tree / request log)
 
 extensionHost.js  (runs INSIDE the extension host, has the `vscode` API)
+   ├─ dialog driver: wraps vscode.window.show*Message (shared with the extension),
+   │                 holds modal confirmations until a scenario answers them
    └─ sessions ──▶ scenarios ──▶ PASS / FAIL / SKIP + evidence ──▶ <run>/results/<session>.json
 ```
 
@@ -43,15 +45,43 @@ VS Code is closed" between them:
 
 | Session | Workspace | What it covers |
 | :--- | :--- | :--- |
-| `fresh` | `workspace` (clean storage, server seeded with a few files) | S1 activation, S7 empty index + `Rebuild Sync Index`, S2 `Upload Project` + verification, S3 verification failure (truncating server) + retries + `Retry All Failed`, S4 watcher (external edits with VS Code open, ignore), S5 save = one upload, S8 `Preview Upload` / `Upload Plan` / resume scan |
-| `reconcile` | same, after offline edits | S6 startup scan uploads what changed while VS Code was closed; manual `Scan for External Changes` on an up-to-date tree uploads nothing |
-| `drain` | same | S9 save + `workbench.action.closeWindow` at once; the runner checks the server after the window is gone (deactivate drain) |
+| `fresh` | `workspace` (clean storage, server seeded with a few files) | S1 activation, S7 unbuilt index (startup scan leaves the unindexed files alone) + `Rebuild Sync Index` (indexes by size, marks the index as built), S2 `Upload Project` + verification, S3 verification failure (truncating server) + retries + `Retry All Failed`, S4 watcher (external edits with VS Code open, ignore), S5 save = one upload, S8 `Preview Upload` / `Upload Plan` / resume scan, S1b no `[error]` in exthost.log |
+| `reconcile` | same, after offline edits (2 modified + 2 new); `.vscode/sftp.json` held back until the script activates the extension | S6 startup scan on a built index: the plan has new files, so it asks first (nothing uploads meanwhile), `Upload N file(s)` uploads and verifies everything, a manual `Scan for External Changes` afterwards uploads nothing; S6c a file created while auto sync was paused: the resume scan asks, `Skip` is remembered in the index and a manual scan leaves it alone |
+| `drain` | same, after one more offline edit of an indexed file | S6b startup scan with modified files only uploads them on its own (no dialog); S9 save + `workbench.action.closeWindow` at once; the runner checks the server after the window is gone (deactivate drain) |
 | `hash` | `workspace-hash` (`verifyUpload: "hash"`, `useTempFile: true`, `remotePath: /hash`) | S10 hash degrades to stat on a server without shell (one warning), `.new` + rename |
 
-Scenario ids follow the test plan of the 1.24.0 release (S1…S10). The user-facing
-modal confirmation (batches above `externalChanges.confirmThreshold`, git-driven
-batches) is **not** driven: the fixtures stay below the threshold and the test
-workspace has no `.git`.
+Scenario ids follow the test plan of the 1.24.0 release (S1…S10; S6b/S6c split
+the reconciliation rules). The fixtures stay below
+`externalChanges.confirmThreshold` and the test workspace has no `.git`, so
+the only confirmation dialog that appears is the one a scan or poll plan opens
+when it contains files the sync index never saw (`new`) on a built index —
+which is exactly what S6 and S6c exercise.
+
+### Driving the confirmation dialog
+
+A modal dialog cannot be driven with commands, so `extensionHost.js` answers
+it the way a user would, from inside the extension host: the host hands every
+module under an extension's path the same `vscode` API object (one instance
+per extension, chosen by the requiring file's path), and this script lives
+under the extension development path. Wrapping `vscode.window.show*Message`
+at module load therefore wraps it for the extension too. Modal calls are
+*held* (recorded, never shown) until a scenario answers them with one of the
+offered buttons (`pendingModal(/pattern/)` → `dialog.answer('Skip')`);
+non-modal messages pass through and are recorded. Every call (message,
+buttons, answer) is part of the evidence, and a held dialog that nobody
+answers behaves like one the user never closes — which is what the "nothing
+uploads while the dialog is open" assertions rely on. The profile also sets
+`window.dialogStyle: custom`, so a dialog the driver did not catch can never
+block the window from closing.
+
+The test module is loaded only after the eager activations, so a startup
+scan triggered by `workspaceContains:.vscode/sftp.json` would already be past
+its dialog by the time the driver exists. For the `reconcile` session the
+runner therefore moves `.vscode/sftp.json` aside (`sftp.json.e2e-held`) before
+launching VS Code; the script puts it back and activates the extension itself,
+which runs the same `activate()` → `scanAll('startup')` path (`trigger
+startup` in the log). The `drain` session needs no such trick: its startup
+plan holds modified files only and must run without asking.
 
 ## Running it
 
@@ -89,7 +119,7 @@ Everything lands under the run dir:
 ```
 <run>/results/report.md            human-readable report: verdict + evidence per scenario
 <run>/results/summary.json         the same as data
-<run>/results/<session>.json       what the in-host script recorded
+<run>/results/<session>.json       what the in-host script recorded (scenarios, host log, every dialog seen: message, buttons, answer)
 <run>/results/<session>-sftp-output.log    the extension's "sftp" output channel (sftp.debug on)
 <run>/results/<session>-exthost.log        VS Code's extension host log
 <run>/results/<session>-vscode-stdout.log  stdout/stderr of the VS Code process
@@ -108,5 +138,8 @@ anything asynchronous, `evidence(label, value)` for what the report should
 show, `control.call('writeWorkspaceFiles' | 'serverTree' | 'serverOps' |
 'setFault', ...)` to act from outside VS Code, and read the extension's own
 traces with `sftpLogLines()` / `readActivityLog()` / `readSyncIndex()`.
-QuickPicks are accepted with `acceptQuickPickSoon()`; modal dialogs cannot be
-driven, so keep batches under the confirmation threshold.
+QuickPicks are accepted with `acceptQuickPickSoon()`; a modal confirmation is
+held by the dialog driver — wait for it with `pendingModal(/pattern/)`, assert
+on `describeDialog(dialog)`, and answer with `dialog.answer('Upload 2 file(s)')`
+(or `dialog.answer()` to dismiss it). A held dialog that is never answered
+stalls the flow that asked for it, which the scenario then reports.

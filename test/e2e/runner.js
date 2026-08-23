@@ -156,16 +156,58 @@ function buildHashWorkspace(dir, sftpConfig) {
   return { uploadable: ['a.txt', 'c.bin', 'sub/b.txt'] };
 }
 
-/** Edits made "while VS Code is closed" before the reconcile session. */
+/**
+ * Edits made "while VS Code is closed" before the reconcile session: two
+ * files the index knows (modified) and two it never saw (new).
+ */
 function applyOfflineEdits(workspace) {
   const edits = [
-    { rel: 'src/app.js', content: `console.log('v3 edited offline at ${Date.now()}');\n// extra line so the size changes\n` },
-    { rel: 'notes/readme.txt', content: lorem(5, 'notes-offline') },
-    { rel: 'new-offline.txt', content: 'created while VS Code was closed\n' },
-    { rel: 'offline/deep/nested.txt', content: 'a new directory created offline\n' },
+    { rel: 'src/app.js', kind: 'modified', content: `console.log('v3 edited offline at ${Date.now()}');\n// extra line so the size changes\n` },
+    { rel: 'notes/readme.txt', kind: 'modified', content: lorem(5, 'notes-offline') },
+    { rel: 'new-offline.txt', kind: 'new', content: 'created while VS Code was closed\n' },
+    { rel: 'offline/deep/nested.txt', kind: 'new', content: 'a new directory created offline\n' },
   ];
   edits.forEach(edit => writeFileEnsuring(path.join(workspace, edit.rel), edit.content));
   return edits;
+}
+
+/** One more offline edit, of an indexed file only, before the drain session. */
+function applyOfflineModification(workspace) {
+  const edits = [
+    { rel: 'notes/readme.txt', kind: 'modified', content: lorem(7, 'notes-offline-again') },
+  ];
+  edits.forEach(edit => writeFileEnsuring(path.join(workspace, edit.rel), edit.content));
+  return edits;
+}
+
+const HELD_CONFIG_REL = '.vscode/sftp.json.e2e-held';
+
+/**
+ * Moves `.vscode/sftp.json` aside so that `workspaceContains:` does not
+ * activate the extension when the window opens. The in-host script — which VS
+ * Code loads only after the eager activations — puts it back and activates the
+ * extension itself, with its dialog driver already in place, so the startup
+ * scan's confirmation dialog can be answered. Returns the relative path of
+ * the held file.
+ */
+function holdSftpConfig(workspace) {
+  const from = path.join(workspace, '.vscode', 'sftp.json');
+  const to = path.join(workspace, ...HELD_CONFIG_REL.split('/'));
+  if (fs.existsSync(from)) {
+    fs.renameSync(from, to);
+  }
+  return HELD_CONFIG_REL;
+}
+
+/** Safety net: a session that never restored the config must not break the next one. */
+function releaseSftpConfig(workspace) {
+  const held = path.join(workspace, ...HELD_CONFIG_REL.split('/'));
+  const target = path.join(workspace, '.vscode', 'sftp.json');
+  if (fs.existsSync(held) && !fs.existsSync(target)) {
+    fs.renameSync(held, target);
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +477,9 @@ async function main() {
     'files.hotExit': 'off',
     'window.restoreWindows': 'none',
     'git.enabled': false,
+    // modal dialogs the in-host script does not intercept are then workbench
+    // dialogs, not native ones: they never block the window from closing
+    'window.dialogStyle': 'custom',
   }, null, 2));
 
   // the server
@@ -518,12 +563,25 @@ async function main() {
       name: 'reconcile', workspace, remoteBase: '/',
       before: () => {
         const edits = applyOfflineEdits(workspace);
-        log(`offline edits applied: ${edits.map(e => e.rel).join(', ')}`);
-        return Object.assign({}, mainFixtures, { offlineEdits: edits });
+        log(`offline edits applied: ${edits.map(e => `${e.rel} (${e.kind})`).join(', ')}`);
+        const heldConfig = holdSftpConfig(workspace);
+        log(`.vscode/sftp.json held back as ${heldConfig}: the in-host script activates the extension itself`);
+        return Object.assign({}, mainFixtures, { offlineEdits: edits, heldConfig });
+      },
+      after: () => {
+        if (releaseSftpConfig(workspace)) {
+          log('warning: the reconcile session never restored .vscode/sftp.json; restored by the runner');
+        }
+        return [];
       },
     },
     {
-      name: 'drain', workspace, fixtures: mainFixtures, remoteBase: '/',
+      name: 'drain', workspace, remoteBase: '/',
+      before: () => {
+        const edits = applyOfflineModification(workspace);
+        log(`offline modification applied: ${edits.map(e => e.rel).join(', ')}`);
+        return Object.assign({}, mainFixtures, { offlineModified: edits });
+      },
       after: (session, results) => {
         const expect = results && results.scenarios ? results.scenarios.find(s => s.id === 'S9-expect') : null;
         const scenarioResult = { id: 'S9', title: 'Deactivation drains the save made right before the window closed', status: 'NOT RUN', evidence: [], error: null };

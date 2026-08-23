@@ -57,7 +57,75 @@ tras cada subida explícita, `refreshRemoteExplorer`
 explorador remoto nunca se ha abierto (`_rootsMap` es `null`). La promesa no
 se espera ni se captura, así que queda como `[error]` en `exthost.log`. No
 afecta a la transferencia ni al índice; el harness lo registra como nota
-informativa (S1b).
+informativa (S1b). (Corregido después en la ronda 2 de la revisión
+adversarial; véase la re-ejecución más abajo.)
+
+## Re-ejecución sobre el código final
+
+Segunda ejecución del harness sobre la rama de integración con todo el código
+final de la 1.24.0 (`b4404fc`: rondas 1 y 2 de la revisión adversarial
+incluidas), en las mismas condiciones (Windows 11, VS Code 1.134.0, Node
+24.18.1 en el extension host, `npm run compile` previo). Resultado:
+**13 de 13 escenarios en verde** en dos ejecuciones consecutivas
+(`report.md` en `SFTP_E2E_RUN_DIR`), `npm test` en verde (37 suites, 701
+pruebas; el spec E2E se omite sin `SFTP_E2E=1`). No se encontró ninguna
+regresión del producto; todos los fallos iniciales previstos eran expectativas
+del harness desfasadas por los cambios de la ronda 2.
+
+| Id | Sesión | Resultado | Qué cambió respecto a la primera ejecución |
+| :-- | :-- | :-- | :-- |
+| S1 | `fresh` | PASA | Sin cambios |
+| S7 | `fresh` | PASA | El resumen de `Rebuild Sync Index` tiene otro formato (`3 indexed (0 with another mtime on the server), 1 differ in size, 4 only local, 1 only remote; index marked as built`); se comprueba además que el aviso de índice vacío (`Build index now` / `Don't show again`) se muestra, que antes del rebuild el índice **no** está sembrado y que después el archivo lleva `seededAt`; la notificación resumen (`Indexed 3 files; 1 differ in size, …`) coincide con el log |
+| S2–S5, S8 | `fresh` | PASA | Sin cambios (el watcher y los guardados siguen con la regla del umbral; el escaneo de `Resume Auto Sync` sobre un índice sembrado y completo sigue "up to date") |
+| S1b | `fresh` | PASA (antes INFO) | Convertido en aserción: **0** líneas `[error]` en `exthost.log` en toda la sesión; el `Can't find config for remote resource …` del Remote Explorer ha desaparecido |
+| S6 | `reconcile` | PASA (adaptado) | Con el índice sembrado por el `Rebuild` de S7, el escaneo de arranque que encuentra 2 modificados + 2 nuevos **abre el modal de confirmación** (`Review plan` por defecto, `Upload 4 file(s)`, `Skip`); el harness comprueba que mientras el diálogo espera **no hay ninguna subida** (0 `OPEN` de escritura, sin `[plan …] uploading`, los nuevos sin entrada en el índice), contesta `Upload 4 file(s)` y verifica `user chose "run"` → `4 verified, 0 failed` → contenido en el servidor e índice `verified`; el escaneo manual posterior sigue "up to date" sin escrituras |
+| S6c | `reconcile` | PASA (nuevo) | Con la sincronización pausada se crea un archivo desde fuera (el watcher lo descarta: `auto sync is paused`); `Resume Auto Sync` lanza el escaneo `resume`, que abre el modal; `Skip` deja `status: 'skipped'` en el índice, no sube nada y un escaneo manual después lo deja en paz ("up to date") |
+| S6b | `drain` | PASA (nuevo) | Antes de la sesión se modifica **solo** un archivo ya indexado: el escaneo de arranque lo sube solo (`1 verified, 0 failed`), sin diálogo (`0` modales registrados, sin `user chose`) |
+| S9 | `drain` | PASA | Sin cambios (el drenaje de `deactivate` con `confirm: false` sube el guardado de 1 archivo) |
+| S10 | `hash` | PASA | Sin cambios |
+
+Lo que se adaptó en el harness y por qué:
+
+- **Diálogos modales conducidos desde el script del extension host.** El
+  host entrega a todo módulo que vive bajo la ruta de una extensión el
+  **mismo** objeto de API `vscode` (una instancia por extensión, elegida por
+  la ruta del archivo que hace `require`), y `extensionHost.js` está bajo el
+  `extensionDevelopmentPath`. Envolver `vscode.window.show*Message` al cargar
+  el módulo lo envuelve también para la extensión: las llamadas modales se
+  **retienen** (se registran, no se muestran) hasta que un escenario las
+  contesta con uno de los botones ofrecidos (`pendingModal(/patrón/)` →
+  `dialog.answer('Skip')`); las no modales pasan y se registran. Cada llamada
+  (mensaje, botones, respuesta) queda como evidencia, y un modal retenido que
+  nadie contesta se comporta como un diálogo que el usuario no cierra, que es
+  justo lo que afirman las comprobaciones de "nada sube mientras el diálogo
+  espera". Comprobado empíricamente en esta ejecución: el modal del plan de
+  arranque y el del escaneo `resume` llegaron al driver con el texto y los
+  botones esperados. El perfil añade `window.dialogStyle: custom` como red de
+  seguridad: un modal que el driver no capturase sería un diálogo del
+  workbench, no nativo, y nunca bloquearía el cierre de la ventana.
+- **`.vscode/sftp.json` retenido en la sesión `reconcile`.** El módulo de
+  pruebas se carga **después** de las activaciones ansiosas (`Eager
+  extensions activated` → `run()` 3 ms más tarde en los logs), así que un
+  escaneo de arranque disparado por `workspaceContains:.vscode/sftp.json` ya
+  habría pedido su diálogo antes de existir el driver. El runner aparta el
+  archivo (`sftp.json.e2e-held`) antes de lanzar VS Code y el script lo
+  restaura y activa la extensión él mismo: es el mismo `activate()` →
+  `scanAll('startup')` (`trigger startup` en el log). La sesión `drain` no lo
+  necesita: su plan de arranque solo tiene modificados y debe correr sin
+  preguntar.
+- **Fixtures.** Las ediciones offline de `reconcile` llevan `kind`
+  (`modified` / `new`); antes de `drain` se aplica una edición offline más de
+  un archivo indexado (`notes/readme.txt`).
+- **S7, S1b y README** como se describe en la tabla; el README documenta el
+  driver de diálogos, la retención de la configuración y las nuevas filas de
+  la tabla de sesiones.
+
+Observación para el integrador (comportamiento del producto, no regresión):
+cuando el escaneo de arranque encuentra a la vez archivos modificados y
+archivos nuevos, el plan es uno solo y **todo** espera al diálogo, también los
+modificados (S6 lo evidencia: 0 subidas hasta contestar). Los modificados solo
+se suben por sí solos cuando el plan no contiene ningún `new` (S6b). La
+entrada `skipped` que deja `Skip` lleva `verifiedAt: 0`.
 
 ## Tipo de Cambio
 
@@ -107,7 +175,8 @@ informativa (S1b).
 - El directorio de cada ejecución (`<tmp>/vscode-sftp-e2e/<fecha>` o
   `SFTP_E2E_RUN_DIR`) conserva el servidor, el perfil de VS Code y los
   informes como evidencia.
-- Limitaciones: los diálogos modales (umbral de confirmación, lotes de git) no
-  se manejan, así que los lotes se mantienen por debajo del umbral y el
-  workspace de prueba no es un repositorio git; probado en Windows (las rutas
-  de `Code.exe` para macOS/Linux están previstas pero no ejercitadas).
+- Limitaciones: los lotes se mantienen por debajo del umbral de confirmación y
+  el workspace de prueba no es un repositorio git, así que el único modal que
+  aparece es el de los planes de escaneo con archivos nuevos (S6/S6c), que el
+  driver de diálogos contesta; probado en Windows (las rutas de `Code.exe`
+  para macOS/Linux están previstas pero no ejercitadas).
