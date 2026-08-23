@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 52 | 2026-08-22 | Revisión adversarial ronda 2: módulos y experiencia    | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_modulos.md) |
 | 51 | 2026-08-22 | Revisión adversarial ronda 2: núcleo de transferencia | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_core.md) |
 | 50 | 2026-08-22 | Harness E2E con VS Code y servidor SFTP reales        | [Ver detalle](2026-08-22_test_e2e_sftp.md) |
 | 49 | 2026-08-22 | Detección de cambios externos, planes y escaneo       | [Ver detalle](2026-08-22_feat_cambios_externos.md) |
