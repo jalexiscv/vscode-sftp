@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 42 | 2026-08-22 | Análisis: cambios externos y verificación de carga   | [Ver detalle](2026-08-22_docs_analisis_cambios_externos.md) |
 | 41 | 2026-08-16 | Release 1.22.0: espejo local-remoto seguro           | [Ver detalle](2026-08-16_release_1_22_0.md) |
 | 40 | 2026-08-16 | Correcciones en transferencia y watcher              | [Ver detalle](2026-08-16_fix_transferencia_watcher.md) |
 | 39 | 2026-08-16 | Vista de actividad y modo pausa                      | [Ver detalle](2026-08-16_feat_actividad_y_pausa.md) |

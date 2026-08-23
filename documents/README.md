@@ -7,6 +7,7 @@ Fork correctivo de la extensión [Natizyskunk/vscode-sftp](https://github.com/Na
 | Documento | Descripción |
 |-----------|-------------|
 | [01-plan-migracion-basic-ftp.md](01-plan-migracion-basic-ftp.md) | Plan técnico para reemplazar el paquete `ftp` abandonado por `basic-ftp` (bugs FTP del backlog, pasos, riesgos) |
+| [02-analisis-cambios-externos-y-verificacion-carga.md](02-analisis-cambios-externos-y-verificacion-carga.md) | Análisis y propuesta para la próxima versión: detección de cambios hechos fuera de VS Code, plan/manifiesto de subida y verificación de carga (diagnóstico, diseño, fases) |
 
 ## Protocolos
 
