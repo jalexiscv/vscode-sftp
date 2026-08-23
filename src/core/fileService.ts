@@ -13,7 +13,7 @@ import { resolveTempFilePatterns } from './tempFiles';
 import { FileSystem } from './fs';
 import Scheduler from './scheduler';
 import { createRemoteIfNoneExist, removeRemoteFs } from './remoteFs';
-import TransferTask from './transferTask';
+import TransferTask, { VerifyUploadLevel } from './transferTask';
 import { TransferFailure } from './customError';
 import localFs from './localFs';
 
@@ -42,6 +42,8 @@ interface ServiceOption {
   useTempFile: boolean;
   openSsh: boolean;
   downloadOnOpen: boolean | 'confirm';
+  verifyUpload: VerifyUploadLevel;
+  uploadRetries: number;
   filePerm?: number;
   dirPerm?: number;
   syncOption: {
@@ -212,6 +214,8 @@ function getHostInfo(config) {
     'useTempFile',
     'openSsh',
     'downloadOnOpen',
+    'verifyUpload',
+    'uploadRetries',
     'ignore',
     'ignoreFile',
     'ignoreTempFiles',

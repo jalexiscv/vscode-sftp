@@ -86,6 +86,26 @@ export default abstract class FileSystem {
   stat(path: string): Promise<FileStats> {
     return this.lstat(path);
   }
+
+  /**
+   * Size of `path` as the file system reports it right now, used to verify
+   * that an upload landed whole. One lstat() by default; a file system for
+   * which a stat is expensive overrides it with a dedicated query (FTP: SIZE,
+   * because its lstat() lists the whole parent directory).
+   */
+  statSize(path: string): Promise<number> {
+    return this.lstat(path).then(stat => stat.size);
+  }
+
+  /**
+   * Modification time of `path` in milliseconds on the local clock (remote
+   * file systems already apply `remoteTimeOffsetInHours`), or `undefined`
+   * when the file system cannot answer cheaply. It only feeds a post-upload
+   * hint, so a file system is free to opt out rather than pay for it.
+   */
+  statMtime(path: string): Promise<number | undefined> {
+    return this.lstat(path).then(stat => stat.mtime);
+  }
   abstract readlink(path: string): Promise<string>;
   abstract symlink(targetPath: string, path: string): Promise<void>;
   abstract unlink(path: string): Promise<void>;
@@ -93,9 +113,15 @@ export default abstract class FileSystem {
   abstract rename(srcPath: string, destPath: string): Promise<void>;
   abstract renameAtomic(srcPath: string, destPath: string): Promise<void>;
 
-  static abortReadableStream(stream: Readable) {
+  // the error a transfer rejects with when it was cancelled rather than failed
+  static createAbortedError(): Error {
     const err = new Error('Transfer Aborted') as FileSystemError;
     err.code = ERROR_MSG_STREAM_INTERRUPT;
+    return err;
+  }
+
+  static abortReadableStream(stream: Readable) {
+    const err = FileSystem.createAbortedError();
 
     // don't do `stream.destroy(err)`! `sftp.ReadaStream` do not support `err` parameter in `destory` method.
     stream.emit('error', err);

@@ -45,6 +45,9 @@ const configScheme = {
   useTempFile: Joi.boolean(),
   openSsh: Joi.boolean(),
   downloadOnOpen: Joi.boolean().allow('confirm'),
+  // post-upload check and retries; see core/transferTask
+  verifyUpload: Joi.string().valid('none', 'stat'),
+  uploadRetries: Joi.number().integer().min(0),
 
   ignore: Joi.array()
     .min(0)
@@ -94,6 +97,10 @@ const defaultConfig = {
   useTempFile: false,
   openSsh: false,
   downloadOnOpen: false,
+  // every upload is checked against the server and retried before it is
+  // reported as failed; 'none' keeps only the protocol ack and the byte count
+  verifyUpload: 'stat',
+  uploadRetries: 2,
   ignore: [],
   // ignoreFile: undefined,
   ignoreTempFiles: true,
