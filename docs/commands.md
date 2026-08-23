@@ -80,14 +80,14 @@ Failed entries can be retried individually with the inline button, or all at onc
 ### SFTP: Scan for External Changes
 Compare the local tree of a server with its **sync index** — what was last uploaded and verified, file by file — and upload whatever changed since, whether it was edited by another tool, rewritten by a `git pull` in a terminal, or modified while VS Code was closed.
 
-The scan walks the local tree with `ignore` pruning (progress is shown and can be cancelled), never lists the server, and produces an upload plan of `new` and `modified` files. Below [externalChanges.confirmThreshold](configuration.md#externalchangesconfirmthreshold) files the plan is uploaded right away; above it, or when git moved HEAD, a modal dialog asks first (`Upload N file(s)`, `Review plan`, `Skip`). With several servers configured, a QuickPick asks which one to scan. The same scan runs on its own on activation, on `sftp.json` reload, on resume and on focus (see [externalChanges](configuration.md#externalchanges)) and, optionally, on a timer (`watcher.pollInterval`).
+The scan walks the local tree with `ignore` pruning (progress is shown and can be cancelled), never lists the server, and produces an upload plan of `new` files (never seen by the sync index) and `modified` files (indexed and changed since their last verified upload); files you skipped earlier are not proposed again until they change. `modified` files below [externalChanges.confirmThreshold](configuration.md#externalchangesconfirmthreshold) are uploaded right away; a plan that contains `new` files, exceeds the threshold or was caused by git asks first with a modal dialog (`Review plan` — the default —, `Upload N file(s)`, `Skip`; `Skip` is remembered). With several servers configured, a QuickPick asks which one to scan. The same scan runs on its own on activation, on `sftp.json` reload, on resume and on focus (see [externalChanges](configuration.md#externalchanges)) and, optionally, on a timer (`watcher.pollInterval`) — but automatic scans only plan `modified` files until the index has been seeded.
 
-With an empty index a manual scan plans every file as `new` — build the index first with `SFTP: Rebuild Sync Index` unless that is what you want.
+A manual scan whose plan you confirm and upload seeds the index, like `SFTP: Rebuild Sync Index` does. On an unseeded index it plans every unindexed file as `new`, so build the index first unless that is what you want.
 
 ### SFTP: Rebuild Sync Index
-Rebuild the sync index of a server from what is actually there: the remote tree (respecting `ignore` and skipping the remote trash) is listed and compared with the local one, and every file present on both sides with the same size — and, over SFTP, an mtime within ±2 s — is recorded as verified. Files that differ or exist on one side only are left out, so the next scan reports them as `modified` or `new`.
+Rebuild the sync index of a server from what is actually there: the remote tree (respecting `ignore` and skipping the remote trash) is listed and compared with the local one, and every file present on both sides with the same size is recorded as verified — the remote mtime is not required to match, since a deploy through git, rsync or CI never preserves it. Files that differ in size or exist on one side only are left out, so the next scan reports them as `modified` or `new`. The summary reads `N indexed; M differ in size; K only local`, and the index is marked as seeded: from then on automatic scans plan new files too, behind a confirmation.
 
-Run it once on a fresh install, or after switching servers or restoring a backup on the remote; the extension offers it (`Build index now`) the first time an automatic scan finds the index empty. Progress can be cancelled, in which case the index is left as it was.
+Run it once per server after installing, or after switching servers or restoring a backup on the remote; until then automatic scans only re-upload files the extension already uploaded itself, and it reminds you once per server (`Build index now` / `Don't show again`). Progress can be cancelled, in which case the index is left as it was.
 
 ### SFTP: Preview Upload (Dry Run)
 Show what *would* be uploaded — without uploading anything. Pick the server (if there are several) and the scope: the whole project, the folder of the active file, or any folder inside the project. The local tree is scanned and compared with the sync index, and the result is shown as a pending plan in the **Upload plans** group of the SFTP Activity view, with a summary such as `12 file(s) would be uploaded (3 new, 9 modified); 40 unchanged` and an `Upload all` button. If nothing would be uploaded no plan is created.
@@ -116,7 +116,7 @@ As soon as a plan exists, the SFTP Activity view shows two groups: **Upload plan
 The status bar shows `↑N` files pending upload (collector queue plus pending plan items) and `✗N` failed uploads from the recent plans.
 
 ### SFTP: Cancel All Transfers
-Stop the current transfers (upload and download).
+Stop the current transfers (upload and download). Items of an upload plan that had not started yet go back to `pending`.
 
 ### SFTP: Open SSH in Terminal
 Open a terminal in VSCode and auto login to a specific server.
