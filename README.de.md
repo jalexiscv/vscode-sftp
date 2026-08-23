@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.22.0](#neuerungen-in-v1220)
+- [Neuerungen in v1.24.0](#neuerungen-in-v1240)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 187/187 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 623 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -98,27 +98,39 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Übertragungen** | Jede Datei und jeder Ordner, deren Name `.tmp` enthält, wird dauerhaft von den Übertragungen ausgeschlossen (Uploads, `uploadOnSave` und Sync), auf allen Servern und ohne jegliche `ignore`-Konfiguration |
 | **Profile** | Das mit `SFTP: Set Profile` oder dem Verbindungsmanager aktivierte Profil „wechselt nicht mehr von selbst": das Neuladen von `sftp.json` setzt es nicht mehr auf das `defaultProfile` zurück, und die Auswahl bleibt über VSCode-Neustarts hinweg erhalten. `defaultProfile` ist nur noch der Anfangswert und die Rückfallebene, wenn das aktive Profil verschwindet |
 
-## Neuerungen in v1.22.0
+### [v1.22.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.22.0) — sicherer Lokal-Remote-Spiegel
 
-Bei v1.22.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert — und dass auf deinem Rechner bleibt, was ihn nie hätte verlassen dürfen.
+| Bereich | Änderung |
+|---------|----------|
+| **Übertragungen** | Temporäre Dateien werden nie hochgeladen: Eine eingebaute Liste schließt Swap- und Backup-Dateien der Editoren, Office-Sperrdateien, Merge-Überbleibsel, unvollständige Downloads und System-Metadaten aus, auf allen Servern und ohne Konfiguration (`ignoreTempFiles`, `tempFilePatterns`) |
+| **Löschungen** | Lokale Löschungen werden auf den Server gespiegelt (`deleteRemoteOnLocalDelete`, standardmäßig aktiv), mit vier Schutzmechanismen: modale Bestätigung oberhalb von `deleteRemoteConfirmThreshold` (10), durch Git verursachte Löschungen werden verworfen, Selbstunterdrückung während `Sync Remote -> Local --delete` und Remote-Papierkorb |
+| **Remote-Papierkorb** | Mit `remoteTrash` ist Löschen ein serverseitiges `rename` in einen Papierkorb-Ordner, umkehrbar mit `SFTP: Undo Last Remote Deletion` und `SFTP: Restore from Remote Trash`; `SFTP: Empty Remote Trash` leert ihn, und Abgelaufenes wird nach `retentionDays` bereinigt |
+| **Umbenennungen** | `renameRemoteOnLocalRename` spiegelt Umbenennen und Verschieben als serverseitiges `rename`, ohne erneuten Upload und ohne einen Moment, in dem der Pfad auf dem Server fehlt |
+| **UI** | Aktivitätsansicht mit dem Verlauf jeder Übertragung, Löschung und Umbenennung samt Wiederholungen (`sftp.showActivityView`); Pausenmodus (`SFTP: Pause/Resume Auto Sync`), der die gesamte automatische Synchronisierung aussetzt |
+| **Härtung** | Zwei adversariale Review-Durchgänge vor der Veröffentlichung: Git-Schutz beim Einreihen ausgewertet, ein einziger Löschpfad, unsichere Papierkorb-Pfade abgelehnt, Profil der Löschung beim Wiederherstellen und Bereinigen beachtet, Bereinigung, die das Remote-Verzeichnis selbst durchsucht |
+
+## Neuerungen in v1.24.0
+
+Bei v1.24.0 geht es um Vertrauen: zu wissen, dass das, was sich lokal geändert hat, auf dem Server ist — auch wenn ein anderes Werkzeug es geändert hat oder du es bei geschlossenem VS Code getan hast — und, wenn ein Upload nicht vollständig ankommt, davon zu erfahren und es mit einem Klick beheben zu können. Bisher hat die Erweiterung die Uploads *gemacht*; jetzt *beweist* sie sie auch.
 
 | Neuerung | Was sie bringt |
 |----------|----------------|
-| **Temporäre Dateien werden nie hochgeladen** | Eine eingebaute Liste schließt Swap- und Backup-Dateien der Editoren (vim, emacs), Sperrdateien von Office und LibreOffice, Merge-Überbleibsel (`*.orig`, `*.rej`, `*.bak`), unvollständige Downloads (`*.part`, `*.crdownload`) und System-Metadaten (`.DS_Store`, `Thumbs.db`, `desktop.ini`) aus — auf allen Servern und ohne jede Konfiguration. Mit `ignoreTempFiles` abschaltbar und mit `tempFilePatterns` erweiterbar; Abhängigkeits-Lockdateien wie `composer.lock` werden normal übertragen |
-| **Lokale Löschungen werden auf den Server gespiegelt** | `deleteRemoteOnLocalDelete` (standardmäßig aktiv) erfasst Dateien und Ordner, egal ob du im VS-Code-Explorer, in einem Terminal oder mit einem externen Werkzeug löschst, und braucht kein `watcher.files`-Glob. Vier Schutzmechanismen verhindern böse Überraschungen (siehe unten) |
-| **Remote-Papierkorb mit Rückgängig** | Mit `remoteTrash` ist ein Löschen ein serverseitiges `rename` in einen Papierkorb-Ordner: Das kostet keine Bandbreite und lässt sich mit `SFTP: Undo Last Remote Deletion` zurücknehmen. Dazu kommen `SFTP: Restore from Remote Trash` und `SFTP: Empty Remote Trash`; abgelaufene Einträge werden nach `retentionDays` von selbst bereinigt |
-| **Umbenennen und Verschieben werden als `rename` gespiegelt** | `renameRemoteOnLocalRename` benennt auf dem Server um, statt die Datei erneut hochzuladen und die alte zu löschen: Die Datei behält ihre Remote-Identität, und es gibt keinen Moment, in dem der Pfad in einem produktiven Document-Root fehlt |
-| **Aktivitätsansicht** | Eine zweite Ansicht in der SFTP-Seitenleiste mit dem Verlauf jeder Übertragung, Löschung und Umbenennung: Typ, Status, Uhrzeit, Pfad, Profil, Dauer und Fehler. Fehlgeschlagene Vorgänge lassen sich einzeln oder alle auf einmal wiederholen; ausblendbar über die Einstellung `sftp.showActivityView` |
-| **Pausenmodus** | `SFTP: Pause/Resume Auto Sync` setzt die gesamte automatische Synchronisierung aus — `uploadOnSave`, `downloadOnOpen`, den Watcher sowie die Spiegelung von Löschungen und Umbenennungen — während explizite Befehle weiterhin funktionieren. Der Zustand wird pro Workspace gespeichert und in der Statusleiste angezeigt |
+| **Erkennung externer Änderungen** | Ein persistenter Sync-Index merkt sich pro Server, welche Version jeder Datei zuletzt hochgeladen und verifiziert wurde. Beim Start, beim Neuladen von `sftp.json`, beim Fortsetzen der Pause, beim Zurückkehren des Fokus nach fünf Minuten und auf Abruf (`SFTP: Scan for External Changes`) wird der lokale Baum mit diesem Index verglichen, und was außerhalb des Editors geändert wurde — ein `git pull` im Terminal, ein Code-Generator, Änderungen bei geschlossenem VS Code — wird über einen Plan hochgeladen, ohne den Server aufzulisten. `watcher.pollInterval` ergänzt ein periodisches Polling für Netzlaufwerke oder Docker-/WSL-Mounts. Schlüssel: `externalChanges.scanOnStartup`, `scanOnResume`, `confirmThreshold` |
+| **Ein einziger Änderungssammler** | `uploadOnSave` und der Watcher laden dasselbe Speichern nicht mehr zweimal hoch: Editor-Speicherungen gehen sofort hoch, externe Änderungen werden gebündelt (700 ms) und pro Pfad dedupliziert. `uploadOnSave: false` ist beim Überwachen von `**/*` nicht mehr nötig |
+| **Upload-Pläne** | Jeder Stapel ist ein Plan mit Ursprung, Grund pro Datei (neu, geändert), Status, Versuchen und Fehler, sichtbar in der Gruppe „Upload plans" der Aktivitätsansicht (Plan hochladen, pro Datei hochladen/überspringen/vergleichen, Bericht exportieren, entfernen). `SFTP: Preview Upload (Dry Run)` zeigt, was hochgeladen würde, ohne etwas hochzuladen; `SFTP: Upload Plan`, `SFTP: Export Last Upload Report` (Markdown) und `SFTP: Clear Upload Plans` vervollständigen den Satz. Die Statusleiste zeigt `↑N` ausstehende und `✗N` fehlgeschlagene Uploads |
+| **Upload-Verifizierung** | Jeder Upload zählt die gesendeten Bytes und prüft mit `verifyUpload: "stat"` (Standard), dass die Remote-Größe exakt übereinstimmt (`SIZE` bei FTP). `"hash"` vergleicht zusätzlich einen Digest (sha256/sha1/md5/crc32 per `sha256sum`/`shasum`/`openssl`/`md5sum` über SSH oder `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH` bei FTP) und fällt auf `stat` zurück, wenn der Server ihn nicht berechnen kann. Ein Fehlschlag wird mit wachsender Wartezeit wiederholt (`uploadRetries`, 2), bevor er mit seinem Grund gemeldet wird |
+| **Persistentes Aktivitätsprotokoll** | Die Aktivitätsansicht protokolliert jede Aufgabe — ob aus einem Befehl, einem Speichern oder dem Watcher — mit Remote-Pfad und Verifizierungsergebnis und überlebt das Neuladen des Fensters (`activity-log.json`): Die Fehlschläge der vorherigen Sitzung bleiben wiederholbar. Auch Fehler vor der Übertragung (Verbindung, Zugangsdaten, Berechtigungen) erscheinen |
+| **Korrekturen** | `uploadFile()` lehnt jetzt ab, wenn die Übertragung fehlschlägt (die Ansicht konnte einen kaputten Upload als Erfolg markieren); die Unterdrückung der automatischen Synchronisierung während Downloads und `Sync Remote -> Local` wurde nie verwendet; `dir/`-Muster in `ignore` beschneiden den Teilbaum; Schutz vor Symlink-Schleifen; ein Index, der beschädigte Dateien und fehlgeschlagene `rename`s verkraftet; numerische SFTP-Fehler werden beschrieben; und mehr im [CHANGELOG](CHANGELOG.md) |
 
-### Die vier Schutzmechanismen beim Löschen
+### Schutzmechanismen und Entscheidungen
 
 | Schutzmechanismus | Verhalten |
 |-------------------|-----------|
-| **Sammelbestätigung** | Ein Stapel größer als `deleteRemoteConfirmThreshold` (Standard 10) öffnet einen modalen Dialog mit der Dateiliste und tut ohne Bestätigung nichts |
-| **Git-Bewusstsein** | Löschungen, die durch eine Git-Operation ausgelöst wurden (checkout, rebase, merge, stash…), werden verworfen: Ein Branch-Wechsel rührt den Server nie an |
-| **Selbstunterdrückung** | Löschungen, die das eigene `Sync Remote -> Local --delete` beim Aufräumen überzähliger lokaler Dateien verursacht, werden unterdrückt, statt zum Server zurückzuprallen |
-| **Remote-Papierkorb** | Mit `remoteTrash` ist eine Löschung ein umkehrbares Verschieben in den Papierkorb des Servers statt eines `unlink` |
+| **Bestätigungsschwelle** | Oberhalb von `externalChanges.confirmThreshold` (Standard 20) wird nichts ohne Nachfrage hochgeladen: Ein modaler Dialog listet die Dateien und bietet `Upload N file(s)`, `Review plan` (der Plan bleibt in der Ansicht ausstehend) oder `Skip` |
+| **Git-Bewusstsein** | Hat sich HEAD zwischen Änderung und Upload bewegt (checkout, pull, rebase, merge…), fragt der Stapel immer nach, egal wie groß er ist: Ein Branch-Wechsel lädt nie überraschend Hunderte Dateien hoch |
+| **Erste Verwendung** | Bei leerem Index planen automatische Scans nichts (alles sähe neu aus): Es wird einmal hingewiesen und `Build index now` (`SFTP: Rebuild Sync Index`) angeboten, das Remote und Lokal auflistet und Übereinstimmendes als verifiziert einträgt |
+| **Hash-Degradierung** | Kann der Server keinen Digest berechnen (SFTP-Konto ohne Shell, FTP ohne `XSHA256`/`HASH`…), gilt der Upload als nach Größe verifiziert, mit einer einmaligen Warnung pro Verbindung; nur ein abweichender Digest ist ein Fehlschlag |
+| **Standardmäßig aktiv, nichts zu konfigurieren** | Scan beim Start und beim Fortsetzen, Größenprüfung und zwei Wiederholungen sind aktiv; `externalChanges.scanOnStartup: false`, `scanOnResume: false`, `verifyUpload: "none"` und `uploadRetries: 0` stellen das vorherige Verhalten wieder her |
 
 ## Was wir von dieser Version erwarten
 
@@ -144,7 +156,7 @@ Bei v1.22.0 geht es darum, dass der Server wirklich abbildet, was lokal passiert
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.22.0.vsix
+code --install-extension sftp-1.24.0.vsix
 ```
 
 ## Dokumentation
@@ -199,6 +211,7 @@ Die vollständige Liste der Konfigurationsoptionen findest du [hier](https://git
 - [Verbindung mit Sprüngen (Hopping)](#verbindung-mit-sprüngen-hopping)
 - [Konfiguration in den Benutzereinstellungen](#konfiguration-in-den-benutzereinstellungen)
 - [Sicheres Löschen und Umbenennen](#sicheres-löschen-und-umbenennen)
+- [Externe Änderungen und Upload-Verifizierung](#externe-änderungen-und-upload-verifizierung)
 
 ### Einfach
 ```json
@@ -372,6 +385,31 @@ In sftp.json:
 ```
 
 _Hinweis:_ Alle diese Werte sind jene, die die Erweiterung bereits standardmäßig verwendet, außer `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) und `remoteTrash.retentionDays` (`7`); du musst sie nur eintragen, um sie zu ändern. Ein absoluter `path` hält den Papierkorb außerhalb des vom Webserver ausgelieferten Document-Roots.
+
+### Externe Änderungen und Upload-Verifizierung
+```json
+{
+  "host": "host",
+  "username": "benutzername",
+  "remotePath": "/var/www/project",
+  "uploadOnSave": true,
+  "watcher": {
+    "files": "**/*",
+    "autoUpload": true,
+    "autoDelete": false,
+    "pollInterval": 0
+  },
+  "externalChanges": {
+    "scanOnStartup": true,
+    "scanOnResume": true,
+    "confirmThreshold": 20
+  },
+  "verifyUpload": "stat",
+  "uploadRetries": 2
+}
+```
+
+_Hinweis:_ `externalChanges`, `verifyUpload` und `uploadRetries` tragen hier ihre Standardwerte; der `watcher`-Block ist für die Scans nicht nötig (nur, um auf Live-Änderungen zu reagieren, und für `pollInterval`). `verifyUpload: "hash"` ergänzt die Inhaltsprüfung, und ein `pollInterval` in Millisekunden schaltet das periodische Polling ein.
 
 ## Remote-Explorer
 ![remote-explorer-vorschau](assets/showcase/remote-explorer.png)
