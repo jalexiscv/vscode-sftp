@@ -202,7 +202,12 @@ export async function deactivate(): Promise<void> {
   // A save followed by "Reload Window" within the batching window would
   // otherwise be dropped with the queue: push what is pending through, wait
   // (bounded) for the plans it started, and only then tear the services down.
-  await settleWithin(flushPendingChanges().then(whenNoPlanRuns), DEACTIVATE_DRAIN_MS);
+  // No dialog can be answered while the host closes, so a batch that would
+  // need confirmation is left pending rather than asked about.
+  await settleWithin(
+    flushPendingChanges({ confirm: false }).then(whenNoPlanRuns),
+    DEACTIVATE_DRAIN_MS
+  );
   changeCollector.destroy();
   uploadStatus.destroy();
   syncIndexFeeder.destroy();
