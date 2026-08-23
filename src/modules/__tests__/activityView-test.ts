@@ -428,7 +428,7 @@ describe('ActivityTreeDataProvider', () => {
     expect((provider.getTreeItem(pNode).iconPath as any).id).toBe('loading~spin');
   });
 
-  test('a plan item offers a click only when its local file exists', () => {
+  test('a plan item always offers a click; the reveal command copes with a missing file', () => {
     const plan = makePlan(['exists.php', 'gone.php']);
     vol.fromJSON({ [local('exists.php')]: '<?php' });
 
@@ -440,7 +440,65 @@ describe('ActivityTreeDataProvider', () => {
     expect(existsItem.command).toBeDefined();
     expect(existsItem.command!.command).toBe('sftp.activity.reveal');
     expect(existsItem.command!.arguments).toEqual([exists]);
-    expect(provider.getTreeItem(gone).command).toBeUndefined();
+    // no stat per node on every rebuild: the command is offered regardless
+    expect(provider.getTreeItem(gone).command).toBeDefined();
+    expect(provider.getTreeItem(gone).command!.arguments).toEqual([gone]);
+    // the group row has no local path and no command
+    expect(provider.getTreeItem(plansGroup).command).toBeUndefined();
+  });
+
+  describe('scheduleRefresh', () => {
+    let fire: jest.SpyInstance;
+
+    beforeAll(() => {
+      jest.useFakeTimers({ legacyFakeTimers: true } as any);
+    });
+
+    afterAll(() => {
+      jest.useRealTimers();
+    });
+
+    beforeEach(() => {
+      fire = jest.spyOn((provider as any)._onDidChangeTreeData, 'fire');
+    });
+
+    afterEach(() => {
+      provider.dispose();
+      fire.mockRestore();
+    });
+
+    test('folds a burst of events into one rebuild, 100 ms after the first', () => {
+      for (let i = 0; i < 5; i++) {
+        provider.scheduleRefresh();
+      }
+      expect(fire).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(99);
+      expect(fire).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+      expect(fire).toHaveBeenCalledTimes(1);
+
+      // a steady stream still refreshes once per window, not once per event
+      for (let i = 0; i < 3; i++) {
+        provider.scheduleRefresh();
+        jest.advanceTimersByTime(30);
+      }
+      jest.advanceTimersByTime(100);
+      expect(fire).toHaveBeenCalledTimes(2);
+    });
+
+    test('refresh() rebuilds at once and drops the pending rebuild; dispose() drops it too', () => {
+      provider.scheduleRefresh();
+      provider.refresh();
+      expect(fire).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(200);
+      expect(fire).toHaveBeenCalledTimes(1);
+
+      provider.scheduleRefresh();
+      provider.dispose();
+      jest.advanceTimersByTime(200);
+      expect(fire).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('a failed entry with a retry is marked as retryable', () => {
