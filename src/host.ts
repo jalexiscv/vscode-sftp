@@ -187,6 +187,28 @@ export async function showChoiceMessage(
   return result ? (result as { title: string }).title : undefined;
 }
 
+/**
+ * A cancellable progress notification. Wrapped here so modules can be tested
+ * with a stand-in: the default vscode mock returns a value that never settles
+ * when awaited.
+ */
+export function withProgress<R>(
+  options: { title: string; cancellable?: boolean },
+  task: (
+    progress: vscode.Progress<{ message?: string; increment?: number }>,
+    token: vscode.CancellationToken
+  ) => Thenable<R>
+): Thenable<R> {
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: options.title,
+      cancellable: Boolean(options.cancellable),
+    },
+    task
+  );
+}
+
 export function showQuickPick<T extends vscode.QuickPickItem>(
   items: T[] | Thenable<T[]>,
   options?: vscode.QuickPickOptions

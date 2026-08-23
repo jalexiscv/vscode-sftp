@@ -95,3 +95,7 @@ export const COMMAND_ACTIVITY_REVEAL = 'sftp.activity.reveal';
 
 // nombre de la vista del registro de actividad (package.json > views)
 export const VIEW_ACTIVITY = 'sftpActivity';
+
+// detección de cambios externos e índice de sincronización
+export const COMMAND_SCAN_EXTERNAL_CHANGES = 'sftp.scanExternalChanges';
+export const COMMAND_REBUILD_SYNC_INDEX = 'sftp.rebuildSyncIndex';

@@ -384,6 +384,18 @@
         "command": "sftp.activity.reveal",
         "title": "Open Local File",
         "category": "SFTP"
+      },
+      {
+        "command": "sftp.scanExternalChanges",
+        "title": "Scan for External Changes",
+        "category": "SFTP",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sftp.rebuildSyncIndex",
+        "title": "Rebuild Sync Index",
+        "category": "SFTP",
+        "icon": "$(database)"
       }
     ],
     "menus": {
@@ -583,6 +595,14 @@
         {
           "command": "sftp.remoteExplorer.refresh",
           "when": "false"
+        },
+        {
+          "command": "sftp.scanExternalChanges",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.rebuildSyncIndex",
+          "when": "sftp.enabled"
         }
       ],
       "explorer/context": [
