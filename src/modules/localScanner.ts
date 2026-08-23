@@ -1,5 +1,6 @@
 import * as path from 'path';
 import logger from '../logger';
+import upath from '../core/upath';
 import fsPromises, { DirEntry } from '../helper/fsPromises';
 
 /**
@@ -44,6 +45,9 @@ export interface ScanOptions {
    * Follow symbolic links (default false). Off, a link is neither listed as a
    * file nor descended into: a link to a parent would loop, and uploading the
    * target's content under the link's name is rarely what the user meant.
+   * On, a link whose target is one of the directories on the way down to it
+   * (an ancestor, or a link back to one) is skipped, so a loop is cut where
+   * it starts instead of at ENAMETOOLONG.
    */
   followSymlinks?: boolean;
 }
@@ -57,6 +61,50 @@ export interface ScanResult {
 }
 
 const DEFAULT_CONCURRENCY = 8;
+
+// windows and macOS both default to case-insensitive filesystems, so two real
+// paths that differ only in case are the same directory there
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
+
+/**
+ * One directory waiting to be read. `real` is its canonical path (links
+ * resolved) and `parent` the directory it was found in, so the chain of
+ * parents is the list of real directories on the way down to it.
+ */
+export interface PendingDir {
+  dir: string;
+  real: string;
+  parent: PendingDir | null;
+}
+
+// one spelling for the comparison: "/" separators whatever realpath and
+// path.join produced, case folded where the filesystem does not care
+function comparable(fsPath: string): string {
+  const unix = upath.toUnix(fsPath).replace(/\/+$/, '');
+  return CASE_INSENSITIVE_FS ? unix.toLowerCase() : unix;
+}
+
+function isAncestorOrSelf(ancestor: string, descendant: string): boolean {
+  const a = comparable(ancestor);
+  const d = comparable(descendant);
+  return d === a || d.indexOf(a + '/') === 0;
+}
+
+/**
+ * Whether entering the directory at `targetReal` from `from` would loop: true
+ * when `targetReal` is, or contains, any directory on the chain from the scan
+ * root down to `from`. A link to a sibling or to an unrelated tree is not a
+ * loop and is followed (its content may then be listed twice, once under each
+ * name, which is what "follow symlinks" means).
+ */
+export function wouldLoop(targetReal: string, from: PendingDir | null): boolean {
+  for (let node = from; node; node = node.parent) {
+    if (isAncestorOrSelf(targetReal, node.real)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Scans `baseDir` recursively.
@@ -80,9 +128,22 @@ export async function scanLocalTree(
   let dirs = 0;
   let cancelled = false;
 
+  const rootDir = path.resolve(baseDir);
+  // the root's real path seeds the loop check: a link back to the base dir
+  // itself is the most common loop. Only needed when links are followed; a
+  // missing base dir has no real path and yields an empty scan anyway.
+  let rootReal = rootDir;
+  if (followSymlinks) {
+    try {
+      rootReal = await fsPromises.realpath(rootDir);
+    } catch (error) {
+      logger.debug(`[scan] cannot resolve ${rootDir}: ${error.message}`);
+    }
+  }
+
   // directories still to read; a plain stack rather than a queue keeps the
   // traversal depth-first-ish, so memory stays bounded by tree depth times fan-out
-  const pending: string[] = [path.resolve(baseDir)];
+  const pending: PendingDir[] = [{ dir: rootDir, real: rootReal, parent: null }];
 
   const report = () => {
     if (options.onProgress) {
@@ -90,7 +151,8 @@ export async function scanLocalTree(
     }
   };
 
-  const readDir = async (dir: string): Promise<void> => {
+  const readDir = async (node: PendingDir): Promise<void> => {
+    const dir = node.dir;
     let entries: DirEntry[];
     try {
       entries = await fsPromises.readdir(dir, { withFileTypes: true });
@@ -105,6 +167,9 @@ export async function scanLocalTree(
 
       let isDirectory = entry.isDirectory();
       let isFile = entry.isFile();
+      // a plain subdirectory's real path is its parent's plus the name; only
+      // a followed link needs the filesystem to say where it really goes
+      let real = path.join(node.real, entry.name);
 
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) {
@@ -116,6 +181,9 @@ export async function scanLocalTree(
           const target = await fsPromises.stat(fsPath);
           isDirectory = target.isDirectory();
           isFile = target.isFile();
+          if (isDirectory) {
+            real = await fsPromises.realpath(fsPath);
+          }
         } catch (error) {
           logger.debug(`[scan] cannot resolve link ${fsPath}: ${error.message}`);
           continue;
@@ -132,7 +200,11 @@ export async function scanLocalTree(
       }
 
       if (isDirectory) {
-        pending.push(fsPath);
+        if (entry.isSymbolicLink() && wouldLoop(real, node)) {
+          logger.debug(`[scan] not following ${fsPath}: ${real} is already on the way here`);
+          continue;
+        }
+        pending.push({ dir: fsPath, real, parent: node });
         continue;
       }
 
@@ -162,9 +234,9 @@ export async function scanLocalTree(
       }
 
       while (!cancelled && active < concurrency && pending.length > 0) {
-        const dir = pending.pop()!;
+        const node = pending.pop()!;
         active++;
-        readDir(dir).then(
+        readDir(node).then(
           () => {
             active--;
             pump();
@@ -172,7 +244,7 @@ export async function scanLocalTree(
           error => {
             // readDir swallows its own errors; this is a guard against a bug,
             // not an expected path — the scan must still terminate
-            logger.error(error, `[scan] ${dir}`);
+            logger.error(error, `[scan] ${node.dir}`);
             active--;
             pump();
           }

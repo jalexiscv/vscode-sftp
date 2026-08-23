@@ -30,6 +30,7 @@ export interface FsPromises {
   rename(from: string, to: string): Promise<void>;
   mkdir(dir: string, options: { recursive: true }): Promise<void>;
   unlink(fsPath: string): Promise<void>;
+  realpath(fsPath: string): Promise<string>;
 }
 
 const fsPromises: FsPromises = (fs as any).promises;

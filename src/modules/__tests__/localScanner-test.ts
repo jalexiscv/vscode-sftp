@@ -2,7 +2,7 @@ jest.mock('fs');
 
 import { vol, fs as memfs } from 'memfs';
 import * as path from 'path';
-import { scanLocalTree } from '../localScanner';
+import { scanLocalTree, wouldLoop, PendingDir } from '../localScanner';
 
 // absolute on both platforms; "c:/..." is a relative folder on linux
 const root = path.resolve(path.sep, 'projects', 'site');
@@ -172,6 +172,71 @@ describe('scanLocalTree', () => {
       'src/a.php',
       'src/deep/b.php',
     ]);
+  });
+
+  describe('followSymlinks and loops', () => {
+    test('a link back to the scan root is not followed', async () => {
+      fillTree();
+      memfs.symlinkSync(root, at('src', 'deep', 'loop'));
+
+      const result = await scanLocalTree(root, {
+        followSymlinks: true,
+        ignore: p => path.basename(p) === 'node_modules',
+      });
+
+      // every file once, nothing under the loop
+      expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+      expect(result.dirs).toBe(4);
+    });
+
+    test('a link to an ancestor of the scan root is not followed either', async () => {
+      fillTree();
+      memfs.symlinkSync(path.dirname(root), at('up'));
+
+      const result = await scanLocalTree(root, {
+        followSymlinks: true,
+        ignore: p => path.basename(p) === 'node_modules',
+      });
+
+      expect(names(result.files)).toEqual(['.vscode/sftp.json', 'index.php', 'src/a.php', 'src/deep/b.php']);
+    });
+
+    test('two directories linking to each other terminate', async () => {
+      vol.fromJSON({ [at('a', 'a.txt')]: 'a', [at('b', 'b.txt')]: 'b' });
+      memfs.symlinkSync(at('b'), at('a', 'to-b'));
+      memfs.symlinkSync(at('a'), at('b', 'to-a'));
+
+      const result = await scanLocalTree(root, { followSymlinks: true });
+
+      // each link is followed once: the way back is cut
+      expect(names(result.files)).toEqual(['a/a.txt', 'a/to-b/b.txt', 'b/b.txt', 'b/to-a/a.txt']);
+      expect(result.dirs).toBe(5);
+    });
+
+    test('a link to a sibling is still followed (the target is not on the way here)', async () => {
+      vol.fromJSON({ [at('a', 'a.txt')]: 'a', [at('b', 'b.txt')]: 'b' });
+      memfs.symlinkSync(at('b'), at('a', 'to-b'));
+
+      const result = await scanLocalTree(root, { followSymlinks: true });
+
+      expect(names(result.files)).toEqual(['a/a.txt', 'a/to-b/b.txt', 'b/b.txt']);
+    });
+
+    test('wouldLoop: the decision on its own', () => {
+      const rootNode: PendingDir = { dir: root, real: root, parent: null };
+      const src: PendingDir = { dir: at('src'), real: at('src'), parent: rootNode };
+      const deep: PendingDir = { dir: at('src', 'deep'), real: at('src', 'deep'), parent: src };
+
+      expect(wouldLoop(root, deep)).toBe(true);
+      expect(wouldLoop(at('src'), deep)).toBe(true);
+      expect(wouldLoop(path.dirname(root), deep)).toBe(true);
+      expect(wouldLoop(at('src', 'deep'), deep)).toBe(true);
+      // a sibling, a cousin, or a name that merely starts the same
+      expect(wouldLoop(at('other'), deep)).toBe(false);
+      expect(wouldLoop(at('src', 'other'), deep)).toBe(false);
+      expect(wouldLoop(at('src', 'deeper'), deep)).toBe(false);
+      expect(wouldLoop(root + '-other', deep)).toBe(false);
+    });
   });
 
   test('honours the concurrency bound', async () => {
