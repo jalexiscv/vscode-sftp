@@ -239,16 +239,53 @@ describe('scanLocalTree', () => {
     });
   });
 
-  test('honours the concurrency bound', async () => {
+  describe('concurrency bound', () => {
     // a wide tree: many sibling directories, each with a file
-    const tree: { [p: string]: string } = {};
-    for (let i = 0; i < 40; i++) {
-      tree[at(`dir-${i}`, 'f.txt')] = String(i);
+    function fillWideTree() {
+      const tree: { [p: string]: string } = {};
+      for (let i = 0; i < 40; i++) {
+        tree[at(`dir-${i}`, 'f.txt')] = String(i);
+      }
+      vol.fromJSON(tree);
     }
-    vol.fromJSON(tree);
 
-    const result = await scanLocalTree(root, { concurrency: 3 });
-    expect(result.files).toHaveLength(40);
-    expect(result.dirs).toBe(41);
+    // The results are the same whatever the bound, so counting them proves
+    // nothing. What the bound limits is how many readdir calls are in flight
+    // at once: measure that, holding each call open long enough for the pool
+    // to fill its other slots.
+    async function maxReaddirsInFlight(concurrency: number): Promise<number> {
+      const promises = memfs.promises as any;
+      const readdir = promises.readdir;
+      let inFlight = 0;
+      let maxInFlight = 0;
+      promises.readdir = async (...args: any[]) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          return await readdir.apply(promises, args);
+        } finally {
+          inFlight--;
+        }
+      };
+      try {
+        const result = await scanLocalTree(root, { concurrency });
+        expect(result.files).toHaveLength(40);
+        expect(result.dirs).toBe(41);
+      } finally {
+        promises.readdir = readdir;
+      }
+      return maxInFlight;
+    }
+
+    test('never reads more directories at once than allowed, and does use the slots', async () => {
+      fillWideTree();
+      expect(await maxReaddirsInFlight(3)).toBe(3);
+    });
+
+    test('a bound of one reads strictly one directory at a time', async () => {
+      fillWideTree();
+      expect(await maxReaddirsInFlight(1)).toBe(1);
+    });
   });
 });
