@@ -9,7 +9,13 @@ import { isValidFile, isSamePath, fileDepth, toRemotePath } from '../helper';
 import { FileService, ServiceConfig, TransferDirection } from '../core';
 import { resolveExternalChangesConfig } from '../core/fileService';
 import { getFileService, getRunningTransformTasks } from './serviceManager';
-import { isPaused, isSuppressed, isGitRewritingWorkingTree, readGitHeadRef } from './syncControl';
+import {
+  isPaused,
+  isSuppressed,
+  isGitRewritingWorkingTree,
+  readGitHeadRef,
+  SUPPRESSION_TAIL_MS,
+} from './syncControl';
 import { indexFor } from './syncIndexFeeder';
 import { toRelPath } from './syncIndex';
 import { scanLocalTree } from './localScanner';
@@ -39,6 +45,13 @@ import { confirmAndRunPlan } from './planConfirmation';
  * change enters the queue — an ignored path must not even reset the window —
  * and the config and git state are sampled once per service or directory for
  * the duration of a burst.
+ *
+ * While the extension itself is rewriting local files (a download, a
+ * `Sync Remote -> Local`) the watcher's reports are its own echo and are
+ * dropped; a *save* made by the user during that window is not — it is held
+ * back and retried once the suppression tail is over, so an edit made while a
+ * long sync runs still reaches the server. A pause drops everything, as the
+ * user asked.
  *
  * Git awareness: the HEAD *ref* (not the commit, so a `git commit` changes
  * nothing) and whether git is rewriting the working tree are captured when the
@@ -104,6 +117,19 @@ const deferredKeys = new Set<string>();
 // keys of saves seen recently, so the watcher's event for the same write is
 // dropped before it can queue a second upload
 const recentlyHandled = new Map<string, number>();
+
+// keys of saves held back because the extension is rewriting local files; they
+// wait for the suppression tail, not for the batching window, and a flush does
+// not wait for them (see holdForSuppression)
+const heldKeys = new Set<string>();
+let suppressionRetryTimer: any = null;
+
+// a little past the tail, so the retry normally finds the suppression lifted
+const SUPPRESSION_RETRY_MS = SUPPRESSION_TAIL_MS + 100;
+
+// batches that would need a confirmation are left pending instead of asked
+// about while this is set (deactivate drains the queue with it)
+let draining = false;
 
 function queueKey(fsPath: string): string {
   const normalized = path.normalize(fsPath);
@@ -203,6 +229,46 @@ function dropBurstCaches() {
 }
 
 /**
+ * Puts the saves back in the queue, marked as held, and arms one retry a
+ * little past the suppression tail. A newer save of the same path queued
+ * meanwhile wins; a newer watcher event does not replace a held save (it would
+ * be dropped at the retry, and the save with it). While the suppression lasts
+ * the retry finds it again and re-arms itself.
+ */
+function holdForSuppression(saves: PendingChange[]) {
+  saves.forEach(item => {
+    const key = queueKey(item.fsPath);
+    const existing = pending.get(key);
+    if (!existing || existing.source !== 'save') {
+      pending.set(key, item);
+    }
+    heldKeys.add(key);
+  });
+  notifyPending();
+  logger.info(
+    `[change-collector] ${saves.length} save(s) held back while a transfer rewrites local files; ` +
+      `retrying in ${SUPPRESSION_RETRY_MS} ms`
+  );
+  armSuppressionRetry();
+}
+
+// One retry at a time. If it fires while another pass is running it is a
+// no-op, and that pass's follow-up arms it again for the held saves.
+function armSuppressionRetry() {
+  if (suppressionRetryTimer) {
+    return;
+  }
+  suppressionRetryTimer = setTimeout(() => {
+    suppressionRetryTimer = null;
+    runProcessing('all');
+  }, SUPPRESSION_RETRY_MS);
+  // unref'd so a pending retry never holds the process open
+  if (typeof suppressionRetryTimer.unref === 'function') {
+    suppressionRetryTimer.unref();
+  }
+}
+
+/**
  * Whether git, and not the user, changed this file.
  *
  * Three signals, because each covers a different timing: git was rewriting the
@@ -288,6 +354,12 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
     }
 
     if (stat.isDirectory()) {
+      // the admission guard tested the path as a file; a `dir/` pattern only
+      // matches once the path is known to be a directory
+      if (config.ignore && config.ignore(item.fsPath, true)) {
+        logger.debug(`[change-collector] ${item.fsPath} skipped: directory ignored by config`);
+        continue;
+      }
       const scan = await scanLocalTree(item.fsPath, { ignore: config.ignore });
       scan.files.forEach(file => addFile(file.fsPath, file.size, file.mtime));
       continue;
@@ -318,6 +390,8 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
     host: config.host,
     confirmThreshold: resolveExternalChangesConfig(config).confirmThreshold,
     awaitRun: false,
+    prompt: !draining,
+    service,
   });
 }
 
@@ -348,9 +422,19 @@ async function processPending(mode: ProcessingMode): Promise<void> {
   }
 
   if (isSuppressed()) {
-    logger.info(
-      `[change-collector] ${items.length} change(s) skipped: a transfer is rewriting local files`
-    );
+    // the watcher is reporting the extension's own writes: dropped. A save is
+    // the user's, and the user's edit must not be lost to a download that
+    // happened to be running: held back and retried after the tail.
+    const saves = items.filter(item => item.source === 'save');
+    const echoes = items.length - saves.length;
+    if (echoes > 0) {
+      logger.info(
+        `[change-collector] ${echoes} change(s) skipped: a transfer is rewriting local files`
+      );
+    }
+    if (saves.length > 0) {
+      holdForSuppression(saves);
+    }
     return;
   }
 
@@ -435,35 +519,59 @@ async function processPending(mode: ProcessingMode): Promise<void> {
 // the rest when their window closes.
 let processing: Promise<void> | null = null;
 
+// waiting on something other than the batching window: an upload in flight or
+// the suppression tail
+function isWaiting(key: string): boolean {
+  return deferredKeys.has(key) || heldKeys.has(key);
+}
+
 function hasImmediatePending(): boolean {
   let found = false;
   pending.forEach((item, key) => {
-    if (item.source === 'save' && !deferredKeys.has(key)) {
+    if (item.source === 'save' && !isWaiting(key)) {
       found = true;
     }
   });
   return found;
 }
 
-function onlyDeferredPending(): boolean {
-  let onlyDeferred = pending.size > 0;
+function onlyWaitingPending(): boolean {
+  let onlyWaiting = pending.size > 0;
   pending.forEach((_item, key) => {
-    if (!deferredKeys.has(key)) {
-      onlyDeferred = false;
+    if (!isWaiting(key)) {
+      onlyWaiting = false;
     }
   });
-  return onlyDeferred;
+  return onlyWaiting;
+}
+
+function onlyHeldPending(): boolean {
+  let onlyHeld = pending.size > 0;
+  pending.forEach((_item, key) => {
+    if (!heldKeys.has(key)) {
+      onlyHeld = false;
+    }
+  });
+  return onlyHeld;
 }
 
 function followUp() {
   processing = null;
   if (pending.size === 0) {
     deferredKeys.clear();
+    heldKeys.clear();
     dropBurstCaches();
     return;
   }
   if (hasImmediatePending()) {
     runProcessing('saves');
+    return;
+  }
+  if (onlyHeldPending()) {
+    // the held saves wait for the suppression retry, not for the window:
+    // re-arming the window would only run into the suppression again every
+    // BATCH_INTERVAL. Armed here too, in case the retry fired during this pass.
+    armSuppressionRetry();
     return;
   }
   // a pass that was requested while this one ran was a no-op; re-arm the
@@ -539,6 +647,7 @@ export function enqueueChange(uri: vscode.Uri, source: ChangeSource): void {
     gitHeadWhenQueued: previous !== undefined ? previous.gitHeadWhenQueued : git.ref,
   });
   deferredKeys.delete(key);
+  heldKeys.delete(key);
   notifyPending();
 
   if (source === 'save') {
@@ -556,25 +665,41 @@ export function setBatchHandler(handler: BatchHandler | null): void {
   batchHandler = handler || planBatch;
 }
 
+export interface FlushOptions {
+  /**
+   * false: a batch that would need the confirmation dialog is left pending
+   * instead of asked about (deactivate: no one can answer a modal while the
+   * window closes). Defaults to true.
+   */
+  confirm?: boolean;
+}
+
 /**
  * Processes whatever is pending right away, and resolves once the queue has
  * drained — including changes that arrive while a pass is running. Changes
- * deferred behind an upload in flight are left for the timer.
+ * deferred behind an upload in flight, or held back by a suppression, are left
+ * for their timers.
  */
-export async function flushNow(): Promise<void> {
-  while (true) {
-    scheduleProcessing.cancel();
-    if (processing) {
-      await processing;
-      continue;
+export async function flushNow(options: FlushOptions = {}): Promise<void> {
+  const previous = draining;
+  draining = options.confirm === false;
+  try {
+    while (true) {
+      scheduleProcessing.cancel();
+      if (processing) {
+        await processing;
+        continue;
+      }
+      if (pending.size === 0 || onlyWaitingPending()) {
+        return;
+      }
+      runProcessing('all');
+      if (processing) {
+        await processing;
+      }
     }
-    if (pending.size === 0 || onlyDeferredPending()) {
-      return;
-    }
-    runProcessing('all');
-    if (processing) {
-      await processing;
-    }
+  } finally {
+    draining = previous;
   }
 }
 
@@ -596,8 +721,13 @@ export function onDidChangePending(listener: () => void): vscode.Disposable {
 
 export function destroy() {
   scheduleProcessing.cancel();
+  if (suppressionRetryTimer) {
+    clearTimeout(suppressionRetryTimer);
+    suppressionRetryTimer = null;
+  }
   pending.clear();
   deferredKeys.clear();
+  heldKeys.clear();
   recentlyHandled.clear();
   pendingListeners.length = 0;
   dropBurstCaches();
@@ -612,6 +742,7 @@ export function __resetForTest() {
   destroy();
   batchHandler = planBatch;
   processing = null;
+  draining = false;
 }
 
 // exported for tests
@@ -623,4 +754,5 @@ export const testHooks = {
   BATCH_INTERVAL,
   MAX_WAIT,
   RECENTLY_HANDLED_TTL,
+  SUPPRESSION_RETRY_MS,
 };

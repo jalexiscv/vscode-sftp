@@ -137,6 +137,11 @@ export default class RemoteTreeData
 
     const root = this.findRoot(item.resource.uri);
     if (!root) {
+      if (!this._rootsMap) {
+        // the view was never shown, so no root exists yet: a refresh after an
+        // upload has nothing to expand, and the roots are built when it opens
+        return [];
+      }
       throw new Error(`Can't find config for remote resource ${item.resource.uri}.`);
     }
     const config = root.explorerContext.config;
@@ -189,10 +194,14 @@ export default class RemoteTreeData
     return children.sort(dirFirstSort);
   }
 
-  async getParent(item: ExplorerChild): Promise<ExplorerItem> {
+  async getParent(item: ExplorerChild): Promise<ExplorerItem | undefined> {
     const resourceUri = item.resource.uri;
     const root = this.findRoot(resourceUri);
     if (!root) {
+      if (!this._rootsMap) {
+        // see getChildren: nothing to refresh while the view is not built
+        return undefined;
+      }
       throw new Error(`Can't find config for remote resource ${resourceUri}.`);
     }
 

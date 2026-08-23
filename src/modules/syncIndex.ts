@@ -23,24 +23,38 @@ import fsPromises from '../helper/fsPromises';
  * service base dir, always with "/" separators, and looked up case-insensitively
  * on Windows and macOS while keeping the casing they were stored with.
  *
+ * An index is *seeded* ({@link SyncIndex.isSeeded}) once it is known to cover
+ * the whole tree: after `SFTP: Rebuild Sync Index`, or after a manual scan
+ * whose upload the user confirmed and that finished. Until then the index only
+ * holds what individual uploads recorded, and a file it does not know may be
+ * either new or simply never uploaded from this machine — so the automatic
+ * scans leave such files alone instead of treating them as new.
+ *
  * Key lifecycle methods:
  * - {@link initSyncIndex} picks the storage directory; call once on activation.
  * - {@link getSyncIndex} loads an index lazily by key.
  * - {@link SyncIndex.set} / {@link SyncIndex.remove} / {@link SyncIndex.rename}
  *   mutate entries; writes are debounced and atomic (`.tmp` + rename).
+ * - {@link SyncIndex.markSeeded} records that the index covers the tree.
  * - {@link flushSyncIndex} forces every loaded index to disk; call on deactivate.
  */
 
 export interface IndexEntry {
-  /** size of the LOCAL file at the moment of the verified upload */
+  /** size of the LOCAL file at the moment of the verified upload (or of the skip) */
   size: number;
-  /** mtime of the LOCAL file at the moment of the verified upload, in ms */
+  /** mtime of the LOCAL file at the moment of the verified upload (or of the skip), in ms */
   mtime: number;
-  /** when the upload was verified, ms epoch */
+  /** when the upload was verified, ms epoch; 0 for an entry that was never verified */
   verifiedAt: number;
   remoteSize?: number;
   remoteMtime?: number;
-  status: 'verified' | 'failed';
+  /**
+   * `verified`: the local file of this size/mtime is on the server;
+   * `failed`: the last upload attempt failed, the file is due again whatever
+   * its stat; `skipped`: the user chose not to upload this version, so it is
+   * left alone while its size and mtime stay the same.
+   */
+  status: 'verified' | 'failed' | 'skipped';
   error?: string;
 }
 
@@ -48,6 +62,8 @@ interface IndexFile {
   version: number;
   key: string;
   entries: { [relPath: string]: IndexEntry };
+  /** when the index was seeded from the server or by a confirmed scan; absent until then */
+  seededAt?: number;
 }
 
 const INDEX_FILE_VERSION = 1;
@@ -127,6 +143,8 @@ export class SyncIndex {
   private _loadFailed = false;
   private _preservedOriginal = false;
   private _consecutiveFailures = 0;
+  // see isSeeded(); persisted with the entries, absent until the index is built
+  private _seededAt: number | undefined;
 
   /** @param filePath null for a memory-only index */
   constructor(key: string, private _filePath: string | null) {
@@ -183,6 +201,28 @@ export class SyncIndex {
     return this._loadFailed;
   }
 
+  /**
+   * Whether the index is known to cover the whole local tree (it was rebuilt
+   * from the server, or a confirmed manual scan went through). An index that
+   * only grew from individual uploads is not: a file it lacks may have been on
+   * the server all along, so automatic scans must not upload it unasked.
+   */
+  isSeeded(): boolean {
+    return this._seededAt !== undefined;
+  }
+
+  /** ms epoch of the seeding, or undefined while the index is not seeded. */
+  get seededAt(): number | undefined {
+    return this._seededAt;
+  }
+
+  /** Records that the index covers the tree; persisted with the entries. */
+  markSeeded(at: number = Date.now()): void {
+    this._seededAt = at;
+    this._markDirty();
+  }
+
+  /** Drops every entry; the seeded mark is kept (a rebuild clears, refills and re-marks). */
   clear(): void {
     if (this._entries.size === 0) {
       return;
@@ -220,12 +260,15 @@ export class SyncIndex {
   }
 
   /** Replaces the contents with what was read from disk; does not mark dirty. */
-  _load(entries: { [relPath: string]: IndexEntry }): void {
+  _load(entries: { [relPath: string]: IndexEntry }, seededAt?: number): void {
     this._entries.clear();
     Object.keys(entries).forEach(relPath => {
       const normalized = normalizeRelPath(relPath);
       this._entries.set(foldCase(normalized), { relPath: normalized, entry: entries[relPath] });
     });
+    // a file written before the mark existed has none: such an index is not
+    // seeded, whatever its size, until the user builds it
+    this._seededAt = typeof seededAt === 'number' ? seededAt : undefined;
     this._dirty = false;
   }
 
@@ -274,6 +317,9 @@ export class SyncIndex {
       key: this.key,
       entries: {},
     };
+    if (this._seededAt !== undefined) {
+      data.seededAt = this._seededAt;
+    }
     this._entries.forEach(({ relPath, entry }) => {
       data.entries[relPath] = entry;
     });
@@ -408,7 +454,7 @@ async function loadFromDisk(key: string, filePath: string): Promise<SyncIndex> {
       return index;
     }
 
-    index._load(parsed.entries);
+    index._load(parsed.entries, parsed.seededAt);
   } catch (error) {
     // an unparsable index is unrecoverable for us; starting empty only costs a
     // re-upload of files that haven't changed, which the next verified upload

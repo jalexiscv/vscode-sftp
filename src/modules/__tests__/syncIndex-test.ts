@@ -48,6 +48,76 @@ describe('syncIndex', () => {
     __resetForTest();
   });
 
+  describe('seeded mark', () => {
+    test('a new index is not seeded; markSeeded records when, and clear keeps it', async () => {
+      initSyncIndex({ storagePath: undefined });
+      const index = await getSyncIndex('k1');
+      expect(index.isSeeded()).toBe(false);
+      expect(index.seededAt).toBeUndefined();
+
+      index.set('a.ts', entry());
+      index.markSeeded(1700000000000);
+      expect(index.isSeeded()).toBe(true);
+      expect(index.seededAt).toBe(1700000000000);
+
+      index.clear();
+      expect(index.size).toBe(0);
+      expect(index.isSeeded()).toBe(true);
+    });
+
+    test('is persisted with the entries and read back; a file without it loads as not seeded', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('seeded');
+      index.set('a.ts', entry());
+      index.markSeeded(1700000000000);
+      await index.save();
+
+      const [file] = storedFiles();
+      const parsed = JSON.parse(vol.readFileSync(file, 'utf8') as string);
+      expect(parsed.seededAt).toBe(1700000000000);
+      expect(parsed.entries['a.ts']).toBeDefined();
+
+      __resetForTest();
+      initSyncIndex({ storagePath: storage });
+      const reloaded = await getSyncIndex('seeded');
+      expect(reloaded.isSeeded()).toBe(true);
+      expect(reloaded.seededAt).toBe(1700000000000);
+
+      // an index written before the mark existed (1.24.0): entries, no mark
+      const legacy = path.join(storage, 'sync-index', 'legacy.json');
+      vol.writeFileSync(
+        legacy,
+        JSON.stringify({ version: 1, key: 'legacy', entries: { 'a.ts': entry(), 'b.ts': entry() } })
+      );
+      const old = await getSyncIndex('legacy');
+      expect(old.size).toBe(2);
+      expect(old.isSeeded()).toBe(false);
+      // ...and a save without the mark leaves it out
+      old.set('c.ts', entry());
+      await old.save();
+      expect(JSON.parse(vol.readFileSync(legacy, 'utf8') as string).seededAt).toBeUndefined();
+    });
+
+    test('markSeeded alone makes the index dirty and saved', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('only-mark');
+      index.markSeeded(5);
+      await index.save();
+      const [file] = storedFiles();
+      expect(JSON.parse(vol.readFileSync(file, 'utf8') as string)).toMatchObject({
+        seededAt: 5,
+        entries: {},
+      });
+    });
+
+    test('a skipped entry round-trips like any other', async () => {
+      initSyncIndex({ storagePath: undefined });
+      const index = await getSyncIndex('k1');
+      index.set('a.ts', entry({ status: 'skipped', verifiedAt: 0 }));
+      expect(index.get('a.ts')).toMatchObject({ status: 'skipped', verifiedAt: 0 });
+    });
+  });
+
   describe('entries', () => {
     beforeEach(() => initSyncIndex({ storagePath: undefined }));
 

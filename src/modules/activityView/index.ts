@@ -19,13 +19,15 @@ import { ActivityTreeNode, isActivityEntry, isPlaceholder, localPathOf } from '.
  * the commands that act on its rows (refresh, retry, open the local file).
  *
  * It owns no state of its own — the log and the plan registry do — and only
- * wires their change events to a tree refresh. It also publishes the
+ * wires their change events to a tree refresh, coalesced: the log, the plan
+ * registry and the runner each fire several times per uploaded file, and a
+ * rebuild per event made a long plan hammer the tree. It also publishes the
  * `sftp.hasUploadPlans` context key so the plan actions in the view title can
  * show up only when there is something to act on.
  *
  * Key lifecycle methods:
  * - constructor: creates the tree view and registers the row commands.
- * - {@link refresh} rebuilds the tree.
+ * - {@link refresh} rebuilds the tree at once (the refresh button).
  * - {@link dispose} drops the subscriptions and the view on deactivate.
  */
 export default class ActivityView {
@@ -40,14 +42,15 @@ export default class ActivityView {
       showCollapseAll: true,
     });
 
-    this._subscriptions.push(onDidChange(() => this.refresh()));
+    const scheduleRefresh = () => this._treeDataProvider.scheduleRefresh();
+    this._subscriptions.push(onDidChange(scheduleRefresh));
     this._subscriptions.push(
       onDidChangePlans(() => {
         this._reflectPlanState();
-        this.refresh();
+        scheduleRefresh();
       })
     );
-    this._subscriptions.push(onDidChangeRunning(() => this.refresh()));
+    this._subscriptions.push(onDidChangeRunning(scheduleRefresh));
     this._reflectPlanState();
 
     registerCommand(context, COMMAND_ACTIVITY_REFRESH, () => this.refresh());
@@ -91,6 +94,7 @@ export default class ActivityView {
   dispose(): void {
     this._subscriptions.forEach(subscription => subscription.dispose());
     this._subscriptions = [];
+    this._treeDataProvider.dispose();
     this._activityView.dispose();
   }
 

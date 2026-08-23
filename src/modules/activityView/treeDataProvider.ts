@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { COMMAND_ACTIVITY_REVEAL } from '../../constants';
 import { ActivityEntry, ActivityStatus, getEntries } from '../activityLog';
@@ -45,8 +44,14 @@ export { isPlaceholder } from './nodes';
  * change can reorder it, and a plan item changes status several times per
  * upload, so the view rebuilds on every refresh instead of tracking per-item
  * events; stable ids keep the selection and the expanded state across
- * rebuilds.
+ * rebuilds. Event-driven refreshes go through {@link scheduleRefresh}, which
+ * folds a burst (a 400-file plan fires several changes per file) into one
+ * rebuild every {@link REFRESH_DELAY_MS}; {@link refresh} rebuilds at once.
  */
+
+// long enough to fold the log/plan/runner events of one upload into a single
+// rebuild, short enough that the tree still reads as live
+const REFRESH_DELAY_MS = 100;
 
 // @types/vscode is pinned to 1.40, where ThemeIcon still has a private
 // constructor and no color parameter. Both exist at runtime on every vscode
@@ -61,10 +66,12 @@ function toThemeIcon(spec: IconSpec): vscode.ThemeIcon {
 }
 
 function makeCommand(node: ActivityTreeNode): vscode.Command | undefined {
-  // getTreeItem is synchronous, hence the sync stat; a deleted or downloaded-
-  // then-removed file must not offer a click that opens an error.
+  // Offered whenever the node has a local path: getTreeItem runs for every
+  // visible node on every rebuild, and a stat per node turned each refresh of
+  // a long plan into hundreds of blocking syscalls. The reveal command copes
+  // with a file that is gone by then.
   const localPath = localPathOf(node);
-  if (!localPath || !fs.existsSync(localPath)) {
+  if (!localPath) {
     return undefined;
   }
 
@@ -147,9 +154,44 @@ export default class ActivityTreeDataProvider implements vscode.TreeDataProvider
     new vscode.EventEmitter<ActivityTreeNode | undefined>();
   readonly onDidChangeTreeData: vscode.Event<ActivityTreeNode | undefined> = this._onDidChangeTreeData
     .event;
+  private _refreshTimer: any = null;
 
+  /** Rebuilds the tree now. */
   refresh(): void {
+    this._cancelScheduledRefresh();
     this._onDidChangeTreeData.fire();
+  }
+
+  /**
+   * Rebuilds the tree once, {@link REFRESH_DELAY_MS} after the first call of a
+   * burst; calls made meanwhile are folded into that rebuild (it reads the
+   * live state, so nothing is lost). A steady stream still refreshes every
+   * {@link REFRESH_DELAY_MS} instead of waiting for it to end.
+   */
+  scheduleRefresh(): void {
+    if (this._refreshTimer) {
+      return;
+    }
+    this._refreshTimer = setTimeout(() => {
+      this._refreshTimer = null;
+      this._onDidChangeTreeData.fire();
+    }, REFRESH_DELAY_MS);
+    // unref'd so a pending rebuild never holds the process open
+    if (typeof this._refreshTimer.unref === 'function') {
+      this._refreshTimer.unref();
+    }
+  }
+
+  /** Drops a pending scheduled rebuild. */
+  dispose(): void {
+    this._cancelScheduledRefresh();
+  }
+
+  private _cancelScheduledRefresh() {
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer);
+      this._refreshTimer = null;
+    }
   }
 
   getTreeItem(node: ActivityTreeNode): vscode.TreeItem {

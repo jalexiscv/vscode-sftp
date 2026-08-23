@@ -123,8 +123,10 @@ export function cancelPendingSuppression() {
   pendingReleases.clear();
 }
 
-// long enough to cover the watcher debounce (550ms) plus event delivery
-const SUPPRESSION_TAIL_MS = 1500;
+// long enough to cover the watcher debounce (550ms) plus event delivery;
+// exported so the change collector can wait it out before retrying a save it
+// held back while a transfer was rewriting local files
+export const SUPPRESSION_TAIL_MS = 1500;
 
 /**
  * True while git is rewriting the working tree.

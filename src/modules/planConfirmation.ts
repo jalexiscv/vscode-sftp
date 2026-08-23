@@ -1,20 +1,25 @@
 import logger from '../logger';
 import { simplifyPath } from '../helper';
+import { FileService } from '../core';
 import { executeCommand, showChoiceMessage } from '../host';
 import { VIEW_ACTIVITY } from '../constants';
-import { UploadPlan, PlanSummary, updateItem, summarize } from './uploadPlan';
+import { UploadPlan, PlanSource, PlanSummary, updateItem, summarize } from './uploadPlan';
 import { runPlan } from './planRunner';
+import { rememberSkipped } from './syncIndexFeeder';
 
 /**
  * The gate between "a plan exists" and "it runs": the confirmation threshold
  * shared by the change collector and the external-change scanner.
  *
  * Small batches upload on their own. A batch larger than
- * `externalChanges.confirmThreshold`, or one caused by a git operation
- * whatever its size, is shown to the user first — a `git checkout` that
- * touches 400 files should never reach the server by accident. The user can
- * upload it, leave it pending in the Activity view to trim it there, or skip
- * it altogether.
+ * `externalChanges.confirmThreshold`, one caused by a git operation whatever
+ * its size, or a scan/poll batch that contains files the sync index does not
+ * know (`new`: they may be stale local copies of something newer on the
+ * server) is shown to the user first — a `git checkout` that touches 400
+ * files should never reach the server by accident. The user can review it in
+ * the Activity view (the default answer), upload it, or skip it; a skip is
+ * remembered in the index so the same files are not asked about again until
+ * they change.
  *
  * Key lifecycle methods:
  * - {@link needsConfirmation} is the rule.
@@ -34,7 +39,23 @@ export interface ConfirmPlanOptions {
    * Defaults to true.
    */
   awaitRun?: boolean;
+  /**
+   * false: never open the dialog; a plan that would need it is left pending
+   * (decision `review`) without focusing the view. Used while the host is
+   * shutting down, when a modal could not be answered anyway. Defaults to true.
+   */
+  prompt?: boolean;
+  /**
+   * The service the plan belongs to. When given, a "Skip" (and the items it
+   * covers) is remembered in the service's sync index, so the same versions
+   * are not planned again by the next scan.
+   */
+  service?: FileService;
 }
+
+// the scanner's sources: what they report was not seen happening, so a file
+// the index does not know may as well be an older copy of what the server has
+const RECONCILIATION_SOURCES: PlanSource[] = ['scan', 'poll'];
 
 export interface PlanRunOutcome {
   decision: PlanDecision;
@@ -48,8 +69,22 @@ const PREVIEW_LINES = 12;
 const REVIEW_LABEL = 'Review plan';
 const SKIP_LABEL = 'Skip';
 
+/**
+ * Git-driven plans and plans above the threshold always ask. So does a scan or
+ * poll plan with a `new` item, whatever its size: the index never saw that
+ * file, so uploading it unasked could overwrite a newer copy on the server.
+ * Saves and watcher batches keep the threshold alone — the user is creating
+ * those files right now, and a dialog on every new file would make the
+ * mirror unusable.
+ */
 export function needsConfirmation(plan: UploadPlan, confirmThreshold: number): boolean {
-  return plan.source === 'git' || plan.items.length > confirmThreshold;
+  if (plan.source === 'git' || plan.items.length > confirmThreshold) {
+    return true;
+  }
+  return (
+    RECONCILIATION_SOURCES.indexOf(plan.source) !== -1 &&
+    plan.items.some(item => item.reason === 'new')
+  );
 }
 
 function describeOrigin(plan: UploadPlan): string {
@@ -82,9 +117,11 @@ type Answer = PlanDecision | 'dismissed';
 
 async function ask(plan: UploadPlan, options: ConfirmPlanOptions): Promise<Answer> {
   const uploadLabel = `Upload ${plan.items.length} file(s)`;
+  // "Review plan" first: it is the button Enter picks, and the one answer that
+  // neither uploads nor discards anything when the dialog is answered blindly
   const choice = await showChoiceMessage(
     buildConfirmationMessage(plan, options),
-    [uploadLabel, REVIEW_LABEL, SKIP_LABEL],
+    [REVIEW_LABEL, uploadLabel, SKIP_LABEL],
     { modal: true }
   );
 
@@ -104,7 +141,8 @@ async function ask(plan: UploadPlan, options: ConfirmPlanOptions): Promise<Answe
 
 /**
  * Applies the confirmation rule to `plan` and acts on the answer: runs it,
- * leaves it pending and focuses the Activity view, or skips every item.
+ * leaves it pending and focuses the Activity view, or skips every item (and
+ * remembers the skip in the index when the service is known).
  */
 export async function confirmAndRunPlan(
   plan: UploadPlan,
@@ -112,21 +150,34 @@ export async function confirmAndRunPlan(
 ): Promise<PlanRunOutcome> {
   let answer: Answer = 'run';
   if (needsConfirmation(plan, options.confirmThreshold)) {
-    answer = await ask(plan, options);
-    logger.info(
-      `[plan ${plan.id}] ${plan.items.length} file(s) from ${plan.source}: user chose "${answer}"`
-    );
+    if (options.prompt === false) {
+      // nobody can answer a dialog while the window closes; the plan stays
+      // pending and the next scan will find the same files again
+      logger.info(
+        `[plan ${plan.id}] ${plan.items.length} file(s) from ${plan.source} need confirmation; ` +
+          'left pending (no prompt while draining)'
+      );
+      answer = 'dismissed';
+    } else {
+      answer = await ask(plan, options);
+      logger.info(
+        `[plan ${plan.id}] ${plan.items.length} file(s) from ${plan.source}: user chose "${answer}"`
+      );
+    }
   }
   const decision: PlanDecision = answer === 'dismissed' ? 'review' : answer;
 
   switch (answer) {
-    case 'skip':
-      plan.items.forEach(item => {
-        if (item.status === 'pending') {
-          updateItem(plan.id, item.localPath, { status: 'skipped', error: 'skipped by user' });
-        }
-      });
+    case 'skip': {
+      const skipped = plan.items.filter(item => item.status === 'pending');
+      skipped.forEach(item =>
+        updateItem(plan.id, item.localPath, { status: 'skipped', error: 'skipped by user' })
+      );
+      if (options.service) {
+        await rememberSkipped(options.service, skipped);
+      }
       break;
+    }
     case 'review':
       // the view lists the plan with per-item upload/skip; focusing it is a
       // courtesy, not a requirement

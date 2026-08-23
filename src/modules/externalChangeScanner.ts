@@ -5,15 +5,17 @@ import { FileService, ServiceConfig, FileSystem, FileEntry, FileType, upath } fr
 import { resolveExternalChangesConfig, resolvePollInterval } from '../core/fileService';
 import { toRemotePath } from '../helper';
 import { showInformationMessage, withProgress } from '../host';
+import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../constants';
 import { getAllFileService } from './serviceManager';
 import { isPaused, onDidChangePauseState } from './syncControl';
 import { indexFor } from './syncIndexFeeder';
-import { IndexEntry, toRelPath } from './syncIndex';
-import { scanLocalTree } from './localScanner';
+import { IndexEntry, SyncIndex, toRelPath } from './syncIndex';
+import { scanLocalTree, ScanResult as LocalScanResult } from './localScanner';
 import { isInsideTrash } from './remoteTrash';
 import {
   UploadPlan,
   PlanSummary,
+  DiffAgainstIndexResult,
   createPlan,
   diffAgainstIndex,
   getPlans,
@@ -36,10 +38,19 @@ import { confirmAndRunPlan, PlanDecision } from './planConfirmation';
  * confirmation threshold as the watcher's batches; nothing is uploaded behind
  * the user's back.
  *
- * An empty index is the one case a scan cannot reason about: every file would
- * look new. The first time that happens for a service the user is offered
- * `SFTP: Rebuild Sync Index` ({@link rebuildSyncIndex}), which lists both
- * sides and records as verified every file that already matches.
+ * First use and migration: until the index is *seeded* (built by
+ * {@link rebuildSyncIndex}, or by a manual scan whose upload the user
+ * confirmed and that finished), an automatic scan cannot tell a new file from
+ * one that was on the server all along — a fresh checkout of a deployed site
+ * would look like hundreds of new files. So the automatic triggers only plan
+ * files the index already knows and that changed (`modified`); the unindexed
+ * ones are counted and logged, never uploaded nor asked about, and the user
+ * is told once per service — with `Build index now` and `Don't show again`,
+ * the latter remembered per workspace — that the index is empty or not built.
+ * A manual scan plans everything. Once seeded, an automatic scan that finds
+ * `new` files always asks before uploading them, whatever their number; a
+ * `Skip` is remembered in the index so the same files are not asked about
+ * again until they change.
  *
  * Key lifecycle methods:
  * - {@link init} installs the triggers; {@link destroy} removes them.
@@ -67,6 +78,11 @@ export interface ScanOutcome {
   filesScanned: number;
   /** why nothing was planned, for `skipped` and `error` */
   reason?: string;
+  /**
+   * files the index does not know that an automatic scan left alone because
+   * the index is not built yet; absent when that rule did not apply
+   */
+  ignoredNew?: number;
 }
 
 export interface ScanOptions {
@@ -83,10 +99,12 @@ export interface RebuildProgress {
 }
 
 export interface RebuildSummary {
-  /** files present on both sides with the same size (and mtime, where reliable) */
+  /** files present on both sides with the same size: recorded as verified */
   indexed: number;
-  /** files present on both sides but different; left out, so the next scan plans them */
+  /** files present on both sides with another size; left out, so the next scan plans them */
   differ: number;
+  /** of the indexed files, those whose remote mtime differs (informational: a git/rsync deploy) */
+  mtimeDiffer: number;
   onlyLocal: number;
   onlyRemote: number;
   cancelled: boolean;
@@ -112,21 +130,24 @@ const REMOTE_WALK_CONCURRENCY = 4;
 const MTIME_TOLERANCE_IN_SECONDS = 2;
 
 const BUILD_INDEX_LABEL = 'Build index now';
-const LATER_LABEL = 'Later';
+const DONT_SHOW_AGAIN_LABEL = 'Don\'t show again';
 
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
 let destroyed = false;
 let pollTimer: any = null;
 let wasPaused = false;
+let extensionContext: vscode.ExtensionContext | null = null;
 const subscriptions: vscode.Disposable[] = [];
 
 // one scan per service at a time; a second request joins the one in flight
 const scans = new Map<string, Promise<ScanOutcome>>();
 const lastScanAt = new Map<string, number>();
 const lastPollAt = new Map<string, number>();
-// services told once, this session, that their index is empty
-const emptyIndexNotified = new Set<string>();
+// index keys whose "not built" notice was shown this session, and those the
+// user asked never to see again (persisted per workspace)
+const unbuiltNoticeShown = new Set<string>();
+const unbuiltNoticeDismissed = new Set<string>();
 
 function foldRel(relPath: string): string {
   return CASE_INSENSITIVE_FS ? relPath.toLowerCase() : relPath;
@@ -179,32 +200,74 @@ function supersedeOpenScanPlans(serviceName: string) {
   });
 }
 
-function notifyEmptyIndex(service: FileService) {
-  const name = nameOf(service);
-  logger.info(
-    `[scan] ${name}: the sync index is empty, external changes can't be detected yet ` +
-      '(run "SFTP: Rebuild Sync Index")'
-  );
-  if (emptyIndexNotified.has(service.baseDir)) {
+function loadDismissedNotices(context: vscode.ExtensionContext) {
+  unbuiltNoticeDismissed.clear();
+  if (!context.workspaceState) {
     return;
   }
-  emptyIndexNotified.add(service.baseDir);
+  const stored = context.workspaceState.get<string[]>(STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED);
+  (Array.isArray(stored) ? stored : []).forEach(key => unbuiltNoticeDismissed.add(key));
+}
 
+function persistDismissedNotices() {
+  if (!extensionContext || !extensionContext.workspaceState) {
+    return;
+  }
+  // fire and forget: losing the flag only brings the notice back next session
   Promise.resolve(
-    showInformationMessage(
-      `SFTP: the sync index for ${name} is empty, so external changes can't be detected yet.`,
-      BUILD_INDEX_LABEL,
-      LATER_LABEL
+    extensionContext.workspaceState.update(
+      STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED,
+      Array.from(unbuiltNoticeDismissed)
     )
-  ).then(
+  ).then(undefined, error => logger.error(error, 'persist unbuilt-index notice'));
+}
+
+function dismissUnbuiltNotice(indexKey: string) {
+  unbuiltNoticeDismissed.add(indexKey);
+  persistDismissedNotices();
+}
+
+/** Once the index is built the notice has no reason to exist; forget both marks. */
+function forgetUnbuiltNotice(indexKey: string) {
+  unbuiltNoticeShown.delete(indexKey);
+  if (unbuiltNoticeDismissed.delete(indexKey)) {
+    persistDismissedNotices();
+  }
+}
+
+/**
+ * Tells the user, once per service and session — and never again once they
+ * say so — that the index of `service` is empty or not built, so automatic
+ * scans leave unindexed files alone. A dismissed notification (no button
+ * chosen) comes back in the next session, not at the next scan.
+ */
+function notifyUnbuiltIndex(service: FileService, index: SyncIndex, unindexed: number) {
+  const name = nameOf(service);
+  const empty = index.size === 0;
+  logger.info(
+    `[scan] ${name}: the sync index is ${empty ? 'empty' : 'not built'}, ` +
+      'unindexed files are left alone until it is (run "SFTP: Rebuild Sync Index")'
+  );
+  if (unbuiltNoticeDismissed.has(index.key) || unbuiltNoticeShown.has(index.key)) {
+    return;
+  }
+  unbuiltNoticeShown.add(index.key);
+
+  const message = empty
+    ? `SFTP: the sync index for ${name} is empty, so external changes can't be detected yet.`
+    : `SFTP: the sync index for ${name} is not built yet; ${unindexed} unindexed file(s) ` +
+      'are left alone until it is.';
+  Promise.resolve(showInformationMessage(message, BUILD_INDEX_LABEL, DONT_SHOW_AGAIN_LABEL)).then(
     choice => {
       if (choice === BUILD_INDEX_LABEL) {
         rebuildSyncIndexInteractive(service).catch(error =>
           logger.error(error, `rebuild sync index of ${name}`)
         );
+      } else if (choice === DONT_SHOW_AGAIN_LABEL) {
+        dismissUnbuiltNotice(index.key);
       }
     },
-    error => logger.debug(`[scan] empty-index prompt failed: ${error.message}`)
+    error => logger.debug(`[scan] unbuilt-index prompt failed: ${error.message}`)
   );
 }
 
@@ -223,60 +286,94 @@ async function doScan(
   };
 
   const index = await indexFor(service, config);
-  if (index.size === 0 && trigger !== 'manual') {
-    notifyEmptyIndex(service);
+  const automatic = trigger !== 'manual';
+  // an automatic scan on an index that was never built cannot tell a new file
+  // from one that was on the server all along: it only acts on files the
+  // index knows, and says so once
+  const knownOnly = automatic && !index.isSeeded();
+  if (knownOnly && index.size === 0) {
+    notifyUnbuiltIndex(service, index, 0);
     return { status: 'empty-index', plan: null, filesScanned: 0 };
   }
 
   app.sftpBarItem.showMsg(`scanning ${name}…`, `SFTP: scanning ${name} for external changes`);
   status('scanning…');
-  const scan = await scanLocalTree(service.baseDir, {
-    ignore: config.ignore,
-    isCancelled,
-    onProgress: (files, dirs) => {
-      status(`${files} file(s) scanned`);
-      if (options.onProgress) {
-        options.onProgress(files, dirs);
-      }
-    },
-  });
+  let scan: LocalScanResult;
+  let diff: DiffAgainstIndexResult;
+  try {
+    scan = await scanLocalTree(service.baseDir, {
+      ignore: config.ignore,
+      isCancelled,
+      onProgress: (files, dirs) => {
+        status(`${files} file(s) scanned`);
+        if (options.onProgress) {
+          options.onProgress(files, dirs);
+        }
+      },
+    });
 
-  if (scan.cancelled) {
-    logger.info(`[scan] ${name}: cancelled after ${scan.files.length} files`);
-    app.sftpBarItem.showMsg(`scan of ${name} cancelled`, 2000);
-    return { status: 'cancelled', plan: null, filesScanned: scan.files.length };
+    if (scan.cancelled) {
+      logger.info(`[scan] ${name}: cancelled after ${scan.files.length} files`);
+      app.sftpBarItem.showMsg(`scan of ${name} cancelled`, 2000);
+      return { status: 'cancelled', plan: null, filesScanned: scan.files.length };
+    }
+
+    diff = diffAgainstIndex({
+      baseDir: service.baseDir,
+      scanned: scan.files,
+      index,
+      // the same mapping every file command uses for a local uri
+      toRemotePath: localPath => toRemotePath(localPath, service.baseDir, config.remotePath),
+    });
+  } catch (error) {
+    // the bar must not read "scanning…" for the rest of the session
+    app.sftpBarItem.showMsg(`scan of ${name} failed`, 2000);
+    throw error;
   }
 
-  const diff = diffAgainstIndex({
-    baseDir: service.baseDir,
-    scanned: scan.files,
-    index,
-    // the same mapping every file command uses for a local uri
-    toRemotePath: localPath => toRemotePath(localPath, service.baseDir, config.remotePath),
-  });
+  let items = diff.items;
+  let ignoredNew: number | undefined;
+  if (knownOnly) {
+    items = diff.items.filter(item => item.reason !== 'new');
+    ignoredNew = diff.items.length - items.length;
+    if (ignoredNew > 0) {
+      logger.info(`[scan] ${name}: ${ignoredNew} unindexed file(s) ignored until the index is built`);
+      notifyUnbuiltIndex(service, index, ignoredNew);
+    }
+  }
 
-  if (diff.items.length === 0) {
+  if (items.length === 0) {
     logger.info(
       `[scan] ${name}: up to date (${scan.files.length} files, ${scan.durationMs} ms` +
         (diff.missingLocally.length > 0
-          ? `, ${diff.missingLocally.length} indexed file(s) no longer exist locally)`
-          : ')')
+          ? `, ${diff.missingLocally.length} indexed file(s) no longer exist locally`
+          : '') +
+        (ignoredNew ? `, ${ignoredNew} unindexed file(s) ignored)` : ')')
     );
-    app.sftpBarItem.showMsg(`${name} up to date`, 2000);
-    return { status: 'up-to-date', plan: null, filesScanned: scan.files.length };
+    app.sftpBarItem.showMsg(
+      ignoredNew ? `${name}: ${ignoredNew} unindexed file(s) ignored` : `${name} up to date`,
+      2000
+    );
+    if (!automatic && !index.isSeeded()) {
+      // the user asked, and the tree matches the index: it covers everything
+      index.markSeeded();
+      forgetUnbuiltNotice(index.key);
+      logger.info(`[scan] ${name}: sync index marked as built (manual scan found it complete)`);
+    }
+    return { status: 'up-to-date', plan: null, filesScanned: scan.files.length, ignoredNew };
   }
 
   logger.info(
-    `[scan] ${name}: ${diff.items.length} file(s) changed since their last verified upload ` +
+    `[scan] ${name}: ${items.length} file(s) changed since their last verified upload ` +
       `(${diff.unchanged} unchanged, ${scan.durationMs} ms, trigger ${trigger})`
   );
-  app.sftpBarItem.showMsg(`${name}: ${diff.items.length} changed file(s)`, 2000);
+  app.sftpBarItem.showMsg(`${name}: ${items.length} changed file(s)`, 2000);
 
   const plan = createPlan({
     serviceName: service.name,
     profile: app.state.profile,
     source: trigger === 'poll' ? 'poll' : 'scan',
-    items: diff.items,
+    items,
   });
 
   status(`uploading ${plan.items.length} file(s)…`);
@@ -284,7 +381,22 @@ async function doScan(
     serviceName: service.name,
     host: config.host,
     confirmThreshold: resolveExternalChangesConfig(config).confirmThreshold,
+    service,
   });
+
+  if (
+    !automatic &&
+    !index.isSeeded() &&
+    outcome.decision === 'run' &&
+    outcome.summary.pending === 0 &&
+    outcome.summary.uploading === 0
+  ) {
+    // the user confirmed the whole tree's worth of differences and the run
+    // went through: from here on the index covers the tree
+    index.markSeeded();
+    forgetUnbuiltNotice(index.key);
+    logger.info(`[scan] ${name}: sync index marked as built after a confirmed manual scan`);
+  }
 
   return {
     status: 'planned',
@@ -292,6 +404,7 @@ async function doScan(
     decision: outcome.decision,
     summary: outcome.summary,
     filesScanned: scan.files.length,
+    ignoredNew,
   };
 }
 
@@ -364,9 +477,9 @@ export async function scanService(
   return outcome.plan;
 }
 
-/** Scans every service, one after another so confirmations never stack. */
-export async function scanAll(trigger: ScanTrigger): Promise<void> {
-  for (const service of getAllFileService()) {
+/** One after another, so two services never stack their confirmations. */
+async function scanSequentially(services: FileService[], trigger: ScanTrigger): Promise<void> {
+  for (const service of services) {
     if (destroyed) {
       return;
     }
@@ -378,8 +491,13 @@ export async function scanAll(trigger: ScanTrigger): Promise<void> {
   }
 }
 
+/** Scans every service, one after another so confirmations never stack. */
+export function scanAll(trigger: ScanTrigger): Promise<void> {
+  return scanSequentially(getAllFileService(), trigger);
+}
+
 interface RemoteWalkOptions {
-  ignore: ((fsPath: string) => boolean) | null | undefined;
+  ignore: ((fsPath: string, isDirectory?: boolean) => boolean) | null | undefined;
   skipDir: (remotePath: string) => boolean;
   isCancelled: () => boolean;
   onFile: (entry: FileEntry) => void;
@@ -403,7 +521,8 @@ async function walkRemote(remoteFs: FileSystem, root: string, options: RemoteWal
       return;
     }
     entries.forEach(entry => {
-      if (options.ignore && options.ignore(entry.fspath)) {
+      // with the directory flag, so a `dir/` pattern prunes the subtree
+      if (options.ignore && options.ignore(entry.fspath, entry.type === FileType.Directory)) {
         return;
       }
       if (entry.type === FileType.Directory) {
@@ -456,11 +575,15 @@ function sameMtime(localMs: number, remoteMs: number): boolean {
 
 /**
  * Seeds the index from what is already on the server: every file present on
- * both sides with the same size (and, where the remote mtime is reliable, the
- * same mtime within tolerance) is recorded as verified. Files that differ or
- * exist on one side only are left out, so the next scan plans them. The old
- * index is replaced only once the rebuild completes; a cancelled rebuild
- * leaves it untouched.
+ * both sides with the same size is recorded as verified, with the local mtime
+ * as the baseline the next scans compare against. The remote mtime is not a
+ * condition — a deploy made with git or rsync gives the server other mtimes
+ * for identical content, and FTP listings carry minute-level ones anyway — it
+ * is only counted, for the summary. Files whose size differs or that exist on
+ * one side only are left out, so the next scan plans them. The index is
+ * marked as seeded: from now on the automatic scans trust it. The old index
+ * is replaced only once the rebuild completes; a cancelled rebuild leaves it
+ * untouched.
  */
 export async function rebuildSyncIndex(
   service: FileService,
@@ -502,8 +625,16 @@ export async function rebuildSyncIndex(
       report();
     },
   });
+  const cancelledSummary: RebuildSummary = {
+    indexed: 0,
+    differ: 0,
+    mtimeDiffer: 0,
+    onlyLocal: 0,
+    onlyRemote: 0,
+    cancelled: true,
+  };
   if (remoteCancelled) {
-    return { indexed: 0, differ: 0, onlyLocal: 0, onlyRemote: 0, cancelled: true };
+    return cancelledSummary;
   }
 
   const local = await scanLocalTree(service.baseDir, {
@@ -515,15 +646,16 @@ export async function rebuildSyncIndex(
     },
   });
   if (local.cancelled) {
-    return { indexed: 0, differ: 0, onlyLocal: 0, onlyRemote: 0, cancelled: true };
+    return cancelledSummary;
   }
 
-  // FTP listings carry minute-level mtimes and ignore futimes; size alone is
-  // the honest comparison there
+  // FTP listings carry minute-level mtimes and ignore futimes; counting the
+  // differences there would only alarm
   const mtimeReliable = config.protocol !== 'ftp';
   const now = Date.now();
   const entries: Array<[string, IndexEntry]> = [];
   let differ = 0;
+  let mtimeDiffer = 0;
   let onlyLocal = 0;
 
   local.files.forEach(file => {
@@ -536,37 +668,45 @@ export async function rebuildSyncIndex(
     }
     remote.delete(key);
 
-    if (remoteEntry.size === file.size && (!mtimeReliable || sameMtime(file.mtime, remoteEntry.mtime))) {
-      entries.push([
-        relPath,
-        {
-          size: file.size,
-          mtime: file.mtime,
-          verifiedAt: now,
-          remoteSize: remoteEntry.size,
-          remoteMtime: remoteEntry.mtime,
-          status: 'verified',
-        },
-      ]);
-    } else {
+    if (remoteEntry.size !== file.size) {
       differ++;
+      return;
     }
+    if (mtimeReliable && !sameMtime(file.mtime, remoteEntry.mtime)) {
+      mtimeDiffer++;
+    }
+    entries.push([
+      relPath,
+      {
+        size: file.size,
+        mtime: file.mtime,
+        verifiedAt: now,
+        remoteSize: remoteEntry.size,
+        remoteMtime: remoteEntry.mtime,
+        status: 'verified',
+      },
+    ]);
   });
 
   index.clear();
   entries.forEach(([relPath, entry]) => index.set(relPath, entry));
+  index.markSeeded(now);
   await index.save();
+  forgetUnbuiltNotice(index.key);
 
   const summary: RebuildSummary = {
     indexed: entries.length,
     differ,
+    mtimeDiffer,
     onlyLocal,
     onlyRemote: remote.size,
     cancelled: false,
   };
   logger.info(
-    `[rebuild-index] ${name}: ${summary.indexed} indexed, ${summary.differ} differ, ` +
-      `${summary.onlyLocal} only local, ${summary.onlyRemote} only remote`
+    `[rebuild-index] ${name}: ${summary.indexed} indexed ` +
+      `(${summary.mtimeDiffer} with another mtime on the server), ` +
+      `${summary.differ} differ in size, ${summary.onlyLocal} only local, ` +
+      `${summary.onlyRemote} only remote; index marked as built`
   );
   return summary;
 }
@@ -575,14 +715,20 @@ export function formatRebuildSummary(summary: RebuildSummary): string {
   if (summary.cancelled) {
     return 'Sync index rebuild cancelled; the index was left as it was.';
   }
-  const parts = [`${summary.differ.toLocaleString()} differ`];
+  const parts = [`${summary.differ.toLocaleString()} differ in size`];
   if (summary.onlyLocal > 0) {
     parts.push(`${summary.onlyLocal.toLocaleString()} only local`);
   }
   if (summary.onlyRemote > 0) {
     parts.push(`${summary.onlyRemote.toLocaleString()} only remote`);
   }
-  return `Indexed ${summary.indexed.toLocaleString()} files; ${parts.join(', ')}.`;
+  let message = `Indexed ${summary.indexed.toLocaleString()} files; ${parts.join(', ')}.`;
+  if (summary.mtimeDiffer > 0) {
+    message +=
+      ` ${summary.mtimeDiffer.toLocaleString()} of the indexed files have another mtime ` +
+      'on the server (matched by size).';
+  }
+  return message;
 }
 
 /**
@@ -620,13 +766,13 @@ function onWindowStateChanged(state: vscode.WindowState) {
     return;
   }
   const now = Date.now();
-  getAllFileService().forEach(service => {
+  const due = getAllFileService().filter(service => {
     const last = lastScanAt.get(service.baseDir);
-    if (last !== undefined && now - last < FOCUS_MIN_INTERVAL_MS) {
-      return;
-    }
-    runScan(service, 'focus').catch(error => logger.error(error, `[scan] ${nameOf(service)}`));
+    return last === undefined || now - last >= FOCUS_MIN_INTERVAL_MS;
   });
+  // sequential, like the startup scan: parallel scans would stack one
+  // confirmation dialog per service
+  scanSequentially(due, 'focus').catch(error => logger.error(error, '[scan] focus'));
 }
 
 // The timer reads the services on every tick rather than being rebuilt when
@@ -674,6 +820,8 @@ export function init(context: vscode.ExtensionContext): void {
   destroy();
   destroyed = false;
   wasPaused = isPaused();
+  extensionContext = context;
+  loadDismissedNotices(context);
 
   // seeded so a focus regained right after activation doesn't scan twice
   const now = Date.now();
@@ -715,7 +863,9 @@ export function __resetForTest() {
   destroyed = false;
   scans.clear();
   lastScanAt.clear();
-  emptyIndexNotified.clear();
+  unbuiltNoticeShown.clear();
+  unbuiltNoticeDismissed.clear();
+  extensionContext = null;
   wasPaused = false;
 }
 
@@ -727,4 +877,6 @@ export const testHooks = {
   onWindowStateChanged,
   onPauseStateChanged,
   FOCUS_MIN_INTERVAL_MS,
+  BUILD_INDEX_LABEL,
+  DONT_SHOW_AGAIN_LABEL,
 };

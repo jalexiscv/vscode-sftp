@@ -19,6 +19,10 @@ export const STATE_KEY_SYNC_PAUSED = 'sftp.state.syncPaused';
 // clave de workspaceState donde se persiste el índice de la papelera remota
 export const STATE_KEY_TRASH_INDEX = 'sftp.state.trashIndex';
 
+// clave de workspaceState con las claves de índice de sincronización cuyo aviso
+// de "índice sin construir" el usuario pidió no volver a ver
+export const STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED = 'sftp.state.unbuiltIndexNoticeDismissed';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 

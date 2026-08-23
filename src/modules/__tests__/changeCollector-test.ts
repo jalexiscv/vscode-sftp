@@ -20,6 +20,7 @@ import { confirmAndRunPlan } from '../planConfirmation';
 import {
   setPaused,
   suppressAutoSync,
+  SUPPRESSION_TAIL_MS,
   __resetForTest as resetSyncControl,
 } from '../syncControl';
 import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
@@ -360,7 +361,7 @@ describe('admission', () => {
     expect(pendingCount()).toBe(0);
   });
 
-  test('drops everything while the extension is rewriting local files', async () => {
+  test('drops watcher events while the extension is rewriting local files', async () => {
     const seen = collectBatches();
 
     await suppressAutoSync(async () => {
@@ -369,6 +370,19 @@ describe('admission', () => {
     });
 
     expect(seen).toEqual([]);
+    expect(pendingCount()).toBe(0);
+  });
+
+  test('holds a save back while the extension is rewriting local files, instead of dropping it', async () => {
+    const seen = collectBatches();
+
+    await suppressAutoSync(async () => {
+      enqueueChange(uri(p('src', 'a.ts')), 'save');
+      await flushNow();
+      // not handed over, not lost: it waits for the suppression tail
+      expect(seen).toEqual([]);
+      expect(pendingCount()).toBe(1);
+    });
   });
 
   test('drops a path no config covers, before it reaches the queue', async () => {
@@ -492,13 +506,49 @@ describe('default handler', () => {
     expect(a.reason).toBe('new');
     expect(a.localSize).toBe(3);
     expect(a.remotePath).toBe('/remote/a.ts');
-    // the threshold comes from the config; the run is not awaited
+    // the threshold comes from the config; the run is not awaited; the
+    // service goes along so a "Skip" can be remembered in its index
     expect(options).toEqual({
       serviceName: 'src',
       host: 'example.test',
       confirmThreshold: 20,
       awaitRun: false,
+      prompt: true,
+      service: expect.objectContaining({ baseDir: p('src') }),
     });
+  });
+
+  test('flushNow({ confirm: false }) hands the batch over without a prompt', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'aaa' });
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow({ confirm: false });
+
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+    expect(confirmAndRunPlanMock.mock.calls[0][1].prompt).toBe(false);
+
+    // the drain mode does not outlive the flush
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+    expect(confirmAndRunPlanMock.mock.calls[1][1].prompt).toBe(true);
+  });
+
+  test('a directory matched by a "dir/" pattern is not expanded', async () => {
+    vol.fromJSON({ [p('src', 'build', 'out.js')]: 'x', [p('src', 'a.ts')]: 'y' });
+    // only the directory form matches, as ignore 5.x does with "build/"
+    installServices(
+      fakeService(p('src'), {
+        ignore: (fsPath: string, isDirectory?: boolean) =>
+          isDirectory === true && /[\\/]build$/.test(fsPath),
+      })
+    );
+
+    enqueueChange(uri(p('src', 'build')), 'watcher');
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    const [plan] = plansOf();
+    expect(plan.items.map((i: any) => path.basename(i.localPath))).toEqual(['a.ts']);
   });
 
   test('an in-editor save seen by the watcher too is one plan item, not two', async () => {
@@ -872,5 +922,31 @@ describe('batching window', () => {
     enqueueChange(uri(p('src', 'a.ts')), 'save');
 
     expect(seen.length).toBe(1);
+  });
+
+  test('a save held back by a suppression is retried once the tail is over', async () => {
+    const seen = collectBatches();
+    let release: () => void = () => undefined;
+    const download = suppressAutoSync(() => new Promise<void>(resolve => (release = resolve)));
+
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    expect(seen).toEqual([]);
+    expect(pendingCount()).toBe(1);
+
+    release();
+    await download;
+    // the tail keeps the suppression up past the batching window; the retry
+    // lands just after the tail, and only then is the save handed over
+    advance(SUPPRESSION_TAIL_MS);
+    expect(seen).toEqual([]);
+    advance(testHooks.SUPPRESSION_RETRY_MS - SUPPRESSION_TAIL_MS - 1);
+    expect(seen).toEqual([]);
+    advance(1);
+    expect(seen.length).toBe(1);
+    expect(names(seen[0])).toEqual(['a.ts']);
+    expect(seen[0].items[0].source).toBe('save');
+
+    await flushNow();
+    expect(pendingCount()).toBe(0);
   });
 });

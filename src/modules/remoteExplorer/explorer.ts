@@ -7,10 +7,23 @@ import {
 } from '../../constants';
 import { UResource } from '../../core';
 import { toRemotePath } from '../../helper';
+import logger from '../../logger';
 import { REMOTE_SCHEME } from '../../constants';
 import { getFileService } from '../serviceManager';
 import RemoteTreeDataProvider, { ExplorerItem } from './treeDataProvider';
 
+/**
+ * The Remote Explorer view: one root per configured service, expanded lazily
+ * from the remote filesystem, plus the commands that refresh it and open a
+ * remote file read-only.
+ *
+ * Key lifecycle methods:
+ * - constructor: creates the tree view and registers its commands.
+ * - {@link refresh} re-reads a node (or the roots) after a transfer; its
+ *   failure is logged, never thrown to the caller, because every transfer
+ *   command calls it as a courtesy.
+ * - {@link findRoot} maps a remote uri to its service root.
+ */
 export default class RemoteExplorer {
   private _explorerView: vscode.TreeView<ExplorerItem>;
   private _treeDataProvider: RemoteTreeDataProvider;
@@ -58,7 +71,12 @@ export default class RemoteExplorer {
       });
     }
 
-    this._treeDataProvider.refresh(item);
+    // not awaited by the callers (every transfer command refreshes on its way
+    // out), so a rejection here used to surface as an unhandled error in the
+    // host log; a refresh that fails only means the tree is a click behind
+    this._treeDataProvider
+      .refresh(item)
+      .catch(error => logger.debug(`[remote-explorer] refresh skipped: ${error.message}`));
   }
 
   reveal(item: ExplorerItem): Thenable<void> {

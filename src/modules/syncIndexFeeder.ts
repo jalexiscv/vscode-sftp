@@ -16,7 +16,10 @@ import { onDidFinishTransfer, TransferOutcome } from './transferEvents';
  * `failed` so the next scan plans it again; a download records the file the
  * way it now is on disk, so the next scan does not mistake it for a local
  * edit. Deletions and renames mirrored by localDeleteMonitor update the index
- * through {@link forgetInIndex} / {@link renameInIndex}.
+ * through {@link forgetInIndex} / {@link renameInIndex}; a version the user
+ * declined to upload is remembered as `skipped` through
+ * {@link rememberSkipped}, so the same question is not asked again until the
+ * file changes.
  *
  * {@link indexFor} is the one way to get the index of a service's current
  * destination (host, port, remote path and active profile), shared with the
@@ -202,6 +205,49 @@ export async function renameInIndex(
     });
   } catch (error) {
     logger.debug(`[sync-index] cannot rename ${fromLocalPath}: ${error.message}`);
+  }
+}
+
+export interface SkippedLocalFile {
+  localPath: string;
+  /** size and mtime (ms) of the version the user declined */
+  localSize: number;
+  localMtime: number;
+}
+
+/**
+ * Remembers that the user declined to upload these versions: each file gets a
+ * `skipped` entry with the size and mtime it had, which the next scan treats
+ * as "nothing to do" until the file changes. Without this, "Skip" on a scan
+ * plan would bring the same dialog back at the next startup. Never throws.
+ */
+export async function rememberSkipped(
+  service: FileService,
+  files: SkippedLocalFile[],
+  config?: ServiceConfig
+): Promise<void> {
+  if (files.length === 0) {
+    return;
+  }
+  try {
+    const index = await indexFor(service, config);
+    files.forEach(file => {
+      const relPath = toRelPath(service.baseDir, file.localPath);
+      if (!isInsideBase(relPath)) {
+        return;
+      }
+      index.set(relPath, {
+        size: file.localSize,
+        mtime: file.localMtime,
+        verifiedAt: 0,
+        status: 'skipped',
+      });
+    });
+    logger.info(
+      `[sync-index] ${service.name || service.baseDir}: ${files.length} skipped file(s) remembered`
+    );
+  } catch (error) {
+    logger.debug(`[sync-index] cannot remember skipped files: ${error.message}`);
   }
 }
 

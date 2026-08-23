@@ -487,7 +487,7 @@ export async function transfer(
   config: TransferHandleConfig<TransferOption>,
   collect: (t: TransferTask) => void,
   options?: TransferCallOptions
-) {
+): Promise<void> {
   const stat = await config.srcFs.lstat(config.srcFsPath);
   const transferOption = {
     ...config.transferOption,
