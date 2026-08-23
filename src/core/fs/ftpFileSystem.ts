@@ -52,9 +52,12 @@ function toNumMode(permissions): number {
  * - {@link list} lists and normalizes directory entries.
  * - {@link put} uploads with a one-shot retry for servers that reject STOR
  *   over an existing file (proftpd mod_rename).
+ * - {@link statSize} answers the post-upload size check with SIZE instead of
+ *   a LIST of the parent directory.
  */
 export default class FTPFileSystem extends RemoteFileSystem {
   private _supportMFMT: boolean = true;
+  private _supportSIZE: boolean = true;
 
   static getFileType(type: BasicFtpFileType): FileType {
     if (type === BasicFtpFileType.Directory) {
@@ -140,6 +143,37 @@ export default class FTPFileSystem extends RemoteFileSystem {
 
   fstat(fd: FtpFileHandle): Promise<FileStats> {
     return this.lstat(fd.path);
+  }
+
+  /**
+   * SIZE is one control command; the inherited lstat() would LIST the parent
+   * directory for every verified upload. A server without SIZE is remembered
+   * so the fallback is paid once per connection, not once per file. A 550
+   * (no such file) is not "unsupported" and propagates, since it is exactly
+   * what the verification wants to hear about.
+   */
+  async statSize(path: string): Promise<number> {
+    if (this._supportSIZE) {
+      try {
+        return await this.run(() => this.ftp.size(path));
+      } catch (error) {
+        if (!isSizeUnsupported(error)) {
+          throw error;
+        }
+        logger.info('Don\'t Support SIZE');
+        this._supportSIZE = false;
+      }
+    }
+
+    const stat = await this.lstat(path);
+    return stat.size;
+  }
+
+  // lstat() is a LIST of the parent directory, and futimes() is best effort
+  // (silently skipped without MFMT), so the post-upload mtime hint would cost
+  // a listing per file and still warn spuriously: opt out.
+  statMtime(_path: string): Promise<number | undefined> {
+    return Promise.resolve(undefined);
   }
 
   futimes(fd: FtpFileHandle, _atime: number, mtime: number): Promise<void> {
@@ -357,4 +391,19 @@ function ftpCode(error): number | undefined {
 function isPermanentNegative(error): boolean {
   const code = ftpCode(error);
   return code !== undefined && code >= 500 && code < 600;
+}
+
+// SIZE missing from the server: 500/502 (unknown or not implemented), a 550
+// that complains about ASCII mode, or a reply basic-ftp could not parse as a
+// number (e.g. a 202 "superfluous" answer)
+function isSizeUnsupported(error): boolean {
+  const code = ftpCode(error);
+  const message = String((error && error.message) || '');
+  if (code === 500 || code === 502) {
+    return true;
+  }
+  if (code === 550 && /ascii/i.test(message)) {
+    return true;
+  }
+  return /can't parse response/i.test(message);
 }
