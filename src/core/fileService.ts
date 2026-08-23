@@ -13,7 +13,8 @@ import { resolveTempFilePatterns } from './tempFiles';
 import { FileSystem } from './fs';
 import Scheduler from './scheduler';
 import { createRemoteIfNoneExist, removeRemoteFs } from './remoteFs';
-import TransferTask from './transferTask';
+import TransferTask, { VerifyUploadLevel } from './transferTask';
+import { TransferFailure } from './customError';
 import localFs from './localFs';
 
 type Omit<T, U> = Pick<T, Exclude<keyof T, U>>;
@@ -41,6 +42,8 @@ interface ServiceOption {
   useTempFile: boolean;
   openSsh: boolean;
   downloadOnOpen: boolean | 'confirm';
+  verifyUpload: VerifyUploadLevel;
+  uploadRetries: number;
   filePerm?: number;
   dirPerm?: number;
   syncOption: {
@@ -63,6 +66,16 @@ interface ServiceOption {
   };
   remoteTimeOffsetInHours: number;
   limitOpenFilesOnRemote: number | true;
+  externalChanges: ExternalChangesConfig;
+}
+
+export interface ExternalChangesConfig {
+  /** reconcile the local tree against the sync index when the extension activates */
+  scanOnStartup: boolean;
+  /** ...and when automatic sync is resumed or the window regains focus */
+  scanOnResume: boolean;
+  /** batches above this many files ask before uploading; 0 always asks */
+  confirmThreshold: number;
 }
 
 export interface RemoteTrashConfig {
@@ -76,6 +89,8 @@ interface WatcherConfig {
   files: false | string;
   autoUpload: boolean;
   autoDelete: boolean;
+  /** ms between scans of the local tree; 0 (default) disables polling */
+  pollInterval?: number;
 }
 
 interface SftpOption {
@@ -113,7 +128,13 @@ export interface ServiceConfig
     Omit<ServiceOption, 'ignore'>,
     SftpOption,
     FtpOption {
-  ignore?: ((fsPath: string) => boolean) | null;
+  /**
+   * Whether `fsPath` (local or remote, absolute) is excluded by the config.
+   * Pass `isDirectory` when the caller knows it holds a directory: gitignore
+   * patterns with a trailing slash (`node_modules/`) only match a directory,
+   * and only when it is tested as one.
+   */
+  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
 }
 
 export interface WatcherService {
@@ -121,11 +142,28 @@ export interface WatcherService {
   dispose(watcherBase: string): void;
 }
 
-interface TransferScheduler {
+/**
+ * Outcome of one scheduler run. A task lands in exactly one of the three lists.
+ */
+export interface TransferResult {
+  /** tasks whose run() completed */
+  succeeded: TransferTask[];
+  /** tasks whose run() threw; a cancelled task never counts as failed */
+  failed: TransferFailure[];
+  /** tasks aborted through cancelTransferTasks() */
+  cancelled: TransferTask[];
+}
+
+export interface TransferScheduler {
   // readonly _scheduler: Scheduler;
   size: number;
   add(x: TransferTask): void;
-  run(): Promise<void>;
+  /**
+   * Starts the queued tasks and resolves once all of them have finished.
+   * Never rejects because of a task: failures are reported in the result, so
+   * the caller decides what a partially failed batch means.
+   */
+  run(): Promise<TransferResult>;
   stop(): void;
 }
 
@@ -194,6 +232,8 @@ function getHostInfo(config) {
     'useTempFile',
     'openSsh',
     'downloadOnOpen',
+    'verifyUpload',
+    'uploadRetries',
     'ignore',
     'ignoreFile',
     'ignoreTempFiles',
@@ -206,6 +246,7 @@ function getHostInfo(config) {
     'deleteRemoteConfirmThreshold',
     'renameRemoteOnLocalRename',
     'remoteTrash',
+    'externalChanges',
   ];
 
   return Object.keys(config).reduce((obj, key) => {
@@ -396,7 +437,7 @@ const CONCATENATED_KEYS = ['ignore', 'tempFilePatterns'];
 
 // nested option objects merge key by key, so `{"remoteTrash": {"enabled": false}}`
 // in a profile keeps the inherited path and retention
-const DEEP_MERGED_KEYS = ['remoteTrash', 'syncOption', 'remoteExplorer'];
+const DEEP_MERGED_KEYS = ['remoteTrash', 'syncOption', 'remoteExplorer', 'externalChanges'];
 
 function mergeProfile(
   target: FileServiceConfig,
@@ -459,6 +500,53 @@ export function resolveRemoteTrashConfig(config: {
         ? trash!.retentionDays
         : DEFAULT_REMOTE_TRASH.retentionDays,
   };
+}
+
+const DEFAULT_EXTERNAL_CHANGES: ExternalChangesConfig = {
+  scanOnStartup: true,
+  scanOnResume: true,
+  confirmThreshold: 20,
+};
+
+/**
+ * Fills in the external-change options the user left out.
+ *
+ * Same reason as {@link resolveRemoteTrashConfig}: `mergedDefault` is a shallow
+ * spread, so `{"externalChanges": {"confirmThreshold": 5}}` replaces the whole
+ * default object and would otherwise leave the scan flags undefined.
+ */
+export function resolveExternalChangesConfig(config: {
+  externalChanges?: Partial<ExternalChangesConfig>;
+}): ExternalChangesConfig {
+  const external = config.externalChanges;
+  if (!isPlainObject(external)) {
+    return { ...DEFAULT_EXTERNAL_CHANGES };
+  }
+
+  return {
+    scanOnStartup:
+      external!.scanOnStartup !== undefined
+        ? Boolean(external!.scanOnStartup)
+        : DEFAULT_EXTERNAL_CHANGES.scanOnStartup,
+    scanOnResume:
+      external!.scanOnResume !== undefined
+        ? Boolean(external!.scanOnResume)
+        : DEFAULT_EXTERNAL_CHANGES.scanOnResume,
+    confirmThreshold:
+      typeof external!.confirmThreshold === 'number' && external!.confirmThreshold >= 0
+        ? external!.confirmThreshold
+        : DEFAULT_EXTERNAL_CHANGES.confirmThreshold,
+  };
+}
+
+/** `watcher.pollInterval` in ms, 0 when polling is off or the watcher block is absent. */
+export function resolvePollInterval(config: { watcher?: { pollInterval?: number } }): number {
+  const watcher = config.watcher;
+  if (!isPlainObject(watcher)) {
+    return 0;
+  }
+  const interval = watcher!.pollInterval;
+  return typeof interval === 'number' && interval > 0 ? Math.floor(interval) : 0;
 }
 
 enum Event {
@@ -539,6 +627,15 @@ export default class FileService {
     return this._profiles || [];
   }
 
+  /**
+   * The root-level `watcher` block as configured, without resolving the
+   * profile: it is not profile-specific, and callers that poll it (the
+   * external-change scanner) must not pay a validation per tick.
+   */
+  getWatcherConfig(): WatcherConfig | undefined {
+    return this._watcherConfig;
+  }
+
   getPendingTransferTasks(): TransferTask[] {
     return Array.from(this._pendingTransferTasks);
   }
@@ -572,16 +669,31 @@ export default class FileService {
       autoStart: false,
       concurrency,
     });
+    // Collected per scheduler and handed back by run(). The underlying
+    // Scheduler swallows task errors (it only emits them through onTaskDone)
+    // and goes idle either way, so without this a batch with a failed put
+    // was indistinguishable from a clean one.
+    const result: TransferResult = { succeeded: [], failed: [], cancelled: [] };
     scheduler.onTaskStart(task => {
       this._pendingTransferTasks.add(task as TransferTask);
       this._eventEmitter.emit(Event.BEFORE_TRANSFER, task);
     });
     scheduler.onTaskDone((err, task) => {
-      this._pendingTransferTasks.delete(task as TransferTask);
+      const transferTask = task as TransferTask;
+      this._pendingTransferTasks.delete(transferTask);
+      if (transferTask.isCancelled()) {
+        // aborting the stream makes run() throw too; that is the user's
+        // choice, not a failure
+        result.cancelled.push(transferTask);
+      } else if (err) {
+        result.failed.push({ task: transferTask, error: err });
+      } else {
+        result.succeeded.push(transferTask);
+      }
       this._eventEmitter.emit(Event.AFTER_TRANSFER, err, task);
     });
 
-    let runningPromise: Promise<void> | null = null;
+    let runningPromise: Promise<TransferResult> | null = null;
     let isStopped: boolean = false;
     const transferScheduler: TransferScheduler = {
       get size() {
@@ -600,12 +712,12 @@ export default class FileService {
       },
       run() {
         if (isStopped) {
-          return Promise.resolve();
+          return Promise.resolve(result);
         }
 
         if (scheduler.size <= 0) {
           fileService._removeScheduler(transferScheduler);
-          return Promise.resolve();
+          return Promise.resolve(result);
         }
 
         if (!runningPromise) {
@@ -613,7 +725,7 @@ export default class FileService {
             scheduler.onIdle(() => {
               runningPromise = null;
               fileService._removeScheduler(transferScheduler);
-              resolve();
+              resolve(result);
             });
             scheduler.start();
           });
@@ -714,7 +826,7 @@ export default class FileService {
 
     const ignore = Ignore.from(ignoreConfig);
     const isWindows = process.platform === 'win32';
-    const ignoreFunc = fsPath => {
+    const ignoreFunc = (fsPath: string, isDirectory?: boolean) => {
       // vscode will always return path with / as separator
       const normalizedPath = path.normalize(fsPath);
       // windows paths are case-insensitive
@@ -733,7 +845,17 @@ export default class FileService {
       relativePath = relativePath.split(path.sep).join('/');
 
       // skip root
-      return relativePath !== '' && ignore.ignores(relativePath);
+      if (relativePath === '') {
+        return false;
+      }
+      if (ignore.ignores(relativePath)) {
+        return true;
+      }
+
+      // `dir/` patterns — the usual spelling in an ignoreFile — match only a
+      // path that ends in a slash. Without this, a scan or a folder transfer
+      // walks into node_modules and rejects its files one by one.
+      return Boolean(isDirectory) && ignore.ignores(relativePath + '/');
     };
 
     return ignoreFunc;

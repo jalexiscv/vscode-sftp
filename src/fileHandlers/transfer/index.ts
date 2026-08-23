@@ -1,9 +1,31 @@
+import { TransferResult, TransferFailedError } from '../../core';
+import { markReported } from '../../helper';
+import { suppressAutoSync } from '../../modules/syncControl';
 import { refreshRemoteExplorer } from '../shared';
 import createFileHandler, { FileHandlerContext } from '../createFileHandler';
 import { transfer, sync, TransferOption, SyncOption, TransferDirection } from './transfer';
 
+type TransferAction = 'upload' | 'download' | 'sync';
+
+/**
+ * Turns a batch with failures into a rejection, so a handler can no longer
+ * resolve after a failed put. Cancelled tasks are not failures.
+ *
+ * Each failed task was already reported by the service's `afterTransfer` hook,
+ * so the aggregate is flagged as reported: callers log it, they do not show
+ * it again.
+ */
+function assertTransferSucceeded(result: TransferResult, action: TransferAction) {
+  if (result.failed.length === 0) {
+    return;
+  }
+
+  const total = result.succeeded.length + result.failed.length + result.cancelled.length;
+  throw markReported(new TransferFailedError(result.failed, total, action));
+}
+
 function createTransferHandle(direction: TransferDirection) {
-  return async function handle(this: FileHandlerContext, option) {
+  async function run(this: FileHandlerContext, option) {
     const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
     const localFs = this.fileService.getLocalFileSystem();
     const { localFsPath, remoteFsPath } = this.target;
@@ -33,7 +55,22 @@ function createTransferHandle(direction: TransferDirection) {
     }
     // todo: abort at here. we should stop collect task
     await transfer(transferConfig, t => scheduler.add(t));
-    await scheduler.run();
+    const result = await scheduler.run();
+    assertTransferSucceeded(
+      result,
+      direction === TransferDirection.REMOTE_TO_LOCAL ? 'download' : 'upload'
+    );
+  }
+
+  if (direction === TransferDirection.LOCAL_TO_REMOTE) {
+    return run;
+  }
+
+  // A download writes local files the watcher and uploadOnSave would otherwise
+  // see as the user's own edits and push straight back to the server. Uploads
+  // are not wrapped: suppressing them would swallow real saves made meanwhile.
+  return function handle(this: FileHandlerContext, option) {
+    return suppressAutoSync(() => run.call(this, option));
   };
 }
 
@@ -42,26 +79,33 @@ const downloadHandle = createTransferHandle(TransferDirection.REMOTE_TO_LOCAL);
 
 export const sync2Remote = createFileHandler<SyncOption>({
   name: 'sync local ➞ remote',
-  async handle(option) {
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
-    const localFs = this.fileService.getLocalFileSystem();
-    const { localFsPath, remoteFsPath } = this.target;
-    const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-    // Attach filePerm and dirPerm to transferOption
-    option.filePerm = this.config.filePerm;
-    option.dirPerm = this.config.dirPerm;
-    await sync(
-      {
-        srcFsPath: localFsPath,
-        srcFs: localFs,
-        targetFsPath: remoteFsPath,
-        targetFs: remoteFs,
-        transferOption: option,
-        transferDirection: TransferDirection.LOCAL_TO_REMOTE,
-      },
-      t => scheduler.add(t)
-    );
-    await scheduler.run();
+  handle(option) {
+    const run = async () => {
+      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
+      const localFs = this.fileService.getLocalFileSystem();
+      const { localFsPath, remoteFsPath } = this.target;
+      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
+      // Attach filePerm and dirPerm to transferOption
+      option.filePerm = this.config.filePerm;
+      option.dirPerm = this.config.dirPerm;
+      await sync(
+        {
+          srcFsPath: localFsPath,
+          srcFs: localFs,
+          targetFsPath: remoteFsPath,
+          targetFs: remoteFs,
+          transferOption: option,
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+        },
+        t => scheduler.add(t)
+      );
+      const result = await scheduler.run();
+      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'upload');
+    };
+
+    // both directions also downloads, and those writes must not be mirrored
+    // back; a plain local -> remote sync writes nothing locally
+    return option.bothDiretions ? suppressAutoSync(run) : run();
   },
   transformOption() {
     const config = this.config;
@@ -70,6 +114,8 @@ export const sync2Remote = createFileHandler<SyncOption>({
       perserveTargetMode: config.protocol === 'sftp' && !config.filePerm && !config.dirPerm,
       useTempFile: config.useTempFile,
       openSsh: config.openSsh,
+      verifyUpload: config.verifyUpload,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
       delete: syncOption.delete,
@@ -85,29 +131,35 @@ export const sync2Remote = createFileHandler<SyncOption>({
 
 export const sync2Local = createFileHandler<SyncOption>({
   name: 'sync remote ➞ local',
-  async handle(option) {
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
-    const localFs = this.fileService.getLocalFileSystem();
-    const { localFsPath, remoteFsPath } = this.target;
-    const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-    await sync(
-      {
-        srcFsPath: remoteFsPath,
-        srcFs: remoteFs,
-        targetFsPath: localFsPath,
-        targetFs: localFs,
-        transferOption: option,
-        transferDirection: TransferDirection.REMOTE_TO_LOCAL,
-      },
-      t => scheduler.add(t)
-    );
-    await scheduler.run();
+  handle(option) {
+    // everything this writes (and, with syncOption.delete, removes) locally is
+    // the extension's doing, not an edit to upload or a deletion to mirror
+    return suppressAutoSync(async () => {
+      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
+      const localFs = this.fileService.getLocalFileSystem();
+      const { localFsPath, remoteFsPath } = this.target;
+      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
+      await sync(
+        {
+          srcFsPath: remoteFsPath,
+          srcFs: remoteFs,
+          targetFsPath: localFsPath,
+          targetFs: localFs,
+          transferOption: option,
+          transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+        },
+        t => scheduler.add(t)
+      );
+      const result = await scheduler.run();
+      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'download');
+    });
   },
   transformOption() {
     const config = this.config;
     const syncOption = config.syncOption || {};
     return {
       perserveTargetMode: false,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
       delete: syncOption.delete,
@@ -127,6 +179,8 @@ export const upload = createFileHandler<TransferOption>({
       perserveTargetMode: config.protocol === 'sftp' && !config.filePerm && !config.dirPerm,
       useTempFile: config.useTempFile,
       openSsh: config.openSsh,
+      verifyUpload: config.verifyUpload,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };
@@ -145,6 +199,8 @@ export const uploadFile = createFileHandler<TransferOption>({
       perserveTargetMode: config.protocol === 'sftp' && !config.filePerm,
       useTempFile: config.useTempFile,
       openSsh: config.openSsh,
+      verifyUpload: config.verifyUpload,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };
@@ -163,6 +219,8 @@ export const uploadFolder = createFileHandler<TransferOption>({
       perserveTargetMode: config.protocol === 'sftp' && !config.dirPerm,
       useTempFile: config.useTempFile,
       openSsh: config.openSsh,
+      verifyUpload: config.verifyUpload,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };
@@ -179,6 +237,7 @@ export const download = createFileHandler<TransferOption>({
     const config = this.config;
     return {
       perserveTargetMode: false,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };
@@ -192,6 +251,7 @@ export const downloadFile = createFileHandler<TransferOption>({
     const config = this.config;
     return {
       perserveTargetMode: false,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };
@@ -205,6 +265,7 @@ export const downloadFolder = createFileHandler<TransferOption>({
     const config = this.config;
     return {
       perserveTargetMode: false,
+      retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
     };

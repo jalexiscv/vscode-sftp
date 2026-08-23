@@ -2,6 +2,18 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 53 | 2026-08-23 | Release 1.24.0: cambios externos, planes y verificación | [Ver detalle](2026-08-22_release_1_24_0.md) |
+| 52 | 2026-08-22 | Revisión adversarial ronda 2: módulos y experiencia    | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_modulos.md) |
+| 51 | 2026-08-22 | Revisión adversarial ronda 2: núcleo de transferencia | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_core.md) |
+| 50 | 2026-08-22 | Harness E2E con VS Code y servidor SFTP reales        | [Ver detalle](2026-08-22_test_e2e_sftp.md) |
+| 49 | 2026-08-22 | Detección de cambios externos, planes y escaneo       | [Ver detalle](2026-08-22_feat_cambios_externos.md) |
+| 48 | 2026-08-22 | Endurecimiento tras la revisión adversarial (ronda 1) | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda1.md) |
+| 47 | 2026-08-22 | Vista de planes de carga y persistencia del registro | [Ver detalle](2026-08-22_feat_vista_planes_y_persistencia.md) |
+| 46 | 2026-08-22 | Verificación de carga por hash (SSH exec / FTP)      | [Ver detalle](2026-08-22_feat_verificacion_hash.md) |
+| 45 | 2026-08-22 | Índice de sincronización, plan de carga y escáner     | [Ver detalle](2026-08-22_feat_indice_plan_escaner.md) |
+| 44 | 2026-08-22 | Verificación de carga, reintentos y conteo de bytes  | [Ver detalle](2026-08-22_feat_verificacion_carga.md) |
+| 43 | 2026-08-22 | Base de transferencias y recolector único de cambios | [Ver detalle](2026-08-22_fix_base_transferencias.md) |
+| 42 | 2026-08-22 | Análisis: cambios externos y verificación de carga   | [Ver detalle](2026-08-22_docs_analisis_cambios_externos.md) |
 | 41 | 2026-08-16 | Release 1.22.0: espejo local-remoto seguro           | [Ver detalle](2026-08-16_release_1_22_0.md) |
 | 40 | 2026-08-16 | Correcciones en transferencia y watcher              | [Ver detalle](2026-08-16_fix_transferencia_watcher.md) |
 | 39 | 2026-08-16 | Vista de actividad y modo pausa                      | [Ver detalle](2026-08-16_feat_actividad_y_pausa.md) |

@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.22.0](#novedades-de-la-v1220)
+- [Novedades de la v1.24.0](#novedades-de-la-v1240)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 187/187 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 701 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -98,27 +98,40 @@ Cada corrección fue verificada (build de webpack limpio, 187/187 tests, linter 
 | **Transferencias** | Todo archivo o carpeta cuyo nombre contenga `.tmp` queda excluido de forma permanente de las transferencias (subidas, `uploadOnSave` y sync), en todos los servidores y sin configurar nada en `ignore` |
 | **Perfiles** | El perfil activado con `SFTP: Set Profile` o con el Administrador de Conexiones ya no "se cambia solo": las recargas de `sftp.json` dejan de restablecerlo al `defaultProfile` y la selección persiste entre reinicios de VSCode. `defaultProfile` pasa a ser solo el valor inicial y el respaldo si el perfil activo desaparece |
 
-## Novedades de la v1.22.0
+### [v1.22.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.22.0) — espejo local-remoto seguro
 
-La v1.22.0 se centra en que el servidor refleje de verdad lo que ocurre en local — y en que lo que nunca debió salir de tu máquina se quede en ella.
+| Área | Cambio |
+|------|--------|
+| **Transferencias** | Los archivos temporales nunca se suben: una lista integrada excluye los archivos de intercambio y respaldo de los editores, los bloqueos de Office, los restos de merge, las descargas a medias y los metadatos del sistema, en todos los servidores y sin configurar nada (`ignoreTempFiles`, `tempFilePatterns`) |
+| **Borrados** | Los borrados locales se replican en el servidor (`deleteRemoteOnLocalDelete`, activo por defecto), con cuatro salvaguardas: confirmación modal por encima de `deleteRemoteConfirmThreshold` (10), descarte de los borrados provocados por git, autosupresión durante `Sync Remote -> Local --delete` y papelera remota |
+| **Papelera remota** | Con `remoteTrash`, borrar es un `rename` del lado del servidor hacia una papelera, reversible con `SFTP: Undo Last Remote Deletion` y `SFTP: Restore from Remote Trash`; `SFTP: Empty Remote Trash` la vacía y lo caducado se purga pasados los `retentionDays` |
+| **Renombrados** | `renameRemoteOnLocalRename` replica renombrar y mover como un `rename` remoto, sin volver a subir y sin ningún instante en el que la ruta falte en el servidor |
+| **UI** | Vista de actividad con el historial de cada transferencia, borrado y renombrado, y reintentos (`sftp.showActivityView`); modo pausa (`SFTP: Pause/Resume Auto Sync`) que suspende toda la sincronización automática |
+| **Endurecimiento** | Dos pasadas de revisión adversarial antes de publicar: salvaguarda de git evaluada al encolar, un único camino de borrado, rutas de papelera inseguras rechazadas, perfil del borrado respetado al restaurar y purgar, purga que barre el propio directorio remoto |
+
+## Novedades de la v1.24.0
+
+La v1.24.0 se centra en la confianza: que sepas que lo que cambió en local está en el servidor —aunque lo cambiara otra herramienta o lo hicieras con VS Code cerrado— y que, cuando una subida no llega entera, te enteres y puedas corregirlo con un clic. Hasta ahora la extensión *hacía* las subidas; ahora también lo *demuestra*.
 
 | Novedad | Qué aporta |
 |---------|------------|
-| **Los archivos temporales nunca se suben** | Una lista integrada excluye los archivos de intercambio y respaldo de los editores (vim, emacs), los bloqueos de Office y LibreOffice, los restos de merge (`*.orig`, `*.rej`, `*.bak`), las descargas a medias (`*.part`, `*.crdownload`) y los metadatos del sistema (`.DS_Store`, `Thumbs.db`, `desktop.ini`) — en todos los servidores y sin configurar nada. Se desactiva con `ignoreTempFiles` y se amplía con `tempFilePatterns`; los lock de dependencias como `composer.lock` se transfieren con normalidad |
-| **Los borrados locales se replican en el servidor** | `deleteRemoteOnLocalDelete` (activo por defecto) cubre archivos y carpetas, tanto si borras desde el explorador de VS Code como desde una terminal o una herramienta externa, sin necesidad de un glob `watcher.files`. Cuatro salvaguardas evitan sustos (ver más abajo) |
-| **Papelera remota con deshacer** | Con `remoteTrash`, borrar es un `rename` del lado del servidor hacia una carpeta de papelera: no cuesta ancho de banda y se revierte con `SFTP: Undo Last Remote Deletion`. También hay `SFTP: Restore from Remote Trash` y `SFTP: Empty Remote Trash`, y lo caducado se purga solo pasados los `retentionDays` |
-| **Renombrar y mover se replican como `rename`** | `renameRemoteOnLocalRename` renombra en el servidor en lugar de subir de nuevo y borrar: el archivo conserva su identidad remota y no hay ningún instante en el que la ruta falte en un docroot en producción |
-| **Vista de actividad** | Una segunda vista en la barra lateral SFTP con el historial de cada transferencia, borrado y renombrado: tipo, estado, hora, ruta, perfil, duración y error. Las operaciones fallidas se reintentan una a una o todas de golpe; se oculta con el ajuste `sftp.showActivityView` |
-| **Modo pausa** | `SFTP: Pause/Resume Auto Sync` suspende toda la sincronización automática — `uploadOnSave`, `downloadOnOpen`, el watcher y la réplica de borrados y renombrados — mientras los comandos explícitos siguen funcionando. El estado se guarda por workspace y se muestra en la barra de estado |
+| **Detección de cambios externos** | Un índice de sincronización persistente recuerda, por servidor, qué versión de cada archivo se subió y verificó por última vez. Al arrancar, al recargar `sftp.json`, al reanudar la pausa, al recuperar el foco tras cinco minutos y bajo demanda (`SFTP: Scan for External Changes`), el árbol local se compara con ese índice y lo que cambió fuera del editor —un `git pull` en una terminal, un generador de código, ediciones hechas con VS Code cerrado— se sube a través de un plan, sin listar el servidor. `watcher.pollInterval` añade un sondeo periódico para unidades de red o montajes Docker/WSL. Claves: `externalChanges.scanOnStartup`, `scanOnResume`, `confirmThreshold` |
+| **Un solo recolector de cambios** | `uploadOnSave` y el watcher ya no suben dos veces el mismo guardado: los guardados del editor suben de inmediato, los cambios externos se agrupan (700 ms) y se deduplican por ruta. Ya no hace falta `uploadOnSave: false` al vigilar `**/*` |
+| **Planes de carga** | Cada lote es un plan con su origen, el motivo por archivo (nuevo, modificado), estado, intentos y error, visible en el grupo "Upload plans" de la vista de actividad (subir el plan, subir/omitir/diff por archivo, exportar informe, quitar). `SFTP: Preview Upload (Dry Run)` muestra qué se subiría sin subir nada; `SFTP: Upload Plan`, `SFTP: Export Last Upload Report` (Markdown) y `SFTP: Clear Upload Plans` completan el juego. La barra de estado muestra `↑N` pendientes y `✗N` fallidos |
+| **Verificación de carga** | Toda subida cuenta los bytes enviados y, con `verifyUpload: "stat"` (por defecto), comprueba que el tamaño remoto coincide exactamente (`SIZE` en FTP). `"hash"` compara además un digest (sha256/sha1/md5/crc32 con `sha256sum`/`shasum`/`openssl`/`md5sum` vía SSH, o `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH` en FTP) y degrada a `stat` si el servidor no sabe calcularlo. Un fallo transitorio (red, timeout, verificación) se reintenta (`uploadRetries`, 2) con espera incremental antes de reportarse con su motivo; los errores permanentes (permiso denegado, origen inexistente) no se reintentan |
+| **Registro de actividad persistente** | La vista de actividad registra cada tarea —venga de un comando, de un guardado o del watcher— con ruta remota y resultado de la verificación, y sobrevive a las recargas de la ventana (`activity-log.json`): los fallos de la sesión anterior siguen reintentables. También aparecen los fallos previos a la transferencia (conexión, credenciales, permisos) |
+| **Correcciones** | `uploadFile()` ya rechaza cuando falla la transferencia (la vista podía marcar como éxito una subida rota); la supresión de la sincronización automática durante descargas y `Sync Remote -> Local` estaba sin usar; los patrones `dir/` de `ignore` podan el subárbol; protección contra bucles de symlinks; índice robusto ante archivos corruptos o `rename` fallidos; errores SFTP numéricos descritos; y más en el [CHANGELOG](CHANGELOG.md) |
 
-### Las cuatro salvaguardas de los borrados
+### Salvaguardas y decisiones
 
 | Salvaguarda | Comportamiento |
 |-------------|----------------|
-| **Confirmación en lote** | Un lote mayor que `deleteRemoteConfirmThreshold` (10 por defecto) abre un diálogo modal con la lista de archivos y no hace nada si no confirmas |
-| **Conciencia de git** | Los borrados provocados por una operación de git (checkout, rebase, merge, stash…) se descartan: cambiar de rama nunca toca el servidor |
-| **Autosupresión** | Los borrados que provoca el propio `Sync Remote -> Local --delete` al limpiar archivos locales sobrantes se suprimen en vez de rebotar al servidor |
-| **Papelera remota** | Con `remoteTrash` el borrado es un movimiento reversible a la papelera del servidor en lugar de un `unlink` |
+| **Umbral de confirmación** | Por encima de `externalChanges.confirmThreshold` (20 por defecto) no se sube nada sin preguntar: un diálogo modal lista los archivos y ofrece `Review plan` (por defecto; el plan queda pendiente en la vista), `Upload N file(s)` o `Skip`. `Skip` se recuerda: esos archivos no vuelven a proponerse hasta que cambien otra vez |
+| **Conciencia de git** | Si HEAD se movió entre el cambio y la subida (checkout, pull, rebase, merge…) el lote siempre pide confirmación, sea cual sea su tamaño: un cambio de rama nunca sube cientos de archivos por sorpresa |
+| **Archivos nuevos** | Un lote automático que contenga archivos que el índice nunca ha visto siempre pide confirmación, por pequeño que sea; solo los archivos ya indexados y modificados se suben solos por debajo del umbral |
+| **Primer uso** | Tras instalar, ejecuta `SFTP: Rebuild Sync Index` una vez por servidor (o sube el proyecto una vez y lanza un escaneo manual) para que la extensión sepa qué hay ya en el servidor. Hasta entonces los escaneos automáticos solo vuelven a subir archivos que ella misma subió; los no indexados se ignoran y se avisa una sola vez por servidor (`Build index now` / `Don't show again`). La reconstrucción indexa lo que coincide en tamaño entre local y remoto |
+| **Degradación del hash** | Si el servidor no puede calcular un digest (cuenta SFTP sin shell, FTP sin `XSHA256`/`HASH`…), la subida queda verificada por tamaño con un aviso único por conexión; solo un digest distinto es un fallo |
+| **Por defecto, sin configurar nada** | El escaneo al arrancar y al reanudar, la verificación por tamaño y los dos reintentos están activos; `externalChanges.scanOnStartup: false`, `scanOnResume: false`, `verifyUpload: "none"` y `uploadRetries: 0` recuperan el comportamiento anterior |
 
 ## Qué esperamos de esta versión
 
@@ -144,7 +157,7 @@ La v1.22.0 se centra en que el servidor refleje de verdad lo que ocurre en local
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.22.0.vsix
+code --install-extension sftp-1.24.0.vsix
 ```
 
 ## Documentación
@@ -199,6 +212,7 @@ Puedes ver la lista completa de opciones de configuración [aquí](https://githu
 - [Conexión con saltos (hopping)](#conexión-con-saltos-hopping)
 - [Configuración en los ajustes de usuario](#configuración-en-los-ajustes-de-usuario)
 - [Borrados y renombrados seguros](#borrados-y-renombrados-seguros)
+- [Cambios externos y verificación de carga](#cambios-externos-y-verificación-de-carga)
 
 ### Simple
 ```json
@@ -372,6 +386,31 @@ En sftp.json:
 ```
 
 _Nota:_ todos estos valores son los que la extensión ya usa por defecto, salvo `tempFilePatterns`, `remoteTrash.path` (`.sftp-trash`) y `remoteTrash.retentionDays` (`7`); solo hace falta escribirlos para cambiarlos. Un `path` absoluto deja la papelera fuera del docroot que sirve el servidor web.
+
+### Cambios externos y verificación de carga
+```json
+{
+  "host": "host",
+  "username": "usuario",
+  "remotePath": "/var/www/project",
+  "uploadOnSave": true,
+  "watcher": {
+    "files": "**/*",
+    "autoUpload": true,
+    "autoDelete": false,
+    "pollInterval": 0
+  },
+  "externalChanges": {
+    "scanOnStartup": true,
+    "scanOnResume": true,
+    "confirmThreshold": 20
+  },
+  "verifyUpload": "stat",
+  "uploadRetries": 2
+}
+```
+
+_Nota:_ `externalChanges`, `verifyUpload` y `uploadRetries` llevan aquí sus valores por defecto; el bloque `watcher` no es necesario para los escaneos (solo para reaccionar a los cambios en vivo y para `pollInterval`). `verifyUpload: "hash"` añade la comprobación de contenido y un `pollInterval` en milisegundos activa el sondeo periódico.
 
 ## Explorador Remoto
 ![vista-previa-explorador-remoto](assets/showcase/remote-explorer.png)

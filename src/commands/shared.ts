@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { Uri, window } from 'vscode';
-import { FileType } from '../core';
+import { FileType, FileService } from '../core';
 import { getAllFileService } from '../modules/serviceManager';
 import { ExplorerItem } from '../modules/remoteExplorer';
 import { getActiveTextEditor } from '../host';
@@ -163,3 +163,39 @@ export const selectFileFromAll = createFileSelector();
 
 // selected file from remote files expect ignored
 export const selectFile = createFileSelector(configIngoreFilterCreator);
+
+/**
+ * The service a workspace-wide command should act on: the only one, or the
+ * one the user picks. Resolves undefined when there is none or the pick is
+ * dismissed.
+ */
+export async function pickService(placeHolder: string): Promise<FileService | undefined> {
+  const services = getAllFileService();
+  if (services.length === 0) {
+    window.showInformationMessage('SFTP: no sftp.json configuration found in this workspace.');
+    return;
+  }
+  if (services.length === 1) {
+    return services[0];
+  }
+
+  const items = services
+    .map(service => {
+      let host = '';
+      try {
+        host = service.getConfig().host;
+      } catch (error) {
+        // an unresolvable config still names a service the user may pick
+      }
+      return {
+        label: service.name || simplifyPath(service.baseDir),
+        description: host,
+        detail: service.baseDir,
+        service,
+      };
+    })
+    .sort((l, r) => l.label.localeCompare(r.label));
+
+  const picked = await window.showQuickPick(items, { placeHolder });
+  return picked ? picked.service : undefined;
+}

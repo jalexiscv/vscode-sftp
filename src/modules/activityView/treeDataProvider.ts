@@ -1,32 +1,57 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { COMMAND_ACTIVITY_REVEAL } from '../../constants';
-import { simplifyPath } from '../../helper';
-import { ActivityEntry, ActivityKind, ActivityStatus, getEntries } from '../activityLog';
+import { ActivityEntry, ActivityStatus, getEntries } from '../activityLog';
+import { getPlans } from '../uploadPlan';
+import { isPlanRunning } from '../planRunner';
+import {
+  activityDescription,
+  activityIcon,
+  activityLabel,
+  activityTooltip,
+  IconSpec,
+  planDescription,
+  planIcon,
+  planItemDescription,
+  planItemIcon,
+  planItemLabel,
+  planItemTooltip,
+  planLabel,
+  planTooltip,
+} from './format';
+import {
+  ActivityTreeNode,
+  GroupNode,
+  PlanItemNode,
+  PlanNode,
+  buildChildNodes,
+  buildRootNodes,
+  isGroupNode,
+  isPlaceholder,
+  isPlanItemNode,
+  isPlanNode,
+  localPathOf,
+  nodeId,
+} from './nodes';
+
+export { isPlaceholder } from './nodes';
 
 /**
- * Renders the activity log as a flat, newest-first list.
+ * Renders the activity log and the upload plans as a tree.
  *
- * The log is bounded and every change can reorder it, so the view rebuilds the
- * whole list on refresh instead of tracking per-item events.
+ * Two roots once there is a plan — "Upload plans" (one node per plan, newest
+ * first, its items underneath) and "Activity" (the flat, newest-first log) —
+ * and just the flat log while there is none. The log is bounded and every
+ * change can reorder it, and a plan item changes status several times per
+ * upload, so the view rebuilds on every refresh instead of tracking per-item
+ * events; stable ids keep the selection and the expanded state across
+ * rebuilds. Event-driven refreshes go through {@link scheduleRefresh}, which
+ * folds a burst (a 400-file plan fires several changes per file) into one
+ * rebuild every {@link REFRESH_DELAY_MS}; {@link refresh} rebuilds at once.
  */
 
-// activityLog numbers real entries from 1, so a negative id can never collide
-// with one. It marks the row shown when there is nothing to display.
-const PLACEHOLDER_ID = -1;
-
-const placeholder: ActivityEntry = {
-  id: PLACEHOLDER_ID,
-  kind: ActivityKind.Sync,
-  status: ActivityStatus.Skipped,
-  startedAt: 0,
-};
-
-/** The empty-state row is a fake entry; commands must not act on it. */
-export function isPlaceholder(entry: ActivityEntry): boolean {
-  return Boolean(entry) && entry.id === PLACEHOLDER_ID;
-}
+// long enough to fold the log/plan/runner events of one upload into a single
+// rebuild, short enough that the tree still reads as live
+const REFRESH_DELAY_MS = 100;
 
 // @types/vscode is pinned to 1.40, where ThemeIcon still has a private
 // constructor and no color parameter. Both exist at runtime on every vscode
@@ -34,141 +59,159 @@ export function isPlaceholder(entry: ActivityEntry): boolean {
 type ThemeIconConstructor = new (id: string, color?: vscode.ThemeColor) => vscode.ThemeIcon;
 const themeIcon = (vscode.ThemeIcon as unknown) as ThemeIconConstructor;
 
-const kindIcons: { [kind in ActivityKind]: string } = {
-  [ActivityKind.Upload]: 'cloud-upload',
-  [ActivityKind.Download]: 'cloud-download',
-  [ActivityKind.Delete]: 'trash',
-  [ActivityKind.Rename]: 'arrow-right',
-  [ActivityKind.Restore]: 'history',
-  [ActivityKind.Sync]: 'sync',
-};
-
-function pad2(value: number): string {
-  return ('00' + value).slice(-2);
+function toThemeIcon(spec: IconSpec): vscode.ThemeIcon {
+  return spec.color
+    ? new themeIcon(spec.id, new vscode.ThemeColor(spec.color))
+    : new themeIcon(spec.id);
 }
 
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-}
-
-// path.win32.basename understands both separators, so remote (posix) paths are
-// handled correctly on windows too.
-function targetPath(entry: ActivityEntry): string {
-  return entry.localPath || entry.remotePath || '';
-}
-
-function makeLabel(entry: ActivityEntry): string {
-  const target = targetPath(entry);
-  if (entry.kind === ActivityKind.Rename && entry.fromPath) {
-    return `${path.basename(entry.fromPath)} → ${path.basename(target)}`;
-  }
-
-  return path.basename(target) || entry.kind;
-}
-
-function makeDescription(entry: ActivityEntry): string {
-  const time = formatTime(entry.startedAt);
-  const location = entry.localPath ? simplifyPath(entry.localPath) : entry.remotePath;
-  return location ? `${time} · ${location}` : time;
-}
-
-function makeTooltip(entry: ActivityEntry): string {
-  const lines = [`${entry.kind} · ${entry.status}`];
-  if (entry.fromPath) {
-    lines.push(`Desde: ${entry.fromPath}`);
-  }
-  if (entry.localPath) {
-    lines.push(`Local: ${entry.localPath}`);
-  }
-  if (entry.remotePath) {
-    lines.push(`Remoto: ${entry.remotePath}`);
-  }
-  lines.push(`Perfil: ${entry.profile || '(ninguno)'}`);
-  if (entry.serviceName) {
-    lines.push(`Servicio: ${entry.serviceName}`);
-  }
-  if (entry.finishedAt !== undefined) {
-    lines.push(`Duración: ${entry.finishedAt - entry.startedAt} ms`);
-  }
-  if (entry.error) {
-    lines.push(`Error: ${entry.error}`);
-  }
-
-  return lines.join('\n');
-}
-
-function makeIcon(entry: ActivityEntry): vscode.ThemeIcon {
-  switch (entry.status) {
-    case ActivityStatus.Failed:
-      return new themeIcon('error', new vscode.ThemeColor('problemsErrorIcon.foreground'));
-    case ActivityStatus.Pending:
-      return new themeIcon('loading~spin');
-    case ActivityStatus.Cancelled:
-      return new themeIcon('circle-slash');
-    case ActivityStatus.Skipped:
-      return new themeIcon('dash');
-    default:
-      return new themeIcon(kindIcons[entry.kind]);
-  }
-}
-
-function makeCommand(entry: ActivityEntry): vscode.Command | undefined {
-  // getTreeItem is synchronous, hence the sync stat; a deleted or downloaded-
-  // then-removed file must not offer a click that opens an error.
-  if (!entry.localPath || !fs.existsSync(entry.localPath)) {
+function makeCommand(node: ActivityTreeNode): vscode.Command | undefined {
+  // Offered whenever the node has a local path: getTreeItem runs for every
+  // visible node on every rebuild, and a stat per node turned each refresh of
+  // a long plan into hundreds of blocking syscalls. The reveal command copes
+  // with a file that is gone by then.
+  const localPath = localPathOf(node);
+  if (!localPath) {
     return undefined;
   }
 
   return {
     command: COMMAND_ACTIVITY_REVEAL,
     title: 'Abrir archivo local',
-    arguments: [entry],
+    arguments: [node],
   };
 }
 
-export default class ActivityTreeDataProvider implements vscode.TreeDataProvider<ActivityEntry> {
-  private _onDidChangeTreeData: vscode.EventEmitter<ActivityEntry | undefined> =
-    new vscode.EventEmitter<ActivityEntry | undefined>();
-  readonly onDidChangeTreeData: vscode.Event<ActivityEntry | undefined> = this._onDidChangeTreeData
-    .event;
+function groupItem(node: GroupNode): vscode.TreeItem {
+  const isPlans = node.group === 'plans';
+  const count = isPlans ? getPlans().length : getEntries().length;
+  return {
+    id: nodeId(node),
+    label: isPlans ? 'Upload plans' : 'Activity',
+    description: `${count}`,
+    iconPath: new themeIcon(isPlans ? 'checklist' : 'history'),
+    contextValue: isPlans ? 'sftpPlanGroup' : 'sftpActivityGroup',
+    collapsibleState: vscode.TreeItemCollapsibleState.Expanded,
+  };
+}
 
-  refresh(): void {
-    this._onDidChangeTreeData.fire();
-  }
+function planItem(node: PlanNode): vscode.TreeItem {
+  const { plan } = node;
+  return {
+    id: nodeId(node),
+    label: planLabel(plan),
+    description: planDescription(plan),
+    tooltip: planTooltip(plan),
+    iconPath: toThemeIcon(planIcon(plan, isPlanRunning(plan.id))),
+    contextValue: 'sftpPlan',
+    collapsibleState:
+      plan.items.length > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
+  };
+}
 
-  getTreeItem(entry: ActivityEntry): vscode.TreeItem {
-    if (isPlaceholder(entry)) {
-      return {
-        label: 'No activity yet',
-        contextValue: 'activity.empty',
-        iconPath: new themeIcon('info'),
-        collapsibleState: vscode.TreeItemCollapsibleState.None,
-      };
-    }
+function planItemItem(node: PlanItemNode): vscode.TreeItem {
+  const { item } = node;
+  return {
+    id: nodeId(node),
+    label: planItemLabel(item),
+    description: planItemDescription(item),
+    tooltip: planItemTooltip(item),
+    iconPath: toThemeIcon(planItemIcon(item)),
+    contextValue: 'sftpPlanItem',
+    collapsibleState: vscode.TreeItemCollapsibleState.None,
+    command: makeCommand(node),
+  };
+}
 
-    const isRetryable = entry.status === ActivityStatus.Failed && Boolean(entry.retry);
+function activityItem(entry: ActivityEntry): vscode.TreeItem {
+  if (isPlaceholder(entry)) {
     return {
-      // a stable id keeps the selection across the full refreshes above
-      id: String(entry.id),
-      label: makeLabel(entry),
-      description: makeDescription(entry),
-      tooltip: makeTooltip(entry),
-      iconPath: makeIcon(entry),
-      contextValue: isRetryable ? 'activity.failed' : 'activity',
+      label: 'No activity yet',
+      contextValue: 'activity.empty',
+      iconPath: new themeIcon('info'),
       collapsibleState: vscode.TreeItemCollapsibleState.None,
-      command: makeCommand(entry),
     };
   }
 
-  getChildren(entry?: ActivityEntry): ActivityEntry[] {
-    // flat list: nothing but the root has children
-    if (entry) {
-      return [];
-    }
+  const isRetryable = entry.status === ActivityStatus.Failed && Boolean(entry.retry);
+  return {
+    // a stable id keeps the selection across the full refreshes above
+    id: nodeId(entry),
+    label: activityLabel(entry),
+    description: activityDescription(entry),
+    tooltip: activityTooltip(entry),
+    iconPath: toThemeIcon(activityIcon(entry)),
+    contextValue: isRetryable ? 'activity.failed' : 'activity',
+    collapsibleState: vscode.TreeItemCollapsibleState.None,
+    command: makeCommand(entry),
+  };
+}
 
-    // getEntries() is already sorted by startedAt descending
-    const entries = getEntries();
-    return entries.length > 0 ? entries : [placeholder];
+export default class ActivityTreeDataProvider implements vscode.TreeDataProvider<ActivityTreeNode> {
+  private _onDidChangeTreeData: vscode.EventEmitter<ActivityTreeNode | undefined> =
+    new vscode.EventEmitter<ActivityTreeNode | undefined>();
+  readonly onDidChangeTreeData: vscode.Event<ActivityTreeNode | undefined> = this._onDidChangeTreeData
+    .event;
+  private _refreshTimer: any = null;
+
+  /** Rebuilds the tree now. */
+  refresh(): void {
+    this._cancelScheduledRefresh();
+    this._onDidChangeTreeData.fire();
+  }
+
+  /**
+   * Rebuilds the tree once, {@link REFRESH_DELAY_MS} after the first call of a
+   * burst; calls made meanwhile are folded into that rebuild (it reads the
+   * live state, so nothing is lost). A steady stream still refreshes every
+   * {@link REFRESH_DELAY_MS} instead of waiting for it to end.
+   */
+  scheduleRefresh(): void {
+    if (this._refreshTimer) {
+      return;
+    }
+    this._refreshTimer = setTimeout(() => {
+      this._refreshTimer = null;
+      this._onDidChangeTreeData.fire();
+    }, REFRESH_DELAY_MS);
+    // unref'd so a pending rebuild never holds the process open
+    if (typeof this._refreshTimer.unref === 'function') {
+      this._refreshTimer.unref();
+    }
+  }
+
+  /** Drops a pending scheduled rebuild. */
+  dispose(): void {
+    this._cancelScheduledRefresh();
+  }
+
+  private _cancelScheduledRefresh() {
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer);
+      this._refreshTimer = null;
+    }
+  }
+
+  getTreeItem(node: ActivityTreeNode): vscode.TreeItem {
+    if (isGroupNode(node)) {
+      return groupItem(node);
+    }
+    if (isPlanNode(node)) {
+      return planItem(node);
+    }
+    if (isPlanItemNode(node)) {
+      return planItemItem(node);
+    }
+    return activityItem(node);
+  }
+
+  getChildren(node?: ActivityTreeNode): ActivityTreeNode[] {
+    // getEntries() and getPlans() are already sorted newest first
+    if (!node) {
+      return buildRootNodes(getEntries(), getPlans());
+    }
+    return buildChildNodes(node, getEntries(), getPlans());
   }
 }

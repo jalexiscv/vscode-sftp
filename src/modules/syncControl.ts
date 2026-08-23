@@ -123,8 +123,10 @@ export function cancelPendingSuppression() {
   pendingReleases.clear();
 }
 
-// long enough to cover the watcher debounce (550ms) plus event delivery
-const SUPPRESSION_TAIL_MS = 1500;
+// long enough to cover the watcher debounce (550ms) plus event delivery;
+// exported so the change collector can wait it out before retrying a save it
+// held back while a transfer was rewriting local files
+export const SUPPRESSION_TAIL_MS = 1500;
 
 /**
  * True while git is rewriting the working tree.
@@ -196,7 +198,79 @@ export function readGitHead(startDir: string): string | null {
   }
 }
 
-function findGitDir(startDir: string): string | null {
+/**
+ * What HEAD points at as a *ref*: `refs/heads/main` for a branch, or
+ * `detached:<commit>` when HEAD is detached; null outside a repository.
+ *
+ * Unlike {@link readGitHead}, a commit on the current branch leaves this value
+ * unchanged: a `git commit` is not a checkout. Comparing refs is therefore
+ * what tells "git rewrote the working tree" apart from "the user committed".
+ */
+export function readGitHeadRef(startDir: string): string | null {
+  const gitDir = findGitDir(startDir);
+  if (!gitDir) {
+    return null;
+  }
+
+  try {
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    const ref = /^ref:\s*(.+)$/.exec(head);
+    return ref ? ref[1].trim() : `detached:${head}`;
+  } catch (error) {
+    return null;
+  }
+}
+
+// how long index.lock must persist before it counts as an operation in
+// progress, rather than the lock a `git status` takes and releases
+const TRANSIENT_LOCK_MS = 1000;
+
+/**
+ * True while git is *rewriting the working tree*: a merge, rebase, cherry-pick,
+ * revert or bisect is in progress, or `index.lock` has been held for longer
+ * than a transient command would.
+ *
+ * {@link isGitOperationInProgress} treats `index.lock` alone as a signal; that
+ * is the right bias for deletions, but for uploads it is too trigger-happy:
+ * VS Code's git extension runs `git status` after every save, which takes and
+ * releases that lock, and would mark ordinary saves as git-driven.
+ */
+export function isGitRewritingWorkingTree(startDir: string): boolean {
+  const gitDir = findGitDir(startDir);
+  if (!gitDir) {
+    return false;
+  }
+
+  const markers = [
+    'MERGE_HEAD',
+    'REBASE_HEAD',
+    'rebase-merge',
+    'rebase-apply',
+    'CHERRY_PICK_HEAD',
+    'REVERT_HEAD',
+    'BISECT_LOG',
+  ];
+
+  const hasMarker = markers.some(marker => {
+    try {
+      return fs.existsSync(path.join(gitDir, marker));
+    } catch (error) {
+      return false;
+    }
+  });
+  if (hasMarker) {
+    return true;
+  }
+
+  try {
+    const lock = fs.statSync(path.join(gitDir, 'index.lock'));
+    return Date.now() - lock.mtime.getTime() >= TRANSIENT_LOCK_MS;
+  } catch (error) {
+    return false;
+  }
+}
+
+export function findGitDir(startDir: string): string | null {
   let current = path.resolve(startDir);
 
   // walk up to the filesystem root looking for .git

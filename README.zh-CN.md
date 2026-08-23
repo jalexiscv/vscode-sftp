@@ -19,7 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
-- [v1.22.0 新功能](#v1210-新功能)
+- [v1.24.0 新功能](#v1240-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、187/187 测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、701 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -98,27 +98,40 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **传输** | 名称中包含 `.tmp` 的任何文件或文件夹现在都会被永久排除在传输之外（上传、`uploadOnSave` 和同步），适用于所有服务器，无需任何 `ignore` 配置 |
 | **配置文件** | 通过 `SFTP: Set Profile` 或连接管理器激活的配置文件不再"自行切换"：重新加载 `sftp.json` 不会再将其重置为 `defaultProfile`，并且所选配置在 VSCode 重启后依然保留。`defaultProfile` 仅作为初始值，以及活动配置文件消失时的回退值 |
 
-## v1.22.0 新功能
+### [v1.22.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.22.0) — 安全的本地-远程镜像
 
-v1.22.0 的重点，是让服务器真正反映本地发生的事——同时把本不该离开你机器的文件留在本地。
+| 领域 | 变更 |
+|------|------|
+| **传输** | 临时文件永远不会被上传：内置列表排除编辑器的交换与备份文件、Office 锁文件、合并残留、未完成的下载和系统元数据，适用于所有服务器且无需配置（`ignoreTempFiles`、`tempFilePatterns`） |
+| **删除** | 本地删除会同步到服务器（`deleteRemoteOnLocalDelete`，默认开启），并有四道防线：超过 `deleteRemoteConfirmThreshold`（10）时弹出模态确认、丢弃由 git 引起的删除、在 `Sync Remote -> Local --delete` 期间自我抑制、远程回收站 |
+| **远程回收站** | 启用 `remoteTrash` 后，删除是服务器端向回收站目录的一次 `rename`，可用 `SFTP: Undo Last Remote Deletion` 和 `SFTP: Restore from Remote Trash` 恢复；`SFTP: Empty Remote Trash` 清空回收站，过期条目在 `retentionDays` 之后自动清理 |
+| **重命名** | `renameRemoteOnLocalRename` 把重命名和移动同步为服务器端的 `rename`，无需重新上传，也不会出现路径在服务器上短暂缺失的时刻 |
+| **界面** | 活动视图记录每次传输、删除和重命名并支持重试（`sftp.showActivityView`）；暂停模式（`SFTP: Pause/Resume Auto Sync`）暂停全部自动同步 |
+| **加固** | 发布前进行了两轮对抗性审查：git 防线改为入队时评估、删除只有一条路径、拒绝不安全的回收站路径、恢复和清理时尊重删除时所用的配置文件、清理会扫描远程目录本身 |
+
+## v1.24.0 新功能
+
+v1.24.0 的重点是信任：让你确信本地改动的内容已经在服务器上——哪怕是由其他工具改的，或者是在 VS Code 关闭时改的——而当某次上传没有完整到达时，你会得到通知并能一键修复。以前扩展只是*执行*上传；现在它还能*证明*上传成功。
 
 | 新功能 | 作用 |
 |--------|------|
-| **临时文件永远不会被上传** | 内置排除列表涵盖编辑器的交换文件与备份文件（vim、emacs）、Office 与 LibreOffice 的锁文件、合并残留（`*.orig`、`*.rej`、`*.bak`）、未下载完成的文件（`*.part`、`*.crdownload`）以及系统元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）——适用于所有服务器，无需任何配置。可用 `ignoreTempFiles` 关闭，用 `tempFilePatterns` 扩展；`composer.lock` 之类的依赖锁文件仍会正常传输 |
-| **本地删除会同步到服务器** | `deleteRemoteOnLocalDelete`（默认开启）涵盖文件和文件夹，无论删除来自 VS Code 资源管理器、终端还是外部工具，都不需要 `watcher.files` 通配符。四道防线避免误删（见下文） |
-| **可撤销的远程回收站** | 启用 `remoteTrash` 后，删除是服务器端向回收站目录执行的一次 `rename`：不消耗带宽，并可用 `SFTP: Undo Last Remote Deletion` 撤销。还提供 `SFTP: Restore from Remote Trash` 和 `SFTP: Empty Remote Trash`，过期条目会在 `retentionDays` 之后自动清理 |
-| **重命名和移动以 `rename` 同步** | `renameRemoteOnLocalRename` 直接在服务器上重命名，而不是重新上传再删除：文件保留其远程身份，也不会出现线上站点根目录中路径短暂缺失的时刻 |
-| **活动视图** | SFTP 侧边栏中的第二个视图，记录每一次传输、删除和重命名的历史：类型、状态、时间、路径、配置、耗时和错误。失败的操作可以逐个重试，也可以一次性全部重试；可通过 `sftp.showActivityView` 设置隐藏 |
-| **暂停模式** | `SFTP: Pause/Resume Auto Sync` 会暂停全部自动同步——`uploadOnSave`、`downloadOnOpen`、watcher 以及删除和重命名的同步——而显式命令仍然可用。该状态按工作区保存，并显示在状态栏中 |
+| **外部变更检测** | 一个持久化的同步索引按服务器记住每个文件最后一次上传并验证的版本。在启动时、重新加载 `sftp.json` 时、恢复自动同步时、窗口在五分钟后重新获得焦点时，以及按需执行（`SFTP: Scan for External Changes`）时，都会把本地目录树与该索引比较，把在编辑器之外改动的内容——终端里的 `git pull`、代码生成器、VS Code 关闭期间的编辑——通过计划上传，而无需列出服务器。`watcher.pollInterval` 为网络驱动器或 Docker/WSL 挂载增加定时轮询。配置键：`externalChanges.scanOnStartup`、`scanOnResume`、`confirmThreshold` |
+| **统一的变更收集器** | `uploadOnSave` 和 watcher 不再把同一次保存上传两次：编辑器的保存立即上传，外部变更会被合批（700 ms）并按路径去重。监视 `**/*` 时不再需要 `uploadOnSave: false` |
+| **上传计划** | 每个批次都是一个计划，包含来源、每个文件的原因（新增、修改）、状态、尝试次数和错误，显示在活动视图的 "Upload plans" 分组中（上传整个计划、按文件上传/跳过/对比、导出报告、移除）。`SFTP: Preview Upload (Dry Run)` 只显示将要上传什么而不上传；`SFTP: Upload Plan`、`SFTP: Export Last Upload Report`（Markdown）和 `SFTP: Clear Upload Plans` 补全这一组命令。状态栏显示 `↑N` 个待上传和 `✗N` 个失败 |
+| **上传验证** | 每次上传都会统计已发送的字节数，并在 `verifyUpload: "stat"`（默认）下检查远程大小是否完全一致（FTP 使用 `SIZE`）。`"hash"` 还会比较摘要（通过 SSH 运行 `sha256sum`/`shasum`/`openssl`/`md5sum` 得到 sha256/sha1/md5/crc32，或在 FTP 上使用 `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH`），服务器无法计算时自动降级为 `stat`。暂时性失败（网络、超时、验证）会以递增的等待重试（`uploadRetries`，2 次），然后带原因上报；永久性错误（权限被拒、源文件不存在）不会重试 |
+| **持久化的活动记录** | 活动视图记录每个任务——无论来自命令、保存还是 watcher——包括远程路径和验证结果，并在窗口重新加载后保留（`activity-log.json`）：上一会话的失败仍可重试。传输开始前的失败（连接、凭据、权限）也会显示 |
+| **修复** | `uploadFile()` 在传输失败时会正确拒绝（此前视图可能把失败的上传标为成功）；下载和 `Sync Remote -> Local` 期间对自动同步的抑制此前从未被使用；`ignore` 中的 `dir/` 模式会整体剪除子树；防止符号链接循环；索引在文件损坏或 `rename` 失败时依然稳健；数字形式的 SFTP 错误有了描述；更多内容见 [CHANGELOG](CHANGELOG.md) |
 
-### 删除的四道防线
+### 防线与设计决策
 
 | 防线 | 行为 |
 |------|------|
-| **批量确认** | 超过 `deleteRemoteConfirmThreshold`（默认 10）的批量删除会弹出列有文件清单的模态对话框，未确认则不做任何操作 |
-| **感知 git** | 由 git 操作（checkout、rebase、merge、stash 等）导致的删除会被丢弃：切换分支永远不会动到服务器 |
-| **自我抑制** | 扩展自身的 `Sync Remote -> Local --delete` 在清理多余本地文件时造成的删除会被抑制，而不会反弹回服务器 |
-| **远程回收站** | 启用 `remoteTrash` 后，删除是移动到服务器回收站的可逆操作，而不是 `unlink` |
+| **确认阈值** | 超过 `externalChanges.confirmThreshold`（默认 20）时不会不经询问就上传：模态对话框列出文件并提供 `Review plan`（默认；计划留在视图中待处理）、`Upload N file(s)` 或 `Skip`。`Skip` 会被记住：这些文件在再次改动之前不会被重新提出 |
+| **感知 git** | 如果 HEAD 在变更与上传之间移动过（checkout、pull、rebase、merge 等），无论批次多大都会要求确认：切换分支永远不会意外上传数百个文件 |
+| **新文件** | 自动批次若包含索引从未见过的文件，无论多小都会要求确认；只有已索引且被修改的文件才会在阈值以下自动上传 |
+| **首次使用** | 安装后，请对每个服务器执行一次 `SFTP: Rebuild Sync Index`（或先上传一次项目再运行一次手动扫描），让扩展知道服务器上已有什么。在此之前，自动扫描只会重新上传扩展自己上传过的文件；未索引的文件会被忽略，并且每个服务器只提示一次（`Build index now` / `Don't show again`）。重建会把本地与远程大小一致的文件加入索引 |
+| **哈希降级** | 如果服务器无法计算摘要（没有 shell 的 SFTP 账户、没有 `XSHA256`/`HASH` 的 FTP 等），上传按大小验证并在每个连接上只警告一次；只有摘要不同才算失败 |
+| **默认开启，无需配置** | 启动和恢复时扫描、按大小验证以及两次重试默认启用；`externalChanges.scanOnStartup: false`、`scanOnResume: false`、`verifyUpload: "none"` 和 `uploadRetries: 0` 可恢复以前的行为 |
 
 ## 我们对这个版本的期望
 
@@ -144,7 +157,7 @@ v1.22.0 的重点，是让服务器真正反映本地发生的事——同时把
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.22.0.vsix
+code --install-extension sftp-1.24.0.vsix
 ```
 
 ## 文档
@@ -199,6 +212,7 @@ _注意：_ 反斜杠和其他特殊字符必须用反斜杠转义。
 - [跳板连接（hopping）](#跳板连接hopping)
 - [用户设置中的配置](#用户设置中的配置)
 - [安全的删除与重命名](#安全的删除与重命名)
+- [外部变更与上传验证](#外部变更与上传验证)
 
 ### 简单配置
 ```json
@@ -372,6 +386,31 @@ _注意：_ 变量替换在 `hop` 配置内不起作用。
 ```
 
 _注意：_ 除了 `tempFilePatterns`、`remoteTrash.path`（默认 `.sftp-trash`）和 `remoteTrash.retentionDays`（默认 `7`）之外，上面这些都是扩展已经采用的默认值；只有需要修改时才必须写出来。使用绝对 `path` 可以把回收站放在 Web 服务器提供的站点根目录之外。
+
+### 外部变更与上传验证
+```json
+{
+  "host": "host",
+  "username": "用户名",
+  "remotePath": "/var/www/project",
+  "uploadOnSave": true,
+  "watcher": {
+    "files": "**/*",
+    "autoUpload": true,
+    "autoDelete": false,
+    "pollInterval": 0
+  },
+  "externalChanges": {
+    "scanOnStartup": true,
+    "scanOnResume": true,
+    "confirmThreshold": 20
+  },
+  "verifyUpload": "stat",
+  "uploadRetries": 2
+}
+```
+
+_注意：_ 这里的 `externalChanges`、`verifyUpload` 和 `uploadRetries` 都是默认值；扫描不需要 `watcher` 块（它只用于响应实时变更和 `pollInterval`）。`verifyUpload: "hash"` 增加内容校验，以毫秒为单位的 `pollInterval` 则开启定时轮询。
 
 ## 远程资源管理器
 ![远程资源管理器预览](assets/showcase/remote-explorer.png)

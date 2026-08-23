@@ -3,10 +3,32 @@ import * as path from 'path';
 import app from '../../app';
 import logger from '../../logger';
 import { simplifyPath, reportError } from '../../helper';
-import { UResource, FileService, TransferTask } from '../../core';
+import { UResource, FileService, TransferTask, TransferDirection } from '../../core';
 import { validateConfig } from '../config';
 import watcherService from '../fileWatcher';
+// used at call time only: fileHandlers imports this module back for
+// getFileService, and the cycle resolves as long as neither side touches the
+// other while loading
+import { uploadFile, downloadFile } from '../../fileHandlers';
+import { ActivityKind, ActivityStatus, record, update, succeed, fail } from '../activityLog';
+import { emitTransferStart, emitTransferDone } from '../transferEvents';
 import Trie from './trie';
+
+/**
+ * Registry of the FileServices of the window, one per sftp.json entry, indexed
+ * by local base path so "which service handles this file?" is a prefix lookup.
+ *
+ * It is also where every service gets its cross-cutting behaviour wired in:
+ * the config validator, the file watcher, and the transfer hooks that drive
+ * the status bar, the error dialogs and the Activity view. Recording the
+ * activity here, per task, is what makes commands, uploadOnSave and the
+ * watcher all look the same in that view.
+ *
+ * Key lifecycle methods:
+ * - {@link createFileService} builds and registers a service for a config.
+ * - {@link getFileService} resolves the service owning a local or remote uri.
+ * - {@link disposeFileService} unregisters it and tears it down.
+ */
 
 const WIN_DRIVE_REGEX = /^([a-zA-Z]):/;
 const isWindows = process.platform === 'win32';
@@ -93,6 +115,28 @@ export function getBasePath(context: string, workspace: string) {
   return normalizePathForTrie(dirpath);
 }
 
+/**
+ * Opens the Activity entry for a task, and returns its id.
+ *
+ * The retry is a fresh handler call on the local path rather than the task
+ * itself: by the time the user clicks it, the task's connection and option
+ * snapshot may be long gone.
+ */
+function recordTransfer(service: FileService, task: TransferTask): number {
+  const isUpload = task.transferType === TransferDirection.LOCAL_TO_REMOTE;
+  const localPath = task.localFsPath;
+  return record({
+    kind: isUpload ? ActivityKind.Upload : ActivityKind.Download,
+    localPath,
+    remotePath: isUpload ? task.targetFsPath : task.srcFsPath,
+    serviceName: service.name,
+    profile: app.state.profile,
+    retry: isUpload
+      ? () => uploadFile(Uri.file(localPath))
+      : () => downloadFile(Uri.file(localPath)),
+  });
+}
+
 export function createFileService(config: any, workspace: string) {
   // defaultProfile es un valor inicial, no una imposición: solo aplica cuando
   // no hay perfil activo o cuando el activo ya no existe en esta configuración,
@@ -115,6 +159,9 @@ export function createFileService(config: any, workspace: string) {
   service.name = config.name;
   service.setConfigValidator(validateConfig);
   service.setWatcherService(watcherService);
+  // keyed by the task object: the same path can be in flight twice (a retry
+  // racing a save), and each run must close its own entry
+  const activityIds = new WeakMap<TransferTask, number>();
   service.beforeTransfer(task => {
     const { localFsPath, transferType } = task;
     app.sftpBarItem.setQueueSize(getRunningTransformTasks().length);
@@ -122,6 +169,8 @@ export function createFileService(config: any, workspace: string) {
       `${transferType} ${path.basename(localFsPath)}`,
       simplifyPath(localFsPath)
     );
+    activityIds.set(task, recordTransfer(service, task));
+    emitTransferStart({ service, task, profile: app.state.profile });
   });
   service.afterTransfer((error, task) => {
     const { localFsPath, transferType } = task;
@@ -129,18 +178,32 @@ export function createFileService(config: any, workspace: string) {
     const filepath = simplifyPath(localFsPath);
     // the task is already out of the pending set when this fires
     app.sftpBarItem.setQueueSize(getRunningTransformTasks().length);
+    const activityId = activityIds.get(task);
+    activityIds.delete(task);
     if (task.isCancelled()) {
       logger.info(`cancel transfer ${localFsPath}`);
       app.sftpBarItem.showMsg(`cancelled ${filename}`, filepath, 2000 * 2);
+      if (activityId !== undefined) {
+        update(activityId, { status: ActivityStatus.Cancelled });
+      }
     } else if (error) {
-      // if ((error as any).reported !== true) {
+      // one dialog per failed file; the handler's aggregate arrives later
+      // already flagged as reported and only reaches the log
       reportError(error, `when ${transferType} ${localFsPath}`);
-      // }
       app.sftpBarItem.showMsg(`failed ${filename}`, filepath, 2000 * 2);
+      if (activityId !== undefined) {
+        fail(activityId, error);
+      }
     } else {
       logger.info(`${transferType} ${localFsPath}`);
       app.sftpBarItem.showMsg(`done ${filename}`, filepath, 2000 * 2);
+      if (activityId !== undefined) {
+        succeed(activityId);
+      }
     }
+    // after the activity entry is settled, so a listener that reads the log
+    // (or the sync index feeder) sees the final state of this task
+    emitTransferDone({ service, task, error: error || null, profile: app.state.profile });
   });
 
   return service;

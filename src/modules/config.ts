@@ -45,6 +45,9 @@ const configScheme = {
   useTempFile: Joi.boolean(),
   openSsh: Joi.boolean(),
   downloadOnOpen: Joi.boolean().allow('confirm'),
+  // post-upload check and retries; see core/transferTask
+  verifyUpload: Joi.string().valid('none', 'stat', 'hash'),
+  uploadRetries: Joi.number().integer().min(0),
 
   ignore: Joi.array()
     .min(0)
@@ -58,6 +61,8 @@ const configScheme = {
     files: Joi.string().allow(false, null),
     autoUpload: Joi.boolean(),
     autoDelete: Joi.boolean(),
+    // ms between scans of the local tree against the sync index; 0 disables
+    pollInterval: Joi.number().integer().min(0),
   },
   concurrency: Joi.number().integer(),
 
@@ -84,6 +89,14 @@ const configScheme = {
       .items(Joi.string()),
     order: Joi.number(),
   },
+
+  // reconciliation of the local tree against the sync index; see
+  // modules/externalChangeScanner
+  externalChanges: {
+    scanOnStartup: Joi.boolean(),
+    scanOnResume: Joi.boolean(),
+    confirmThreshold: Joi.number().integer().min(0),
+  },
 };
 
 const defaultConfig = {
@@ -94,6 +107,10 @@ const defaultConfig = {
   useTempFile: false,
   openSsh: false,
   downloadOnOpen: false,
+  // every upload is checked against the server and retried before it is
+  // reported as failed; 'none' keeps only the protocol ack and the byte count
+  verifyUpload: 'stat',
+  uploadRetries: 2,
   ignore: [],
   // ignoreFile: undefined,
   ignoreTempFiles: true,
@@ -143,6 +160,14 @@ const defaultConfig = {
 
   remoteExplorer: {
     order: 0,
+  },
+
+  // edits made while VS Code was closed are picked up by a scan at activation
+  // and on resume; a batch above the threshold asks before uploading
+  externalChanges: {
+    scanOnStartup: true,
+    scanOnResume: true,
+    confirmThreshold: 20,
   },
 };
 

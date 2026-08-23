@@ -39,6 +39,22 @@ export type FileEntry = FileStats & {
   name: string;
 };
 
+/** Digests a file system can compute, strongest first. */
+export type HashAlgorithm = 'sha256' | 'sha1' | 'md5' | 'crc32';
+
+/** Hex digest length of each algorithm; what a server answers is checked against it. */
+export const HASH_HEX_LENGTH: { [algorithm in HashAlgorithm]: number } = {
+  sha256: 64,
+  sha1: 40,
+  md5: 32,
+  crc32: 8,
+};
+
+/** True for a lowercase hex digest of the length `algorithm` produces. */
+export function isHashDigest(value: string, algorithm: HashAlgorithm): boolean {
+  return new RegExp(`^[0-9a-f]{${HASH_HEX_LENGTH[algorithm]}}$`).test(value);
+}
+
 export default abstract class FileSystem {
   static getFileTypecharacter(stat: fs.Stats): FileType {
     if (stat.isDirectory()) {
@@ -86,6 +102,46 @@ export default abstract class FileSystem {
   stat(path: string): Promise<FileStats> {
     return this.lstat(path);
   }
+
+  /**
+   * Size of `path` as the file system reports it right now, used to verify
+   * that an upload landed whole. One lstat() by default; a file system for
+   * which a stat is expensive overrides it with a dedicated query (FTP: SIZE,
+   * because its lstat() lists the whole parent directory).
+   */
+  statSize(path: string): Promise<number> {
+    return this.lstat(path).then(stat => stat.size);
+  }
+
+  /**
+   * Modification time of `path` in milliseconds on the local clock (remote
+   * file systems already apply `remoteTimeOffsetInHours`), or `undefined`
+   * when the file system cannot answer cheaply. It only feeds a post-upload
+   * hint, so a file system is free to opt out rather than pay for it.
+   */
+  statMtime(path: string): Promise<number | undefined> {
+    return this.lstat(path).then(stat => stat.mtime);
+  }
+
+  /**
+   * Strongest digest this file system can compute for its files, or `null`
+   * when it cannot compute any (no shell on the SSH server, no hash command
+   * in FTP's FEAT). Implementations probe once and cache the answer for the
+   * life of the connection; the default is "no".
+   */
+  supportsHash(): Promise<HashAlgorithm | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * Lowercase hex digest of `path` with `algorithm`, which should be the one
+   * {@link supportsHash} reported. Rejects when the file system cannot hash
+   * (the default) or when the server's answer cannot be trusted; the caller
+   * decides whether that degrades to a weaker check or fails.
+   */
+  hashFile(_path: string, _algorithm: HashAlgorithm): Promise<string> {
+    return Promise.reject(new Error('hash not supported'));
+  }
   abstract readlink(path: string): Promise<string>;
   abstract symlink(targetPath: string, path: string): Promise<void>;
   abstract unlink(path: string): Promise<void>;
@@ -93,9 +149,15 @@ export default abstract class FileSystem {
   abstract rename(srcPath: string, destPath: string): Promise<void>;
   abstract renameAtomic(srcPath: string, destPath: string): Promise<void>;
 
-  static abortReadableStream(stream: Readable) {
+  // the error a transfer rejects with when it was cancelled rather than failed
+  static createAbortedError(): Error {
     const err = new Error('Transfer Aborted') as FileSystemError;
     err.code = ERROR_MSG_STREAM_INTERRUPT;
+    return err;
+  }
+
+  static abortReadableStream(stream: Readable) {
+    const err = FileSystem.createAbortedError();
 
     // don't do `stream.destroy(err)`! `sftp.ReadaStream` do not support `err` parameter in `destory` method.
     stream.emit('error', err);

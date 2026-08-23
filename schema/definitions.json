@@ -27,6 +27,12 @@
             "type": "boolean",
             "description": "delete when file changed.",
             "default": false
+          },
+          "pollInterval": {
+            "type": "integer",
+            "description": "Milliseconds between scans of the local tree against the sync index, for environments where filesystem events are unreliable (network drives, Docker or WSL mounts). Each scan uploads the files that changed since their last verified upload. 0 disables polling.",
+            "minimum": 0,
+            "default": 0
           }
         },
         "required": ["files"],
@@ -69,6 +75,17 @@
         "enum": ["confirm", true, false],
         "description": "True to download when a file opens.",
         "default": "confirm"
+      },
+      "verifyUpload": {
+        "enum": ["none", "stat", "hash"],
+        "description": "What to check on the server after each upload. \"stat\" requires the remote file size to match the local one (the bytes sent are always counted); \"hash\" additionally compares a digest of the remote file with the local one (SFTP: sha256sum/shasum/openssl/md5sum run over SSH, so the account needs a shell; FTP: XSHA256/XSHA1/XMD5/XCRC/HASH when the server advertises them) and falls back to \"stat\" with a warning when the server cannot compute one; \"none\" trusts the protocol acknowledgement only. A failed check is retried (see uploadRetries) and then reported as a failed upload.",
+        "default": "stat"
+      },
+      "uploadRetries": {
+        "type": "integer",
+        "description": "How many times a failed transfer (network error, failed verification) is retried, with an increasing delay, before it is reported as failed. 0 disables retries.",
+        "minimum": 0,
+        "default": 2
       },
       "syncOption": {
         "type": "object",
@@ -159,6 +176,28 @@
             "description": "Days to keep trashed files before they are purged. 0 disables automatic purging.",
             "minimum": 0,
             "default": 7
+          }
+        }
+      },
+      "externalChanges": {
+        "type": "object",
+        "description": "Detection of local changes made outside the editor (external tools, git, or while VS Code was closed) by comparing the local tree with the sync index of verified uploads.",
+        "properties": {
+          "scanOnStartup": {
+            "type": "boolean",
+            "description": "Scan the local tree for external changes when the extension activates and when sftp.json is reloaded, and upload what changed since the last verified upload.",
+            "default": true
+          },
+          "scanOnResume": {
+            "type": "boolean",
+            "description": "Scan for external changes when automatic sync is resumed and when the window regains focus after a while.",
+            "default": true
+          },
+          "confirmThreshold": {
+            "type": "integer",
+            "description": "Number of changed files above which SFTP shows the upload plan and asks for confirmation before uploading. Batches caused by a git operation always ask. Set to 0 to always ask.",
+            "minimum": 0,
+            "default": 20
           }
         }
       },

@@ -19,6 +19,10 @@ export const STATE_KEY_SYNC_PAUSED = 'sftp.state.syncPaused';
 // clave de workspaceState donde se persiste el índice de la papelera remota
 export const STATE_KEY_TRASH_INDEX = 'sftp.state.trashIndex';
 
+// clave de workspaceState con las claves de índice de sincronización cuyo aviso
+// de "índice sin construir" el usuario pidió no volver a ver
+export const STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED = 'sftp.state.unbuiltIndexNoticeDismissed';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 
@@ -95,3 +99,20 @@ export const COMMAND_ACTIVITY_REVEAL = 'sftp.activity.reveal';
 
 // nombre de la vista del registro de actividad (package.json > views)
 export const VIEW_ACTIVITY = 'sftpActivity';
+
+// planes de carga (vista de actividad)
+export const COMMAND_PLAN_PREVIEW = 'sftp.plan.preview';
+export const COMMAND_PLAN_UPLOAD_ALL = 'sftp.plan.uploadAll';
+export const COMMAND_PLAN_UPLOAD_ITEM = 'sftp.plan.uploadItem';
+export const COMMAND_PLAN_SKIP_ITEM = 'sftp.plan.skipItem';
+export const COMMAND_PLAN_DIFF_ITEM = 'sftp.plan.diffItem';
+export const COMMAND_PLAN_EXPORT_REPORT = 'sftp.plan.exportReport';
+export const COMMAND_PLAN_REMOVE = 'sftp.plan.remove';
+export const COMMAND_PLAN_CLEAR_ALL = 'sftp.plan.clearAll';
+
+// comando que VS Code genera por el id de la vista; no se declara en package.json
+export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
+
+// detección de cambios externos e índice de sincronización
+export const COMMAND_SCAN_EXTERNAL_CHANGES = 'sftp.scanExternalChanges';
+export const COMMAND_REBUILD_SYNC_INDEX = 'sftp.rebuildSyncIndex';

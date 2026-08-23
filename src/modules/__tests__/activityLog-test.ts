@@ -1,8 +1,74 @@
+jest.mock('fs');
+// The default vscode mock answers every lookup with "Nothing"; a retry rebuilt
+// on load wraps the local path in a Uri, so give it a real one to assert on.
+jest.mock('vscode', () => {
+  const Nothing = jest.requireActual('../../../__mocks__/vscode.js');
+  class Uri {
+    static file(fsPath: string) {
+      return new Uri(fsPath);
+    }
+    readonly scheme = 'file';
+    constructor(readonly fsPath: string) {}
+  }
+  return new Proxy({ Uri }, { get: (target, key) => (key in target ? target[key] : Nothing) });
+});
+import * as path from 'path';
+import { vol } from 'memfs';
 import * as activityLog from '../activityLog';
+
+// the rebuilt retries call the handlers; here they only need to be observable.
+// Production installs the resolver from extension.ts (the log must not import
+// the handlers itself), so the test installs an equivalent one.
+const uploadFile = jest.fn((_uri: any) => Promise.resolve());
+const downloadFile = jest.fn((_uri: any) => Promise.resolve());
+activityLog.setRetryResolver(entry => {
+  if (!entry.localPath) {
+    return undefined;
+  }
+  const uri = { fsPath: entry.localPath };
+  if (entry.kind === activityLog.ActivityKind.Upload) {
+    return () => uploadFile(uri);
+  }
+  if (entry.kind === activityLog.ActivityKind.Download) {
+    return () => downloadFile(uri);
+  }
+  return undefined;
+});
 
 const { ActivityKind, ActivityStatus } = activityLog;
 
+// absolute on both platforms; "c:/..." is a relative folder on linux
+const storage = path.resolve(path.sep, 'storage', 'workspace-1');
+const logFile = path.join(storage, 'activity-log.json');
+
+// memfs reports its keys in its own form, so existence is asked of the volume
+// and only the *number* of files is compared
+function storedFiles(): string[] {
+  return Object.keys(vol.toJSON());
+}
+
+function logFileExists(): boolean {
+  return vol.existsSync(logFile);
+}
+
+function readLog(): { version: number; entries: any[] } {
+  return JSON.parse(vol.readFileSync(logFile, 'utf8') as string);
+}
+
+function writeLog(entries: any[], version = 1) {
+  vol.mkdirSync(storage, { recursive: true });
+  vol.writeFileSync(logFile, JSON.stringify({ version, entries }));
+}
+
 beforeEach(() => {
+  activityLog.__resetForTest();
+  vol.reset();
+  (uploadFile as jest.Mock).mockClear();
+  (downloadFile as jest.Mock).mockClear();
+});
+
+afterEach(() => {
+  // drop any debounced save left behind before the volume is reset again
   activityLog.__resetForTest();
 });
 
@@ -278,5 +344,247 @@ describe('activityLog.onDidChange', () => {
     expect(() => activityLog.record({ kind: ActivityKind.Upload })).not.toThrow();
     expect(boom).toHaveBeenCalledTimes(1);
     expect(survivor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('activityLog persistence', () => {
+  describe('saving', () => {
+    test('flush writes activity-log.json under the storage path, without the retry', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      const id = activityLog.record({
+        kind: ActivityKind.Upload,
+        localPath: '/ws/a.php',
+        remotePath: '/remote/a.php',
+        serviceName: 'site',
+        profile: 'prod',
+        retry: () => Promise.resolve(),
+      });
+      activityLog.fail(id, 'size mismatch');
+
+      await activityLog.flushActivityLog();
+
+      expect(logFileExists()).toBe(true);
+      expect(storedFiles()).toHaveLength(1);
+      const data = readLog();
+      expect(data.version).toBe(1);
+      expect(data.entries).toHaveLength(1);
+      expect(data.entries[0]).toMatchObject({
+        id,
+        kind: 'upload',
+        status: 'failed',
+        localPath: '/ws/a.php',
+        remotePath: '/remote/a.php',
+        serviceName: 'site',
+        profile: 'prod',
+        error: 'size mismatch',
+      });
+      expect(data.entries[0]).not.toHaveProperty('retry');
+      expect(typeof data.entries[0].startedAt).toBe('number');
+      expect(typeof data.entries[0].finishedAt).toBe('number');
+    });
+
+    test('nothing is written without a storage path', async () => {
+      await activityLog.initActivityLog({ storagePath: undefined });
+      activityLog.record({ kind: ActivityKind.Upload });
+      await activityLog.flushActivityLog();
+      expect(storedFiles()).toEqual([]);
+    });
+
+    test('nothing is written when nothing changed', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      await activityLog.flushActivityLog();
+      expect(storedFiles()).toEqual([]);
+    });
+
+    test('keeps the newest 200 entries on disk even though memory holds 500', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      for (let i = 1; i <= 250; i++) {
+        activityLog.record({ kind: ActivityKind.Upload, localPath: `/ws/${i}.php` });
+      }
+
+      await activityLog.flushActivityLog();
+
+      const { entries } = readLog();
+      expect(entries).toHaveLength(200);
+      expect(entries[0].id).toBe(250);
+      expect(entries[199].id).toBe(51);
+    });
+
+    test('clear is persisted too, so the entries do not come back', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      activityLog.record({ kind: ActivityKind.Upload });
+      await activityLog.flushActivityLog();
+      expect(readLog().entries).toHaveLength(1);
+
+      activityLog.clear();
+      await activityLog.flushActivityLog();
+      expect(readLog().entries).toEqual([]);
+    });
+
+    test('writes go through a .tmp that is renamed away', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      activityLog.record({ kind: ActivityKind.Upload });
+      await activityLog.flushActivityLog();
+      expect(logFileExists()).toBe(true);
+      expect(storedFiles()).toHaveLength(1);
+      expect(vol.existsSync(logFile + '.tmp')).toBe(false);
+    });
+
+    describe('debounce', () => {
+      beforeAll(() => jest.useFakeTimers({ legacyFakeTimers: true } as any));
+      afterAll(() => jest.useRealTimers());
+
+      test('a change is written on its own about a second later', async () => {
+        await activityLog.initActivityLog({ storagePath: storage });
+        activityLog.record({ kind: ActivityKind.Upload });
+        activityLog.record({ kind: ActivityKind.Download });
+        expect(storedFiles()).toEqual([]);
+
+        jest.advanceTimersByTime(999);
+        await activityLog.flushActivityLog();
+        // flush with nothing in flight and the timer still armed: the timer
+        // was cancelled by the flush, which wrote the file itself
+        expect(logFileExists()).toBe(true);
+        expect(readLog().entries).toHaveLength(2);
+      });
+
+      test('the timer fires the save by itself', async () => {
+        await activityLog.initActivityLog({ storagePath: storage });
+        activityLog.record({ kind: ActivityKind.Upload });
+        expect(storedFiles()).toEqual([]);
+
+        jest.advanceTimersByTime(1000);
+        // the write is async; wait for it through a flush with nothing dirty
+        await activityLog.flushActivityLog();
+        expect(readLog().entries).toHaveLength(1);
+      });
+    });
+  });
+
+  describe('loading', () => {
+    test('restores the entries newest first and continues the ids', async () => {
+      writeLog([
+        { id: 12, kind: 'delete', status: 'success', remotePath: '/remote/b.php', startedAt: 2, finishedAt: 3 },
+        { id: 11, kind: 'upload', status: 'success', localPath: '/ws/a.php', startedAt: 1, finishedAt: 2 },
+      ]);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+
+      expect(activityLog.getEntries().map(e => e.id)).toEqual([12, 11]);
+      expect(activityLog.getEntry(11)!.localPath).toBe('/ws/a.php');
+      expect(activityLog.record({ kind: ActivityKind.Upload })).toBe(13);
+      expect(activityLog.getEntries().map(e => e.id)).toEqual([13, 12, 11]);
+    });
+
+    test('a pending entry becomes cancelled, with the reason', async () => {
+      writeLog([{ id: 1, kind: 'upload', status: 'pending', localPath: '/ws/a.php', startedAt: 1 }]);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+
+      const entry = activityLog.getEntry(1)!;
+      expect(entry.status).toBe(ActivityStatus.Cancelled);
+      expect(entry.error).toBe('interrupted by a window reload');
+    });
+
+    test('uploads and downloads get a retry back that re-runs the handler on the local path', async () => {
+      writeLog([
+        { id: 3, kind: 'rename', status: 'failed', localPath: '/ws/c.php', fromPath: '/ws/old.php', startedAt: 3 },
+        { id: 2, kind: 'download', status: 'failed', localPath: '/ws/b.php', startedAt: 2 },
+        { id: 1, kind: 'upload', status: 'failed', localPath: '/ws/a.php', startedAt: 1 },
+      ]);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+
+      const upload = activityLog.getEntry(1)!;
+      const download = activityLog.getEntry(2)!;
+      const rename = activityLog.getEntry(3)!;
+      expect(typeof upload.retry).toBe('function');
+      expect(typeof download.retry).toBe('function');
+      expect(rename.retry).toBeUndefined();
+
+      await upload.retry!();
+      expect(uploadFile).toHaveBeenCalledTimes(1);
+      expect((uploadFile as jest.Mock).mock.calls[0][0].fsPath).toBe('/ws/a.php');
+
+      await download.retry!();
+      expect(downloadFile).toHaveBeenCalledTimes(1);
+      expect((downloadFile as jest.Mock).mock.calls[0][0].fsPath).toBe('/ws/b.php');
+
+      // so "Retry All Failed" sees them after a reload
+      expect(activityLog.getFailedEntries().map(e => e.id)).toEqual([2, 1]);
+    });
+
+    test('an upload without a local path gets no retry', async () => {
+      writeLog([{ id: 1, kind: 'upload', status: 'failed', remotePath: '/remote/a.php', startedAt: 1 }]);
+      await activityLog.initActivityLog({ storagePath: storage });
+      expect(activityLog.getEntry(1)!.retry).toBeUndefined();
+    });
+
+    test('loads at most 200 entries', async () => {
+      const entries: any[] = [];
+      for (let id = 300; id >= 1; id--) {
+        entries.push({ id, kind: 'upload', status: 'success', startedAt: id });
+      }
+      writeLog(entries);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+
+      const loaded = activityLog.getEntries();
+      expect(loaded).toHaveLength(200);
+      expect(loaded[0].id).toBe(300);
+      expect(loaded[199].id).toBe(101);
+      expect(activityLog.record({ kind: ActivityKind.Upload })).toBe(301);
+    });
+
+    test('skips rows that do not look like entries', async () => {
+      writeLog([
+        { id: 2, kind: 'upload', status: 'success', startedAt: 2 },
+        { nonsense: true },
+        null,
+        { id: 'x', kind: 'upload', status: 'success', startedAt: 1 },
+      ]);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+      expect(activityLog.getEntries().map(e => e.id)).toEqual([2]);
+    });
+
+    test('a missing file is the first run', async () => {
+      await activityLog.initActivityLog({ storagePath: storage });
+      expect(activityLog.getEntries()).toEqual([]);
+      expect(activityLog.record({ kind: ActivityKind.Upload })).toBe(1);
+    });
+
+    test('a corrupt file or another version starts empty without throwing', async () => {
+      vol.mkdirSync(storage, { recursive: true });
+      vol.writeFileSync(logFile, '{ not json');
+      await expect(activityLog.initActivityLog({ storagePath: storage })).resolves.toBeUndefined();
+      expect(activityLog.getEntries()).toEqual([]);
+
+      activityLog.__resetForTest();
+      writeLog([{ id: 1, kind: 'upload', status: 'success', startedAt: 1 }], 99);
+      await activityLog.initActivityLog({ storagePath: storage });
+      expect(activityLog.getEntries()).toEqual([]);
+    });
+
+    test('what was loaded is what a later save writes back', async () => {
+      writeLog([{ id: 5, kind: 'upload', status: 'failed', localPath: '/ws/a.php', startedAt: 1 }]);
+      await activityLog.initActivityLog({ storagePath: storage });
+      activityLog.record({ kind: ActivityKind.Delete, remotePath: '/remote/x.php' });
+
+      await activityLog.flushActivityLog();
+
+      const { entries } = readLog();
+      expect(entries.map(e => e.id)).toEqual([6, 5]);
+      expect(entries[1]).not.toHaveProperty('retry');
+    });
+
+    test('notifies listeners once the entries are in', async () => {
+      writeLog([{ id: 1, kind: 'upload', status: 'success', startedAt: 1 }]);
+      const listener = jest.fn();
+      activityLog.onDidChange(listener);
+
+      await activityLog.initActivityLog({ storagePath: storage });
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
   });
 });

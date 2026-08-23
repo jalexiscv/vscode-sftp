@@ -12,11 +12,16 @@ import { flatten } from '../../utils';
 import logger from '../../logger';
 import { getOpenTextDocuments } from '../../host';
 
-interface InternalTransferOption extends FileHandleOption, TransferTaskTransferOption {}
+interface InternalTransferOption extends FileHandleOption, TransferTaskTransferOption {
+  // same shape as ServiceConfig.ignore: the flag lets a gitignore-style
+  // `dir/` pattern match the directory itself, so a whole subtree is pruned
+  // here instead of filtered file by file
+  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
+}
 
 type ExternalTransferOption<T extends InternalTransferOption> = Pick<
   T,
-  Exclude<keyof T, 'mtime' | 'atime' | 'mode' | 'fallbackMode'>
+  Exclude<keyof T, 'mtime' | 'atime' | 'size' | 'mode' | 'fallbackMode'>
 >;
 
 type TransferOption = ExternalTransferOption<InternalTransferOption>;
@@ -82,7 +87,8 @@ async function transferFolder(
 ) {
   const { srcFsPath, targetFsPath, srcFs, targetFs, transferOption } = config;
 
-  if (transferOption.ignore && transferOption.ignore(srcFsPath)) {
+  // flagged as a directory so a `dir/` pattern prunes the subtree here
+  if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
     return;
   }
 
@@ -110,6 +116,7 @@ async function transferFolder(
             ...config.transferOption,
             mtime: file.mtime,
             atime: file.atime,
+            size: file.size,
           },
           srcFsPath: file.fspath,
           targetFsPath: targetFs.pathResolver.join(targetFsPath, file.name),
@@ -185,9 +192,10 @@ async function transferWithType(
         const document = textDocuments.find(doc => doc.fileName === config.srcFsPath);
         if (document && !document.isClosed && document.isDirty) {
           await document.save();
-          // Update mtime after file was saved
+          // Update mtime and size after file was saved
           const stat = await config.srcFs.lstat(config.srcFsPath);
           config.transferOption.mtime = stat.mtime;
+          config.transferOption.size = stat.size;
           logger.info('save before upload.');
         }
       }
@@ -200,7 +208,7 @@ async function transferWithType(
 }
 
 async function removeFile(file: string, fs: FileSystem, fileType: FileType, option) {
-  if (option.ignore && option.ignore(file)) {
+  if (option.ignore && option.ignore(file, fileType === FileType.Directory)) {
     return;
   }
 
@@ -226,7 +234,8 @@ async function _sync(
 ) {
 
   const { srcFsPath, targetFsPath, srcFs, targetFs, transferOption, transferDirection } = config;
-  if (transferOption.ignore && transferOption.ignore(srcFsPath)) {
+  // always a directory here, see transferFolder
+  if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
     return;
   }
 
@@ -298,6 +307,7 @@ async function _sync(
                   mode: to.mode, // prefer target mode
                   mtime: from.mtime,
                   atime: from.atime,
+                  size: from.size,
                 },
               ]);
             }
@@ -329,6 +339,7 @@ async function _sync(
               fallbackMode: srcFile.mode,
               mtime: srcFile.mtime,
               atime: srcFile.atime,
+              size: srcFile.size,
             },
           ]);
           break;
@@ -358,6 +369,7 @@ async function _sync(
                   fallbackMode: file.mode,
                   mtime: file.mtime,
                   atime: file.atime,
+                  size: file.size,
                 },
               ]);
               break;
@@ -373,7 +385,10 @@ async function _sync(
         // hold entries that are really going to be removed. removeFile skips
         // ignored paths and unsupported types, so the push has to happen after
         // the same checks, not before them.
-        if (transferOption.ignore && transferOption.ignore(file.fspath)) {
+        if (
+          transferOption.ignore &&
+          transferOption.ignore(file.fspath, file.type === FileType.Directory)
+        ) {
           return;
         }
 
@@ -458,20 +473,33 @@ async function _sync(
 
 export { TransferOption, SyncOption, TransferDirection };
 
+/** Per-call knobs of {@link transfer}, on top of the transfer options themselves. */
+export interface TransferCallOptions {
+  // whether the parent directory of a file target is ensured (and chmod'ed
+  // per dirPerm) before collecting its task; true when omitted. A caller that
+  // already ensured every directory once for a whole batch (the plan runner)
+  // turns it off to save a round trip per file. Folders ensure their own
+  // directory regardless.
+  ensureDirExist?: boolean;
+}
+
 export async function transfer(
   config: TransferHandleConfig<TransferOption>,
-  collect: (t: TransferTask) => void
-) {
+  collect: (t: TransferTask) => void,
+  options?: TransferCallOptions
+): Promise<void> {
   const stat = await config.srcFs.lstat(config.srcFsPath);
   const transferOption = {
     ...config.transferOption,
     fallbackMode: stat.mode,
     mtime: stat.mtime,
     atime: stat.atime,
+    size: stat.size,
     filePerm: config?.filePerm,
     dirPerm: config?.dirPerm,
   };
-  await transferWithType({ ...config, transferOption, ensureDirExist: true }, stat.type, collect);
+  const ensureDirExist = options && options.ensureDirExist === false ? false : true;
+  await transferWithType({ ...config, transferOption, ensureDirExist }, stat.type, collect);
 }
 
 export async function sync(
