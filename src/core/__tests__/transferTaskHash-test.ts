@@ -9,6 +9,7 @@ import TransferTask, {
   TransferDirection,
   TransferOption,
   TransferVerificationError,
+  setRetryBaseDelayForTest,
 } from '../transferTask';
 import { FileSystem, FileType } from '../fs';
 import { HashAlgorithm } from '../fs/fileSystem';
@@ -24,7 +25,9 @@ import logger from '../../logger';
  * fails to for one file, degrades to 'stat' instead of failing the upload.
  */
 
-jest.setTimeout(30000);
+// the retry delay is real time (memfs streams and fake timers don't mix);
+// nothing here depends on its length
+const FAST_RETRY_DELAY_MS = 1;
 
 const CONTENT = 'hello, hashed world';
 const SIZE = Buffer.byteLength(CONTENT);
@@ -123,10 +126,15 @@ describe("TransferTask verifyUpload: 'hash'", () => {
     vol.reset();
     fillFs({ '/local/a.txt': CONTENT });
     warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    setRetryBaseDelayForTest(FAST_RETRY_DELAY_MS);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    setRetryBaseDelayForTest();
   });
 
   test('an upload whose digests agree is verified at hash level, size check included', async () => {

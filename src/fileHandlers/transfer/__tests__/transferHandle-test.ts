@@ -28,12 +28,16 @@ import * as path from 'path';
 import { vol } from 'memfs';
 import FileService from '../../../core/fileService';
 import { TransferFailedError, ETRANSFER_FAILED } from '../../../core';
+import { setRetryBaseDelayForTest } from '../../../core/transferTask';
 import { isReported } from '../../../helper';
 import RemoteFs from '../../../../test/helper/localRemoteFs';
 import { refreshRemoteExplorer } from '../../shared';
 // through the package index, like the rest of the extension: the handlers sit
 // inside an import cycle and the index is the entry that resolves it
 import { uploadFile, downloadFile } from '../../index';
+
+// the network failure below is retried with a real delay; keep it short
+const FAST_RETRY_DELAY_MS = 1;
 
 /**
  * End to end over memfs: `uploadFile`/`downloadFile` must reject when a task of
@@ -98,6 +102,14 @@ async function rejectionOf(promise: Promise<unknown>): Promise<any> {
 }
 
 describe('transfer handlers', () => {
+  beforeAll(() => {
+    setRetryBaseDelayForTest(FAST_RETRY_DELAY_MS);
+  });
+
+  afterAll(() => {
+    setRetryBaseDelayForTest();
+  });
+
   beforeEach(() => {
     vol.reset();
     (refreshRemoteExplorer as jest.Mock).mockClear();

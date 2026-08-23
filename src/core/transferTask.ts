@@ -28,9 +28,22 @@ export const DEFAULT_TRANSFER_RETRIES = 2;
 export const ERROR_CODE_VERIFY = 'EVERIFY';
 
 // each retry waits RETRY_BASE_DELAY_MS × attempt before re-opening the source
-const RETRY_BASE_DELAY_MS = 500;
+export const RETRY_BASE_DELAY_MS = 500;
+// the delay actually used; only setRetryBaseDelayForTest() moves it
+let retryBaseDelayMs = RETRY_BASE_DELAY_MS;
 // remote file systems report mtime in whole seconds and some round them
 const MTIME_TOLERANCE_IN_SECONDS = 2;
+
+/**
+ * Test hook: shortens the base delay between retries, or restores the default
+ * when called without a value. The retry tests drive real streams over memfs,
+ * which do not tolerate fake timers, and 500 ms × attempt per retry adds up
+ * to seconds of wall-clock wait for every case that exhausts the retries.
+ * Production code never calls it.
+ */
+export function setRetryBaseDelayForTest(ms: number = RETRY_BASE_DELAY_MS): void {
+  retryBaseDelayMs = ms;
+}
 
 interface FileHandle {
   fsPath: string;
@@ -603,7 +616,7 @@ export default class TransferTask implements Task {
       const timer = setTimeout(() => {
         this._retryWait = undefined;
         resolve();
-      }, RETRY_BASE_DELAY_MS * attempt);
+      }, retryBaseDelayMs * attempt);
       // unref'd so a pending retry never holds the process open (see syncControl)
       if (typeof timer.unref === 'function') {
         timer.unref();

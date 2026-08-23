@@ -9,6 +9,8 @@ import TransferTask, {
   TransferOption,
   TransferVerificationError,
   ERROR_CODE_VERIFY,
+  RETRY_BASE_DELAY_MS,
+  setRetryBaseDelayForTest,
 } from '../transferTask';
 import { FileSystem, FileType } from '../fs';
 import { ERROR_MSG_STREAM_INTERRUPT } from '../fs/fileSystem';
@@ -16,9 +18,10 @@ import localFs from '../localFs';
 import RemoteFs from '../../../test/helper/localRemoteFs';
 import logger from '../../logger';
 
-// the retry delay is real time (500 ms × attempt), so the cases that exhaust
-// retries keep them low; the whole file stays around a few seconds
-jest.setTimeout(30000);
+// the retry delay is real time (streams over memfs do not tolerate fake
+// timers), so it is shortened for the whole file; the one case that needs the
+// real one sets it back itself
+const FAST_RETRY_DELAY_MS = 1;
 
 const CONTENT = 'hello, verified world';
 const SIZE = Buffer.byteLength(CONTENT);
@@ -169,10 +172,15 @@ describe('TransferTask', () => {
     vol.reset();
     fillFs({ '/local/a.txt': CONTENT });
     warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    setRetryBaseDelayForTest(FAST_RETRY_DELAY_MS);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    setRetryBaseDelayForTest();
   });
 
   describe('upload', () => {
@@ -305,6 +313,8 @@ describe('TransferTask', () => {
     });
 
     test('cancelling while waiting for a retry stops the task right away', async () => {
+      // the real delay: the cancel has to land inside the wait
+      setRetryBaseDelayForTest(RETRY_BASE_DELAY_MS);
       const remoteFs = createRemoteFs(FlakyFs);
       remoteFs.failures = 10;
       const task = createUpload(remoteFs, { retries: 10 });
