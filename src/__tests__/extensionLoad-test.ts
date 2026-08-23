@@ -26,15 +26,17 @@ describe('extension load order', () => {
     });
   });
 
-  // createFileHandler itself must be reached through fileHandlers/index (or
-  // serviceManager): it imports serviceManager, which imports the handlers
-  // back, and the transfer handlers call createFileHandler() while loading.
-  // The entry point guarantees that order (app -> serviceManager first).
-  test('the transfer handlers can be loaded before serviceManager and activityLog', () => {
+  // Individual handler files (fileHandlers/transfer, remove, rename...) must be
+  // reached through fileHandlers/index or after serviceManager: createFileHandler
+  // imports serviceManager, which imports the index back, and every handler
+  // calls createFileHandler() while loading. The entry point guarantees that
+  // order (app -> serviceManager first), and commands import the index.
+  test('the fileHandlers index can be loaded before serviceManager and activityLog', () => {
     jest.isolateModules(() => {
-      const transfer = require('../fileHandlers/transfer');
+      const handlers = require('../fileHandlers');
       const activityLog = require('../modules/activityLog');
-      expect(typeof transfer.uploadFile).toBe('function');
+      expect(typeof handlers.uploadFile).toBe('function');
+      expect(typeof handlers.removeRemote).toBe('function');
       expect(activityLog.ActivityKind.Download).toBe('download');
     });
   });
