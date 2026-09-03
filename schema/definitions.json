@@ -141,6 +141,15 @@
         },
         "default": []
       },
+      "uploadExclude": {
+        "type": "array",
+        "description": "gitignore patterns (usually directories) that are never uploaded: not by any upload command, uploadOnSave, the watcher, a scan or Sync Local -> Remote, and whose remote copy is left alone when the local one is deleted or renamed. Unlike \"ignore\" they can still be downloaded, listed and diffed. \"Force Upload\" bypasses the list.",
+        "items": {
+          "type": "string",
+          "description": "gitignore pattern relative to the context: \"/storage\" anchors it to the root, \"uploads/\" matches a directory at any depth."
+        },
+        "default": []
+      },
       "deleteRemoteOnLocalDelete": {
         "type": "boolean",
         "description": "Delete a file on the server when it is deleted locally. Bulk deletions ask for confirmation first (see deleteRemoteConfirmThreshold) and deletions performed by git operations are ignored.",

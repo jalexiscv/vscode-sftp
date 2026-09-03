@@ -70,9 +70,11 @@ function stripMeta(config: any): any {
 // réplica de la fusión base+perfil de fileService.mergeProfile
 function mergeForProfile(base: any, profile: any): any {
   const merged = Object.assign(stripMeta(base), profile);
-  if (Array.isArray(base.ignore) && Array.isArray(profile.ignore)) {
-    merged.ignore = base.ignore.concat(profile.ignore);
-  }
+  ['ignore', 'tempFilePatterns', 'uploadExclude'].forEach(key => {
+    if (Array.isArray(base[key]) && Array.isArray(profile[key])) {
+      merged[key] = base[key].concat(profile[key]);
+    }
+  });
   return merged;
 }
 

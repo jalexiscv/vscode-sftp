@@ -96,3 +96,24 @@ describe('config: externalChanges / watcher.pollInterval', () => {
     expect(error!.message).toMatch(/pollInterval/);
   });
 });
+
+describe('config: uploadExclude', () => {
+  test('defaults to an empty list', () => {
+    expect(mergedDefault({}).uploadExclude).toEqual([]);
+    expect(validateConfig(mergedDefault(base))).toBeNull();
+  });
+
+  test.each([[[]], [['/storage']], [['/storage', 'uploads/', '*.env']]])(
+    'accepts uploadExclude %p',
+    list => {
+      expect(validate({ uploadExclude: list })).toBeNull();
+    }
+  );
+
+  test.each([['/storage'], [true], [[1]], [[null]]])('rejects uploadExclude %p', value => {
+    const error = validate({ uploadExclude: value });
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toMatch(/uploadExclude/);
+  });
+});
