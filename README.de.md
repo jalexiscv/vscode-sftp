@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.24.0](#neuerungen-in-v1240)
+- [Neuerungen in v1.25.0](#neuerungen-in-v1250)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 701 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 730 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -109,29 +109,27 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **UI** | Aktivitätsansicht mit dem Verlauf jeder Übertragung, Löschung und Umbenennung samt Wiederholungen (`sftp.showActivityView`); Pausenmodus (`SFTP: Pause/Resume Auto Sync`), der die gesamte automatische Synchronisierung aussetzt |
 | **Härtung** | Zwei adversariale Review-Durchgänge vor der Veröffentlichung: Git-Schutz beim Einreihen ausgewertet, ein einziger Löschpfad, unsichere Papierkorb-Pfade abgelehnt, Profil der Löschung beim Wiederherstellen und Bereinigen beachtet, Bereinigung, die das Remote-Verzeichnis selbst durchsucht |
 
-## Neuerungen in v1.24.0
+### [v1.24.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.24.0) — externe Änderungen und Upload-Verifizierung
 
-Bei v1.24.0 geht es um Vertrauen: zu wissen, dass das, was sich lokal geändert hat, auf dem Server ist — auch wenn ein anderes Werkzeug es geändert hat oder du es bei geschlossenem VS Code getan hast — und, wenn ein Upload nicht vollständig ankommt, davon zu erfahren und es mit einem Klick beheben zu können. Bisher hat die Erweiterung die Uploads *gemacht*; jetzt *beweist* sie sie auch.
+| Bereich | Änderung |
+|---------|----------|
+| **Externe Änderungen** | Ein persistenter Sync-Index merkt sich pro Server, welche Version jeder Datei zuletzt hochgeladen und verifiziert wurde; der lokale Baum wird beim Start, beim Neuladen von `sftp.json`, beim Fortsetzen, beim Zurückkehren des Fokus nach fünf Minuten, auf Abruf (`SFTP: Scan for External Changes`) und optional periodisch (`watcher.pollInterval`) damit verglichen, sodass Änderungen außerhalb des Editors — oder bei geschlossenem VS Code — über einen Plan hochgeladen werden, ohne den Server aufzulisten. `SFTP: Rebuild Sync Index` baut den Index bei der ersten Verwendung auf; Schlüssel `externalChanges.scanOnStartup`, `scanOnResume`, `confirmThreshold` |
+| **Ein einziger Änderungssammler** | `uploadOnSave` und der Watcher laden dasselbe Speichern nicht mehr zweimal hoch: Editor-Speicherungen gehen sofort hoch, externe Änderungen werden gebündelt (700 ms) und pro Pfad dedupliziert |
+| **Upload-Pläne** | Jeder Stapel ist ein Plan (Ursprung, Grund pro Datei, Status, Versuche, Fehler) in der Gruppe „Upload plans" der Aktivitätsansicht, mit `SFTP: Preview Upload (Dry Run)`, `SFTP: Upload Plan`, `SFTP: Export Last Upload Report` und `SFTP: Clear Upload Plans`; die Statusleiste zeigt `↑N` ausstehende und `✗N` fehlgeschlagene Uploads. Oberhalb von `externalChanges.confirmThreshold` (20), nach einer Git-Operation oder wenn der Stapel dem Index unbekannte Dateien enthält, fragt zuerst ein modaler Dialog (`Review plan`, `Upload N file(s)`, `Skip` — und `Skip` wird gemerkt) |
+| **Upload-Verifizierung** | Jeder Upload zählt die gesendeten Bytes und prüft mit `verifyUpload: "stat"` (Standard), dass die Remote-Größe exakt übereinstimmt; `"hash"` vergleicht zusätzlich einen Digest über SSH oder FTP und fällt auf `stat` zurück, wenn der Server ihn nicht berechnen kann. Vorübergehende Fehlschläge werden wiederholt (`uploadRetries`, 2), dauerhafte Fehler nicht |
+| **Persistentes Aktivitätsprotokoll** | Jede Aufgabe — aus einem Befehl, einem Speichern oder dem Watcher — wird mit Remote-Pfad und Verifizierungsergebnis protokolliert und überlebt das Neuladen des Fensters (`activity-log.json`); auch Fehler vor der Übertragung (Verbindung, Zugangsdaten, Berechtigungen) erscheinen |
+| **Korrekturen und Härtung** | `uploadFile()` lehnt ab, wenn die Übertragung fehlschlägt; die Unterdrückung der automatischen Synchronisierung während Downloads greift tatsächlich; `dir/`-Muster in `ignore` beschneiden den Teilbaum; Symlink-Schleifen werden unterbrochen; numerische SFTP-Fehler werden beschrieben. Zwei adversariale Reviews vor der Veröffentlichung; bis der Index aufgebaut ist, laden automatische Scans nur erneut hoch, was die Erweiterung selbst hochgeladen hat |
+
+## Neuerungen in v1.25.0
+
+v1.25.0 ergänzt das fehlende Stück der Ausschlusslisten: Ordner, die **nie hochgeladen** werden dürfen, die du aber weiterhin herunterladen können willst. Bisher war `ignore` die einzige Liste, und sie wirkt in beide Richtungen — `storage/` oder `public/uploads/` des Servers zu schützen hieß, auch auf deren Download zu verzichten.
 
 | Neuerung | Was sie bringt |
 |----------|----------------|
-| **Erkennung externer Änderungen** | Ein persistenter Sync-Index merkt sich pro Server, welche Version jeder Datei zuletzt hochgeladen und verifiziert wurde. Beim Start, beim Neuladen von `sftp.json`, beim Fortsetzen der Pause, beim Zurückkehren des Fokus nach fünf Minuten und auf Abruf (`SFTP: Scan for External Changes`) wird der lokale Baum mit diesem Index verglichen, und was außerhalb des Editors geändert wurde — ein `git pull` im Terminal, ein Code-Generator, Änderungen bei geschlossenem VS Code — wird über einen Plan hochgeladen, ohne den Server aufzulisten. `watcher.pollInterval` ergänzt ein periodisches Polling für Netzlaufwerke oder Docker-/WSL-Mounts. Schlüssel: `externalChanges.scanOnStartup`, `scanOnResume`, `confirmThreshold` |
-| **Ein einziger Änderungssammler** | `uploadOnSave` und der Watcher laden dasselbe Speichern nicht mehr zweimal hoch: Editor-Speicherungen gehen sofort hoch, externe Änderungen werden gebündelt (700 ms) und pro Pfad dedupliziert. `uploadOnSave: false` ist beim Überwachen von `**/*` nicht mehr nötig |
-| **Upload-Pläne** | Jeder Stapel ist ein Plan mit Ursprung, Grund pro Datei (neu, geändert), Status, Versuchen und Fehler, sichtbar in der Gruppe „Upload plans" der Aktivitätsansicht (Plan hochladen, pro Datei hochladen/überspringen/vergleichen, Bericht exportieren, entfernen). `SFTP: Preview Upload (Dry Run)` zeigt, was hochgeladen würde, ohne etwas hochzuladen; `SFTP: Upload Plan`, `SFTP: Export Last Upload Report` (Markdown) und `SFTP: Clear Upload Plans` vervollständigen den Satz. Die Statusleiste zeigt `↑N` ausstehende und `✗N` fehlgeschlagene Uploads |
-| **Upload-Verifizierung** | Jeder Upload zählt die gesendeten Bytes und prüft mit `verifyUpload: "stat"` (Standard), dass die Remote-Größe exakt übereinstimmt (`SIZE` bei FTP). `"hash"` vergleicht zusätzlich einen Digest (sha256/sha1/md5/crc32 per `sha256sum`/`shasum`/`openssl`/`md5sum` über SSH oder `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH` bei FTP) und fällt auf `stat` zurück, wenn der Server ihn nicht berechnen kann. Ein vorübergehender Fehlschlag (Netzwerk, Timeout, Verifizierung) wird mit wachsender Wartezeit wiederholt (`uploadRetries`, 2), bevor er mit seinem Grund gemeldet wird; dauerhafte Fehler (Zugriff verweigert, fehlende Quelle) werden nicht wiederholt |
-| **Persistentes Aktivitätsprotokoll** | Die Aktivitätsansicht protokolliert jede Aufgabe — ob aus einem Befehl, einem Speichern oder dem Watcher — mit Remote-Pfad und Verifizierungsergebnis und überlebt das Neuladen des Fensters (`activity-log.json`): Die Fehlschläge der vorherigen Sitzung bleiben wiederholbar. Auch Fehler vor der Übertragung (Verbindung, Zugangsdaten, Berechtigungen) erscheinen |
-| **Korrekturen** | `uploadFile()` lehnt jetzt ab, wenn die Übertragung fehlschlägt (die Ansicht konnte einen kaputten Upload als Erfolg markieren); die Unterdrückung der automatischen Synchronisierung während Downloads und `Sync Remote -> Local` wurde nie verwendet; `dir/`-Muster in `ignore` beschneiden den Teilbaum; Schutz vor Symlink-Schleifen; ein Index, der beschädigte Dateien und fehlgeschlagene `rename`s verkraftet; numerische SFTP-Fehler werden beschrieben; und mehr im [CHANGELOG](CHANGELOG.md) |
-
-### Schutzmechanismen und Entscheidungen
-
-| Schutzmechanismus | Verhalten |
-|-------------------|-----------|
-| **Bestätigungsschwelle** | Oberhalb von `externalChanges.confirmThreshold` (Standard 20) wird nichts ohne Nachfrage hochgeladen: Ein modaler Dialog listet die Dateien und bietet `Review plan` (Standard; der Plan bleibt in der Ansicht ausstehend), `Upload N file(s)` oder `Skip`. `Skip` wird gemerkt: Diese Dateien werden erst wieder vorgeschlagen, wenn sie sich erneut ändern |
-| **Git-Bewusstsein** | Hat sich HEAD zwischen Änderung und Upload bewegt (checkout, pull, rebase, merge…), fragt der Stapel immer nach, egal wie groß er ist: Ein Branch-Wechsel lädt nie überraschend Hunderte Dateien hoch |
-| **Neue Dateien** | Ein automatischer Stapel, der Dateien enthält, die der Index noch nie gesehen hat, fragt immer nach, so klein er auch ist; nur bereits indizierte und geänderte Dateien gehen unterhalb der Schwelle von selbst hoch |
-| **Erste Verwendung** | Führe nach der Installation einmal pro Server `SFTP: Rebuild Sync Index` aus (oder lade das Projekt einmal hoch und starte einen manuellen Scan), damit die Erweiterung weiß, was bereits auf dem Server liegt. Bis dahin laden automatische Scans nur Dateien erneut hoch, die sie selbst hochgeladen hat; nicht indizierte Dateien werden ignoriert, und es wird einmal pro Server darauf hingewiesen (`Build index now` / `Don't show again`). Der Neuaufbau indiziert, was zwischen Lokal und Remote in der Größe übereinstimmt |
-| **Hash-Degradierung** | Kann der Server keinen Digest berechnen (SFTP-Konto ohne Shell, FTP ohne `XSHA256`/`HASH`…), gilt der Upload als nach Größe verifiziert, mit einer einmaligen Warnung pro Verbindung; nur ein abweichender Digest ist ein Fehlschlag |
-| **Standardmäßig aktiv, nichts zu konfigurieren** | Scan beim Start und beim Fortsetzen, Größenprüfung und zwei Wiederholungen sind aktiv; `externalChanges.scanOnStartup: false`, `scanOnResume: false`, `verifyUpload: "none"` und `uploadRetries: 0` stellen das vorherige Verhalten wieder her |
+| **Nur-Upload-Ausschluss (`uploadExclude`)** | Eine Liste von gitignore-Mustern, mit derselben Syntax und Verankerung wie `ignore`, die nie zum Server wandert: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, der Watcher, Scans und Pläne, `Upload Changed Files` und `Sync Local -> Remote` (mit `syncOption.delete` wird die Remote-Kopie auch nicht gelöscht). In einem Profil wird sie zur Basisliste hinzugefügt |
+| **Der Server behält seine Kopie** | Einen ausgeschlossenen Pfad lokal zu löschen oder umzubenennen lässt den Server unberührt (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`); `Rebuild Sync Index` beschneidet ihn auf beiden Seiten |
+| **Was sich nicht ändert** | Downloads, `Sync Remote -> Local`, der Remote-Explorer und der Diff sehen diese Pfade weiterhin; `Force Upload` umgeht die Liste, wie es `ignore` umgeht. Ein Upload-Befehl auf einen ausgeschlossenen Pfad meldet das in einer Benachrichtigung und verbindet sich nicht; `Upload Changed Files` listet die beiseitegelegten Dateien in einer eigenen Gruppe |
+| **Korrektur** | Eine lokale Löschung, deren `dir/`-Muster in `ignore` nur als Verzeichnis passt, wird nicht mehr auf den Server gespiegelt: Der gelöschte Pfad wird jetzt sowohl als Datei als auch als Verzeichnis geprüft |
 
 ## Was wir von dieser Version erwarten
 
@@ -157,7 +155,7 @@ Bei v1.24.0 geht es um Vertrauen: zu wissen, dass das, was sich lokal geändert 
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.24.0.vsix
+code --install-extension sftp-1.25.0.vsix
 ```
 
 ## Dokumentation
@@ -411,6 +409,20 @@ _Hinweis:_ Alle diese Werte sind jene, die die Erweiterung bereits standardmäß
 ```
 
 _Hinweis:_ `externalChanges`, `verifyUpload` und `uploadRetries` tragen hier ihre Standardwerte; der `watcher`-Block ist für die Scans nicht nötig (nur, um auf Live-Änderungen zu reagieren, und für `pollInterval`). `verifyUpload: "hash"` ergänzt die Inhaltsprüfung, und ein `pollInterval` in Millisekunden schaltet das periodische Polling ein.
+
+### Ordner, die dem Server gehören
+```json
+{
+  "host": "host",
+  "username": "benutzer",
+  "remotePath": "/var/www/project",
+  "uploadOnSave": true,
+  "ignore": [".git", "node_modules"],
+  "uploadExclude": ["/storage", "/public/uploads", "*.env"]
+}
+```
+
+_Hinweis:_ `storage/` und `public/uploads/` werden nie hochgeladen, und sie lokal zu löschen löscht sie nie auf dem Server, aber sie lassen sich weiterhin herunterladen (`Download Folder`, `Sync Remote -> Local`); `*.env` verlässt deinen Rechner nie. `Force Upload` bleibt für den Ausnahmefall verfügbar.
 
 ## Remote-Explorer
 ![remote-explorer-vorschau](assets/showcase/remote-explorer.png)
