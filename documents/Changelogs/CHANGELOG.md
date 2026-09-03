@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 54 | 2026-09-03 | Exclusión de directorios solo para la subida (`uploadExclude`) | [Ver detalle](2026-09-03_feat_exclusion_de_subida.md) |
 | 53 | 2026-08-23 | Release 1.24.0: cambios externos, planes y verificación | [Ver detalle](2026-08-22_release_1_24_0.md) |
 | 52 | 2026-08-22 | Revisión adversarial ronda 2: módulos y experiencia    | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_modulos.md) |
 | 51 | 2026-08-22 | Revisión adversarial ronda 2: núcleo de transferencia | [Ver detalle](2026-08-22_fix_revision_adversarial_ronda2_core.md) |
