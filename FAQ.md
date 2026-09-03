@@ -121,6 +121,19 @@ Example configuration (where all JS and HTML files in `./build` will be copied t
 }
 ```
 
+## How do I keep a folder from being uploaded, but still be able to download it?
+
+Use `uploadExclude` (since 1.25.0). It takes the same gitignore patterns as `ignore`, but only applies to what goes from your machine to the server: nothing matched by it is uploaded by any command, by `uploadOnSave`, by the watcher, by a scan or by `Sync Local -> Remote`, and deleting or renaming it locally leaves the server copy alone — while `Download Folder`, `Sync Remote -> Local`, the Remote Explorer and diffs still see it. Typical entries are folders the server owns (`/storage`, `/public/uploads`, logs and caches) and local files that must never reach it (`*.env`):
+
+```json
+{
+  "ignore": [".git", "node_modules"],
+  "uploadExclude": ["/storage", "/public/uploads", "*.env"]
+}
+```
+
+`ignore` remains the list for paths that must not be transferred in either direction. `Force Upload` bypasses both. See [uploadExclude](docs/configuration.md#uploadexclude).
+
 ## How can I upload files as root?
 
 See [vscode-sftp issue #559](https://github.com/liximomo/vscode-sftp/issues/559).

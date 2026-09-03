@@ -19,7 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
-- [v1.24.0 新功能](#v1240-新功能)
+- [v1.25.0 新功能](#v1250-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、701 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、730 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -109,29 +109,27 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **界面** | 活动视图记录每次传输、删除和重命名并支持重试（`sftp.showActivityView`）；暂停模式（`SFTP: Pause/Resume Auto Sync`）暂停全部自动同步 |
 | **加固** | 发布前进行了两轮对抗性审查：git 防线改为入队时评估、删除只有一条路径、拒绝不安全的回收站路径、恢复和清理时尊重删除时所用的配置文件、清理会扫描远程目录本身 |
 
-## v1.24.0 新功能
+### [v1.24.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.24.0) — 外部变更与上传验证
 
-v1.24.0 的重点是信任：让你确信本地改动的内容已经在服务器上——哪怕是由其他工具改的，或者是在 VS Code 关闭时改的——而当某次上传没有完整到达时，你会得到通知并能一键修复。以前扩展只是*执行*上传；现在它还能*证明*上传成功。
+| 领域 | 变更 |
+|------|------|
+| **外部变更** | 一个持久化的同步索引按服务器记住每个文件最后一次上传并验证的版本；在启动时、重新加载 `sftp.json` 时、恢复时、窗口在五分钟后重新获得焦点时、按需执行（`SFTP: Scan for External Changes`）时以及可选的定时轮询（`watcher.pollInterval`）时，都会把本地目录树与该索引比较，因此在编辑器之外——或在 VS Code 关闭期间——做的改动会通过计划上传，而无需列出服务器。`SFTP: Rebuild Sync Index` 在首次使用时建立索引；配置键 `externalChanges.scanOnStartup`、`scanOnResume`、`confirmThreshold` |
+| **统一的变更收集器** | `uploadOnSave` 和 watcher 不再把同一次保存上传两次：编辑器的保存立即上传，外部变更会被合批（700 ms）并按路径去重 |
+| **上传计划** | 每个批次都是一个计划（来源、每个文件的原因、状态、尝试次数、错误），显示在活动视图的 "Upload plans" 分组中，并配有 `SFTP: Preview Upload (Dry Run)`、`SFTP: Upload Plan`、`SFTP: Export Last Upload Report` 和 `SFTP: Clear Upload Plans`；状态栏显示 `↑N` 个待上传和 `✗N` 个失败。超过 `externalChanges.confirmThreshold`（20）、发生 git 操作之后或批次包含索引从未见过的文件时，会先弹出模态对话框（`Review plan`、`Upload N file(s)`、`Skip`——且 `Skip` 会被记住） |
+| **上传验证** | 每次上传都会统计已发送的字节数，并在 `verifyUpload: "stat"`（默认）下检查远程大小是否完全一致；`"hash"` 还会通过 SSH 或 FTP 比较摘要，服务器无法计算时降级为 `stat`。暂时性失败会重试（`uploadRetries`，2 次）；永久性错误不会 |
+| **持久化的活动记录** | 每个任务——无论来自命令、保存还是 watcher——都会连同远程路径和验证结果被记录，并在窗口重新加载后保留（`activity-log.json`）；传输开始前的失败（连接、凭据、权限）也会显示 |
+| **修复与加固** | `uploadFile()` 在传输失败时会拒绝；下载期间对自动同步的抑制真正生效；`ignore` 中的 `dir/` 模式会整体剪除子树；切断符号链接循环；数字形式的 SFTP 错误有了描述。发布前进行了两轮对抗性评审；在索引建立之前，自动扫描只会重新上传扩展自己上传过的文件 |
+
+## v1.25.0 新功能
+
+v1.25.0 补上了排除列表缺失的一块：那些**绝不能上传**、但你仍希望能够下载的文件夹。此前 `ignore` 是唯一的列表，而且它对两个方向都生效——要保护服务器上的 `storage/` 或 `public/uploads/`，就意味着也放弃下载它们。
 
 | 新功能 | 作用 |
 |--------|------|
-| **外部变更检测** | 一个持久化的同步索引按服务器记住每个文件最后一次上传并验证的版本。在启动时、重新加载 `sftp.json` 时、恢复自动同步时、窗口在五分钟后重新获得焦点时，以及按需执行（`SFTP: Scan for External Changes`）时，都会把本地目录树与该索引比较，把在编辑器之外改动的内容——终端里的 `git pull`、代码生成器、VS Code 关闭期间的编辑——通过计划上传，而无需列出服务器。`watcher.pollInterval` 为网络驱动器或 Docker/WSL 挂载增加定时轮询。配置键：`externalChanges.scanOnStartup`、`scanOnResume`、`confirmThreshold` |
-| **统一的变更收集器** | `uploadOnSave` 和 watcher 不再把同一次保存上传两次：编辑器的保存立即上传，外部变更会被合批（700 ms）并按路径去重。监视 `**/*` 时不再需要 `uploadOnSave: false` |
-| **上传计划** | 每个批次都是一个计划，包含来源、每个文件的原因（新增、修改）、状态、尝试次数和错误，显示在活动视图的 "Upload plans" 分组中（上传整个计划、按文件上传/跳过/对比、导出报告、移除）。`SFTP: Preview Upload (Dry Run)` 只显示将要上传什么而不上传；`SFTP: Upload Plan`、`SFTP: Export Last Upload Report`（Markdown）和 `SFTP: Clear Upload Plans` 补全这一组命令。状态栏显示 `↑N` 个待上传和 `✗N` 个失败 |
-| **上传验证** | 每次上传都会统计已发送的字节数，并在 `verifyUpload: "stat"`（默认）下检查远程大小是否完全一致（FTP 使用 `SIZE`）。`"hash"` 还会比较摘要（通过 SSH 运行 `sha256sum`/`shasum`/`openssl`/`md5sum` 得到 sha256/sha1/md5/crc32，或在 FTP 上使用 `XSHA256`/`XSHA1`/`XMD5`/`XCRC`/`HASH`），服务器无法计算时自动降级为 `stat`。暂时性失败（网络、超时、验证）会以递增的等待重试（`uploadRetries`，2 次），然后带原因上报；永久性错误（权限被拒、源文件不存在）不会重试 |
-| **持久化的活动记录** | 活动视图记录每个任务——无论来自命令、保存还是 watcher——包括远程路径和验证结果，并在窗口重新加载后保留（`activity-log.json`）：上一会话的失败仍可重试。传输开始前的失败（连接、凭据、权限）也会显示 |
-| **修复** | `uploadFile()` 在传输失败时会正确拒绝（此前视图可能把失败的上传标为成功）；下载和 `Sync Remote -> Local` 期间对自动同步的抑制此前从未被使用；`ignore` 中的 `dir/` 模式会整体剪除子树；防止符号链接循环；索引在文件损坏或 `rename` 失败时依然稳健；数字形式的 SFTP 错误有了描述；更多内容见 [CHANGELOG](CHANGELOG.md) |
-
-### 防线与设计决策
-
-| 防线 | 行为 |
-|------|------|
-| **确认阈值** | 超过 `externalChanges.confirmThreshold`（默认 20）时不会不经询问就上传：模态对话框列出文件并提供 `Review plan`（默认；计划留在视图中待处理）、`Upload N file(s)` 或 `Skip`。`Skip` 会被记住：这些文件在再次改动之前不会被重新提出 |
-| **感知 git** | 如果 HEAD 在变更与上传之间移动过（checkout、pull、rebase、merge 等），无论批次多大都会要求确认：切换分支永远不会意外上传数百个文件 |
-| **新文件** | 自动批次若包含索引从未见过的文件，无论多小都会要求确认；只有已索引且被修改的文件才会在阈值以下自动上传 |
-| **首次使用** | 安装后，请对每个服务器执行一次 `SFTP: Rebuild Sync Index`（或先上传一次项目再运行一次手动扫描），让扩展知道服务器上已有什么。在此之前，自动扫描只会重新上传扩展自己上传过的文件；未索引的文件会被忽略，并且每个服务器只提示一次（`Build index now` / `Don't show again`）。重建会把本地与远程大小一致的文件加入索引 |
-| **哈希降级** | 如果服务器无法计算摘要（没有 shell 的 SFTP 账户、没有 `XSHA256`/`HASH` 的 FTP 等），上传按大小验证并在每个连接上只警告一次；只有摘要不同才算失败 |
-| **默认开启，无需配置** | 启动和恢复时扫描、按大小验证以及两次重试默认启用；`externalChanges.scanOnStartup: false`、`scanOnResume: false`、`verifyUpload: "none"` 和 `uploadRetries: 0` 可恢复以前的行为 |
+| **仅上传排除（`uploadExclude`）** | 一组 gitignore 模式，语法和锚定方式与 `ignore` 相同，但永远不会传到服务器：`Upload File` / `Upload Folder` / `Upload Project`、`uploadOnSave`、watcher、扫描与计划、`Upload Changed Files` 以及 `Sync Local -> Remote`（启用 `syncOption.delete` 时，远程副本也不会被删除）。在 profile 中它会追加到基础列表上 |
+| **服务器保留自己的副本** | 在本地删除或重命名被排除的路径不会影响服务器（`deleteRemoteOnLocalDelete`、`renameRemoteOnLocalRename`、`watcher.autoDelete`）；`Rebuild Sync Index` 会在两侧一并剪除它 |
+| **不变的部分** | 下载、`Sync Remote -> Local`、远程资源管理器和对比仍然能看到这些路径；`Force Upload` 会绕过该列表，就像它绕过 `ignore` 一样。对被排除路径执行上传命令时会弹出通知说明，并且不会建立连接；`Upload Changed Files` 会把被搁置的文件单独列成一组 |
+| **修复** | 本地删除的路径若只在 `ignore` 的 `dir/` 模式中按目录匹配，将不再被镜像到服务器：被删除的路径现在会同时按文件和按目录进行测试 |
 
 ## 我们对这个版本的期望
 
@@ -157,7 +155,7 @@ v1.24.0 的重点是信任：让你确信本地改动的内容已经在服务器
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.24.0.vsix
+code --install-extension sftp-1.25.0.vsix
 ```
 
 ## 文档
@@ -411,6 +409,20 @@ _注意：_ 除了 `tempFilePatterns`、`remoteTrash.path`（默认 `.sftp-trash
 ```
 
 _注意：_ 这里的 `externalChanges`、`verifyUpload` 和 `uploadRetries` 都是默认值；扫描不需要 `watcher` 块（它只用于响应实时变更和 `pollInterval`）。`verifyUpload: "hash"` 增加内容校验，以毫秒为单位的 `pollInterval` 则开启定时轮询。
+
+### 属于服务器的文件夹
+```json
+{
+  "host": "host",
+  "username": "user",
+  "remotePath": "/var/www/project",
+  "uploadOnSave": true,
+  "ignore": [".git", "node_modules"],
+  "uploadExclude": ["/storage", "/public/uploads", "*.env"]
+}
+```
+
+_注：_ `storage/` 和 `public/uploads/` 永远不会被上传，在本地删除它们也永远不会删除服务器上的副本，但它们仍然可以被下载（`Download Folder`、`Sync Remote -> Local`）；`*.env` 永远不会离开你的电脑。`Force Upload` 仍可用于例外情况。
 
 ## 远程资源管理器
 ![远程资源管理器预览](assets/showcase/remote-explorer.png)
