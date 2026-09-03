@@ -17,6 +17,29 @@ interface InternalTransferOption extends FileHandleOption, TransferTaskTransferO
   // `dir/` pattern match the directory itself, so a whole subtree is pruned
   // here instead of filtered file by file
   ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
+  // ServiceConfig.uploadExclude: consulted only for what goes local → remote,
+  // so a download or a sync's remote → local half still brings those paths
+  // down
+  uploadExclude?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
+}
+
+/**
+ * Whether `fsPath` must be kept off the server. `uploadExclude` applies to
+ * the local → remote direction only, whichever side of the transfer the path
+ * is on (the matcher understands both), so the deletion of a remote copy by a
+ * `sync --delete` is held back by it as well.
+ */
+function isUploadExcluded(
+  option: Pick<InternalTransferOption, 'uploadExclude'>,
+  direction: TransferDirection,
+  fsPath: string,
+  isDirectory?: boolean
+): boolean {
+  return (
+    direction === TransferDirection.LOCAL_TO_REMOTE &&
+    Boolean(option.uploadExclude) &&
+    option.uploadExclude!(fsPath, isDirectory)
+  );
 }
 
 type ExternalTransferOption<T extends InternalTransferOption> = Pick<
@@ -91,6 +114,10 @@ async function transferFolder(
   if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
     return;
   }
+  if (isUploadExcluded(transferOption, config.transferDirection, srcFsPath, true)) {
+    logger.info(`${srcFsPath} not uploaded: excluded by uploadExclude`);
+    return;
+  }
 
   // Need this to make sure file can correct transfer
   await targetFs.ensureDir(targetFsPath);
@@ -137,6 +164,10 @@ async function transferFile(
   collect: (t: TransferTask) => void
 ) {
   if (config.transferOption.ignore && config.transferOption.ignore(config.srcFsPath)) {
+    return;
+  }
+  if (isUploadExcluded(config.transferOption, config.transferDirection, config.srcFsPath)) {
+    logger.debug(`${config.srcFsPath} not uploaded: excluded by uploadExclude`);
     return;
   }
 
@@ -236,6 +267,12 @@ async function _sync(
   const { srcFsPath, targetFsPath, srcFs, targetFs, transferOption, transferDirection } = config;
   // always a directory here, see transferFolder
   if (transferOption.ignore && transferOption.ignore(srcFsPath, true)) {
+    return;
+  }
+  // skipped whole, deletions and the both-directions downloads included: the
+  // remote copy of an excluded directory belongs to the server
+  if (isUploadExcluded(transferOption, transferDirection, srcFsPath, true)) {
+    logger.info(`${srcFsPath} not synced: excluded by uploadExclude`);
     return;
   }
 
@@ -385,9 +422,10 @@ async function _sync(
         // hold entries that are really going to be removed. removeFile skips
         // ignored paths and unsupported types, so the push has to happen after
         // the same checks, not before them.
+        const isDirectory = file.type === FileType.Directory;
         if (
-          transferOption.ignore &&
-          transferOption.ignore(file.fspath, file.type === FileType.Directory)
+          (transferOption.ignore && transferOption.ignore(file.fspath, isDirectory)) ||
+          isUploadExcluded(transferOption, transferDirection, file.fspath, isDirectory)
         ) {
           return;
         }
