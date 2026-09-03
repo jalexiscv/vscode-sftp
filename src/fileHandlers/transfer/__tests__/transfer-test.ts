@@ -173,6 +173,222 @@ describe('transfer algorithm', () => {
     });
   });
 
+  // ServiceConfig.uploadExclude applies to the local → remote direction only:
+  // the same option must prune an upload and leave a download untouched
+  describe('uploadExclude', () => {
+    afterEach(() => {
+      vol.reset();
+    });
+
+    // what a `/storage` + `*.env` list resolves to, on either side of the transfer
+    const excludePaths = (...names: string[]) =>
+      jest.fn((fsPath: string, _isDirectory?: boolean) =>
+        fsPath.split(/[\\/]/).some(segment => names.indexOf(segment) !== -1)
+      );
+
+    test('an upload skips the excluded directory and file, without ignore', async () => {
+      fillFs({
+        local: {
+          a: file('a'),
+          storage: {
+            logs: {
+              x: file('x'),
+            },
+          },
+          '.env': file('secret'),
+          src: {
+            b: file('b'),
+          },
+        },
+        remote: {},
+      });
+      const uploadExclude = excludePaths('storage', '.env');
+      const task: TransferTask[] = [];
+
+      await transfer(
+        {
+          srcFsPath: '/local',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/remote',
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          transferOption: {
+            perserveTargetMode: false,
+            ignore: null,
+            uploadExclude,
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(task, 'targetFsPath').sort()).toEqual(
+        ['/remote/a', '/remote/src/b'].formatSep().sort()
+      );
+      // pruned as a directory, so nothing below it was listed
+      expect(uploadExclude).toHaveBeenCalledWith(path.join('/local', 'storage'), true);
+      expect(uploadExclude.mock.calls.map(call => call[0])).not.toContain(
+        path.join('/local/storage', 'logs')
+      );
+      expect(fs.existsSync(path.join('/remote', 'storage'))).toBe(false);
+    });
+
+    test('a download with the same option transfers everything', async () => {
+      fillFs({
+        remote: {
+          a: file('a'),
+          storage: {
+            x: file('x'),
+          },
+          '.env': file('secret'),
+        },
+        local: {},
+      });
+      const task: TransferTask[] = [];
+
+      await transfer(
+        {
+          srcFsPath: '/remote',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/local',
+          transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+          transferOption: {
+            perserveTargetMode: false,
+            ignore: null,
+            uploadExclude: excludePaths('storage', '.env'),
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(task, 'targetFsPath').sort()).toEqual(
+        ['/local/a', '/local/storage/x', '/local/.env'].formatSep().sort()
+      );
+    });
+
+    test('sync --delete neither writes into nor deletes from an excluded remote path', async () => {
+      fillFs({
+        local: {
+          a: file('a', 1),
+          storage: {
+            'local-only': file('l'),
+          },
+        },
+        remote: {
+          a: file('$a'),
+          storage: {
+            'uploaded-by-users': file('u'),
+          },
+          '.env': file('production'),
+          stale: file('$stale'),
+        },
+      });
+      const task: TransferTask[] = [];
+
+      const deleted = await sync(
+        {
+          srcFsPath: '/local',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/remote',
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          transferOption: {
+            delete: true,
+            perserveTargetMode: false,
+            ignore: null,
+            uploadExclude: excludePaths('storage', '.env'),
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(task, 'targetFsPath')).toEqual(['/remote/a'].formatSep());
+      expect(mapList(deleted, 'fspath')).toEqual(['/remote/stale'].formatSep());
+      expect(fs.existsSync(path.join('/remote/storage', 'uploaded-by-users'))).toBe(true);
+      expect(fs.existsSync(path.join('/remote/storage', 'local-only'))).toBe(false);
+      expect(fs.existsSync(path.join('/remote', '.env'))).toBe(true);
+      expect(fs.existsSync(path.join('/remote', 'stale'))).toBe(false);
+    });
+
+    test('sync remote → local --delete is not restricted by it', async () => {
+      fillFs({
+        remote: {
+          a: file('a', 1),
+          storage: {
+            u: file('u', 1),
+          },
+        },
+        local: {
+          a: file('$a'),
+          storage: {
+            l: file('l'),
+          },
+        },
+      });
+      const task: TransferTask[] = [];
+
+      const deleted = await sync(
+        {
+          srcFsPath: '/remote',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/local',
+          transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+          transferOption: {
+            delete: true,
+            perserveTargetMode: false,
+            ignore: null,
+            uploadExclude: excludePaths('storage'),
+          },
+        },
+        t => task.push(t)
+      );
+
+      expect(mapList(task, 'targetFsPath').sort()).toEqual(
+        ['/local/a', '/local/storage/u'].formatSep().sort()
+      );
+      expect(mapList(deleted, 'fspath')).toEqual(['/local/storage/l'].formatSep());
+    });
+
+    test('sync both directions skips an excluded directory whole', async () => {
+      fillFs({
+        local: {
+          a: file('a', 1),
+          storage: {
+            l: file('l'),
+          },
+        },
+        remote: {
+          a: file('$a'),
+          storage: {
+            u: file('u', 5),
+          },
+        },
+      });
+      const task: TransferTask[] = [];
+
+      await sync(
+        {
+          srcFsPath: '/local',
+          srcFs: localFs,
+          targetFs: localFs,
+          targetFsPath: '/remote',
+          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          transferOption: {
+            bothDiretions: true,
+            perserveTargetMode: false,
+            ignore: null,
+            uploadExclude: excludePaths('storage'),
+          },
+        },
+        t => task.push(t)
+      );
+
+      // neither the local file goes up nor the newer remote one comes down
+      expect(mapList(task, 'targetFsPath')).toEqual(['/remote/a'].formatSep());
+    });
+  });
+
   describe('sync', () => {
     afterEach(() => {
       vol.reset();

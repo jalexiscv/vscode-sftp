@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { COMMAND_UPLOAD_CHANGEDFILES } from '../constants';
+import { FileService, ServiceConfig, isExcludedFromMirroring } from '../core';
 import { getFileService } from '../modules/serviceManager';
 import { uploadFile, renameRemote, removeRemote } from '../fileHandlers';
 import { getGitService, GitAPI, Repository, Status, Change } from '../modules/git';
@@ -39,6 +40,29 @@ function isSourceControlResourceGroup(object: any): object is vscode.SourceContr
   return 'id' in object && 'resourceStates' in object;
 }
 
+/**
+ * Whether the config keeps this change off the server — `ignore` or
+ * `uploadExclude` match its path, or either end of a rename. The handlers
+ * would refuse each of these on their own, one notification per file; set
+ * aside here, they are listed once in the result instead.
+ */
+function isExcludedChange(fileService: FileService, change: Change): boolean {
+  let config: ServiceConfig;
+  try {
+    config = fileService.getConfig();
+  } catch (error) {
+    // an unusable config fails in the handler, with its own message
+    return false;
+  }
+
+  // `uri` is the new path of a rename; the old one is where it came from
+  const paths = [change.uri.fsPath];
+  if (change.renameUri) {
+    paths.push(change.originalUri.fsPath);
+  }
+  return paths.some(fsPath => isExcludedFromMirroring(config, fsPath));
+}
+
 async function handleCommand(hint: any) {
   let repository: Repository | undefined;
   let filterGroupId;
@@ -70,8 +94,15 @@ async function handleCommand(hint: any) {
   const uploads: Change[] = [];
   const renames: Change[] = [];
   const deletes: Change[] = [];
+  const excluded: Change[] = [];
   for (const change of changes) {
-    if (!getFileService(change.uri)) {
+    const fileService = getFileService(change.uri);
+    if (!fileService) {
+      continue;
+    }
+
+    if (isExcludedChange(fileService, change)) {
+      excluded.push(change);
       continue;
     }
 
@@ -157,6 +188,9 @@ async function handleCommand(hint: any) {
     skippedDeletes ? 'deleted (skipped, not mirrored)' : 'deleted',
     deletes,
     c => simplifyPath(c.uri.fsPath)
+  );
+  outputGroup('excluded by ignore / uploadExclude (not touched)', excluded, c =>
+    simplifyPath(c.uri.fsPath)
   );
 }
 

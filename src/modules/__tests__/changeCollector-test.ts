@@ -432,6 +432,22 @@ describe('admission', () => {
     expect(names(seen[0])).toEqual(['a.ts']);
   });
 
+  test('drops a path uploadExclude matches the same way, saves included', async () => {
+    installServices(
+      fakeService(p('src'), {
+        uploadExclude: (fsPath: string) => /[\\/]storage[\\/]/.test(fsPath),
+      })
+    );
+    const seen = collectBatches();
+
+    enqueueChange(uri(p('src', 'storage', 'app.log')), 'save');
+    expect(pendingCount()).toBe(0);
+    enqueueChange(uri(p('src', 'a.ts')), 'save');
+    await flushNow();
+
+    expect(names(seen[0])).toEqual(['a.ts']);
+  });
+
   test('drops a path with an unusable config, without failing the batch', async () => {
     const broken = {
       id: 99,

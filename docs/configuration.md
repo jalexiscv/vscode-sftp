@@ -29,6 +29,7 @@ The configuration file can always be accessed with `CTRL` + `Shift` + `P`, and s
 - [ignoreFile](#ignorefile)
 - [ignoreTempFiles](#ignoretempfiles)
 - [tempFilePatterns](#tempfilepatterns)
+- [uploadExclude](#uploadexclude)
 - [watcher](#watcher)
 - [externalChanges](#externalchanges)
 - [deleteRemoteOnLocalDelete](#deleteremoteonlocaldelete)
@@ -338,7 +339,8 @@ Update the destination only if a newer version is on the source filesystem.
 
 ### ignore
 Ignore can be used to ignore files and folders from sync, and even supports wildcards using `*`. <br>
-This is the same behavior as gitignore, all paths relative to context of the current configuration.
+This is the same behavior as gitignore, all paths relative to context of the current configuration. <br>
+It applies to **both directions**: an ignored path is neither uploaded nor downloaded. To keep a path from being uploaded while still being able to download it, use [uploadExclude](#uploadexclude).
  
 | Key | Value | Default |
 | --- | --- | --- |
@@ -418,6 +420,26 @@ They are appended **after** the built-in ones, and gitignore resolves conflicts 
 
 In the example above, `*.generated.php` is added to the exclusions and `*.bak` — which is excluded by default — is transferred again.
 
+### uploadExclude
+gitignore patterns — typically directories — that are **never uploaded**, whatever triggers the upload: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, the watcher, the external-change scans and their plans, `Upload Changed Files` and `Sync Local -> Remote` (with `syncOption.delete` on, the remote copy is not deleted either). The remote copy is also left alone when the local one is deleted or renamed. <br>
+Unlike [ignore](#ignore), which applies to both directions, an excluded path can still be downloaded, listed in the Remote Explorer, diffed and brought down by `Sync Remote -> Local`. It is the right tool for what the server owns — user uploads, generated caches, logs — and for local files that must never reach it. `Force Upload` bypasses the list, as it does with `ignore`; `Sync Both Directions` skips an excluded directory whole, in both directions. An explicit upload command on an excluded path says so in a notification and does nothing.
+
+Same syntax and anchoring as `ignore`, relative to the context: `/storage` anchors at the root, `uploads/` matches a directory at any depth. In a profile the list is added to the base one, like `ignore`.
+
+| Key | Value | Default |
+| --- | --- | --- |
+| *uploadExclude* | *string[]* | `[]` |
+
+```json
+{
+  "uploadExclude": [
+    "/storage",
+    "/public/uploads",
+    "*.env"
+  ]
+}
+```
+
 ### watcher
 Watch the local tree for changes made outside the VS Code editor and mirror them to the server.
 
@@ -473,7 +495,7 @@ Each tick compares the local tree with the index of verified uploads and plans w
 Detection of local changes made outside the editor — by an external tool, by git, or while VS Code was closed — by comparing the local tree with the **sync index** of verified uploads. <br>
 The watcher only sees events while the window is open; these scans are what catch a `git pull` run in another terminal, a code generator, or a week of edits made with VS Code closed. See [External changes and upload verification](#external-changes-and-upload-verification) for the whole flow.
 
-A scan walks the local tree (pruned by `ignore` and the temporary-file list), compares the size and mtime of every file with the index and turns what differs into an upload plan of `new` files (never seen by the index) and `modified` files (indexed, and changed since their last verified upload). Files unchanged since their last verified upload are not touched, files you skipped are not proposed again until they change, and nothing is listed on the server. `modified` files below `confirmThreshold` are uploaded right away; a plan that contains `new` files, exceeds the threshold or was caused by a git operation asks first with a modal dialog.
+A scan walks the local tree (pruned by `ignore`, `uploadExclude` and the temporary-file list), compares the size and mtime of every file with the index and turns what differs into an upload plan of `new` files (never seen by the index) and `modified` files (indexed, and changed since their last verified upload). Files unchanged since their last verified upload are not touched, files you skipped are not proposed again until they change, and nothing is listed on the server. `modified` files below `confirmThreshold` are uploaded right away; a plan that contains `new` files, exceeds the threshold or was caused by a git operation asks first with a modal dialog.
 
 The index starts out **unseeded**. Until `SFTP: Rebuild Sync Index` has run once for a server — or a manual `SFTP: Scan for External Changes` has planned, been confirmed and uploaded — automatic scans only plan `modified` files, i.e. they re-upload what the extension already uploaded itself; unindexed files are ignored and counted in the output channel (`N unindexed file(s) ignored until the index is built`), nothing new is uploaded and nothing is asked. The extension tells you once per server, remembered per workspace, with `Build index now` and `Don't show again`. A plain `uploadOnSave` adds entries to the index but does not seed it. After installing, run `SFTP: Rebuild Sync Index` once per server (or upload the project once and run a manual scan) so the extension knows what is already on the server.
 
@@ -528,7 +550,7 @@ Deleting is the one operation with no undo at the protocol level, so it comes wi
 | Self-suppression | Deletions caused by the extension itself — a `Sync Remote -> Local` with `syncOption.delete` removing extraneous local files — are suppressed, so they are not mirrored back to the server. |
 | Remote trash | With `remoteTrash.enabled`, the deletion is a server-side move to a trash folder rather than an `unlink`, and it can be undone. |
 
-Deletions are also skipped for files matched by `ignore`, for files with a transfer in flight, and while auto sync is paused.
+Deletions are also skipped for files matched by `ignore` or `uploadExclude`, for files with a transfer in flight, and while auto sync is paused.
 
 | Key | Value | Default |
 | --- | --- | --- |
@@ -876,9 +898,9 @@ save / watcher / scan / poll / command ─▶ change collector ─▶ upload pla
 
 **Sync index.** One JSON per destination (server, port, `remotePath` and profile), stored as `sync-index/<key>.json` under the extension's storage for the workspace (VS Code's `storageUri`; nothing is written inside your project). For every file it remembers the size and local mtime of the last **verified** upload, and whether that upload failed. It is fed only by verified transfers — an upload that passed verification, a download as it landed on disk — and by the mirroring of deletions and renames; it never records an attempt as a success. It also remembers the files you chose to skip, and whether it has been **seeded** — by `SFTP: Rebuild Sync Index`, or by a manual scan whose plan you confirmed and uploaded; a plain `uploadOnSave` adds entries but does not seed it. `SFTP: Rebuild Sync Index` rebuilds it from the server.
 
-**Collector.** Saves from the editor, watcher events, scan results and polling ticks all enter the same collector, keyed by path: a save also seen by the watcher is one upload, a file rewritten ten times in a burst is one upload. Editor saves are processed immediately; the rest is grouped for 700 ms (1.4 s at most). Ignored paths are dropped at the door, a change to a path whose upload is in flight is deferred to the next pass rather than lost, and directories are expanded into their files.
+**Collector.** Saves from the editor, watcher events, scan results and polling ticks all enter the same collector, keyed by path: a save also seen by the watcher is one upload, a file rewritten ten times in a burst is one upload. Editor saves are processed immediately; the rest is grouped for 700 ms (1.4 s at most). Ignored and upload-excluded paths are dropped at the door, a change to a path whose upload is in flight is deferred to the next pass rather than lost, and directories are expanded into their files.
 
-**Scans.** A scan walks the local tree with `ignore` pruning, compares each file's size and mtime with the index and plans the `new` and `modified` files. It runs on activation and on `sftp.json` reload ([externalChanges.scanOnStartup](#externalchangesscanonstartup)), on resume and on focus after five minutes or more ([externalChanges.scanOnResume](#externalchangesscanonresume)), on a timer ([watcher.pollInterval](#watcherpollinterval)) and on demand (`SFTP: Scan for External Changes`). On an unseeded index, automatic scans plan only `modified` files and ignore unindexed ones (counted in the output channel); a manual scan plans everything. An automatic scan is not repeated while an earlier scan plan is waiting for review; a manual one supersedes it.
+**Scans.** A scan walks the local tree with `ignore` and `uploadExclude` pruning, compares each file's size and mtime with the index and plans the `new` and `modified` files. It runs on activation and on `sftp.json` reload ([externalChanges.scanOnStartup](#externalchangesscanonstartup)), on resume and on focus after five minutes or more ([externalChanges.scanOnResume](#externalchangesscanonresume)), on a timer ([watcher.pollInterval](#watcherpollinterval)) and on demand (`SFTP: Scan for External Changes`). On an unseeded index, automatic scans plan only `modified` files and ignore unindexed ones (counted in the output channel); a manual scan plans everything. An automatic scan is not repeated while an earlier scan plan is waiting for review; a manual one supersedes it.
 
 **Plan.** Every batch is an upload plan: its source (watcher, scan, poll, command or git), one item per file with its reason (`new`, `modified`), status (`pending`, `uploading`, `verified`, `failed`, `skipped`, `stale`), attempts and error. Plans are listed in the **Upload plans** group of the SFTP Activity view; `SFTP: Preview Upload (Dry Run)` builds one without uploading, `SFTP: Upload Plan` runs it (or file by file from the view), `SFTP: Export Last Upload Report` writes it as Markdown, and plans can be removed or cleared. The status bar shows `↑N` pending and `✗N` failed uploads.
 

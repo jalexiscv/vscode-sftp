@@ -300,6 +300,7 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     useTempFile: config.useTempFile,
     openSsh: config.openSsh,
     ignore: config.ignore,
+    uploadExclude: config.uploadExclude,
     verifyUpload: config.verifyUpload,
     retries: config.uploadRetries,
   };
@@ -335,6 +336,17 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
 
   await mapWithConcurrency(items, COLLECT_CONCURRENCY, async item => {
     try {
+      // the collector and the scanner filter these out, but the config may
+      // have changed since the plan was built; the item must say why it was
+      // not sent rather than stay "uploading" or read as merely "ignored"
+      if (config.uploadExclude && config.uploadExclude(item.localPath)) {
+        updateItem(plan.id, item.localPath, {
+          status: 'skipped',
+          error: 'excluded from upload (uploadExclude)',
+        });
+        return;
+      }
+
       // resolved against the live config: remotePath may have changed since
       // the plan was built, and the item shows where the file really went
       const target = UResource.from(Uri.file(item.localPath), resourceConfig);

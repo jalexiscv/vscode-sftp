@@ -8,6 +8,7 @@ export default checkFileCommand({
   getFileTarget: uriFromExplorerContextOrEditorContext,
 
   async handleFile(ctx) {
-    await upload(ctx, { ignore: null });
+    // "force" disregards every exclusion list, uploadExclude included
+    await upload(ctx, { ignore: null, uploadExclude: null });
   },
 });

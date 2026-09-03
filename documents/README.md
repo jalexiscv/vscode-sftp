@@ -8,6 +8,7 @@ Fork correctivo de la extensión [Natizyskunk/vscode-sftp](https://github.com/Na
 |-----------|-------------|
 | [01-plan-migracion-basic-ftp.md](01-plan-migracion-basic-ftp.md) | Plan técnico para reemplazar el paquete `ftp` abandonado por `basic-ftp` (bugs FTP del backlog, pasos, riesgos) |
 | [02-analisis-cambios-externos-y-verificacion-carga.md](02-analisis-cambios-externos-y-verificacion-carga.md) | Análisis y propuesta para la próxima versión: detección de cambios hechos fuera de VS Code, plan/manifiesto de subida y verificación de carga (diagnóstico, diseño, fases) |
+| [03-exclusiones-de-transferencia.md](03-exclusiones-de-transferencia.md) | Los tres mecanismos de exclusión (`ignore`, temporales integrados y `uploadExclude`, solo de subida): cómo se resuelven, en qué caminos se aplica cada uno y decisiones de diseño |
 
 ## Protocolos
 

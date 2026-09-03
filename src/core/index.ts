@@ -4,8 +4,11 @@ import FileService, {
   WatcherService,
   FileServiceConfig,
   ServiceConfig,
+  PathMatcher,
   TransferResult,
   TransferScheduler,
+  uploadIgnoreOf,
+  isExcludedFromMirroring,
 } from './fileService';
 import UResource, { Resource } from './uResource';
 import Scheduler from './scheduler';
@@ -29,6 +32,9 @@ export {
   WatcherService,
   FileServiceConfig,
   ServiceConfig,
+  PathMatcher,
+  uploadIgnoreOf,
+  isExcludedFromMirroring,
   UResource,
   Resource,
   Scheduler,

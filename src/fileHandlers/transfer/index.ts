@@ -1,11 +1,37 @@
-import { TransferResult, TransferFailedError } from '../../core';
-import { markReported } from '../../helper';
+import { TransferResult, TransferFailedError, FileSystem, FileType } from '../../core';
+import { markReported, simplifyPath } from '../../helper';
+import { showInformationMessage } from '../../host';
+import logger from '../../logger';
 import { suppressAutoSync } from '../../modules/syncControl';
 import { refreshRemoteExplorer } from '../shared';
 import createFileHandler, { FileHandlerContext } from '../createFileHandler';
 import { transfer, sync, TransferOption, SyncOption, TransferDirection } from './transfer';
 
 type TransferAction = 'upload' | 'download' | 'sync';
+
+/**
+ * Whether the target of an upload handler is itself kept off the server by
+ * `uploadExclude`. Stat'ed so a `dir/` pattern can match a folder target; a
+ * target that does not exist is left to transfer() to report.
+ */
+async function isTargetUploadExcluded(
+  localFs: FileSystem,
+  localFsPath: string,
+  option: TransferOption
+): Promise<boolean> {
+  if (!option.uploadExclude) {
+    return false;
+  }
+
+  let isDirectory = false;
+  try {
+    const stat = await localFs.lstat(localFsPath);
+    isDirectory = stat.type === FileType.Directory;
+  } catch (error) {
+    return false;
+  }
+  return option.uploadExclude(localFsPath, isDirectory);
+}
 
 /**
  * Turns a batch with failures into a rejection, so a handler can no longer
@@ -26,9 +52,25 @@ function assertTransferSucceeded(result: TransferResult, action: TransferAction)
 
 function createTransferHandle(direction: TransferDirection) {
   async function run(this: FileHandlerContext, option) {
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
     const localFs = this.fileService.getLocalFileSystem();
     const { localFsPath, remoteFsPath } = this.target;
+
+    // Before connecting: nothing would be sent. The automatic paths (save,
+    // watcher, scan) filter excluded paths before they get here, so what
+    // reaches this point was asked for explicitly and deserves an answer.
+    if (
+      direction === TransferDirection.LOCAL_TO_REMOTE &&
+      (await isTargetUploadExcluded(localFs, localFsPath, option))
+    ) {
+      logger.info(`[upload] ${localFsPath} skipped: excluded from upload by uploadExclude`);
+      showInformationMessage(
+        `SFTP: ${simplifyPath(localFsPath)} is excluded from upload (uploadExclude). ` +
+          'Use "Force Upload" to send it anyway.'
+      );
+      return;
+    }
+
+    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
     const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
     let transferConfig;
 
@@ -118,6 +160,7 @@ export const sync2Remote = createFileHandler<SyncOption>({
       retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
+      uploadExclude: config.uploadExclude,
       delete: syncOption.delete,
       skipCreate: syncOption.skipCreate,
       ignoreExisting: syncOption.ignoreExisting,
@@ -183,6 +226,7 @@ export const upload = createFileHandler<TransferOption>({
       retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
+      uploadExclude: config.uploadExclude,
     };
   },
   afterHandle() {
@@ -203,6 +247,7 @@ export const uploadFile = createFileHandler<TransferOption>({
       retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
+      uploadExclude: config.uploadExclude,
     };
   },
   afterHandle() {
@@ -223,6 +268,7 @@ export const uploadFolder = createFileHandler<TransferOption>({
       retries: config.uploadRetries,
       // remoteTimeOffsetInHours: config.remoteTimeOffsetInHours,
       ignore: config.ignore,
+      uploadExclude: config.uploadExclude,
     };
   },
   afterHandle() {

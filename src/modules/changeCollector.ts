@@ -7,7 +7,7 @@ import StatusBarItem from '../ui/statusBarItem';
 import fsPromises from '../helper/fsPromises';
 import { isValidFile, isSamePath, fileDepth, toRemotePath } from '../helper';
 import { FileService, ServiceConfig, TransferDirection } from '../core';
-import { resolveExternalChangesConfig } from '../core/fileService';
+import { resolveExternalChangesConfig, uploadIgnoreOf } from '../core/fileService';
 import { getFileService, getRunningTransformTasks } from './serviceManager';
 import {
   isPaused,
@@ -323,6 +323,7 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
   }
 
   const index = await indexFor(service, config);
+  const skip = uploadIgnoreOf(config);
   const items: UploadPlanItemDraft[] = [];
   const seen = new Set<string>();
 
@@ -356,11 +357,11 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
     if (stat.isDirectory()) {
       // the admission guard tested the path as a file; a `dir/` pattern only
       // matches once the path is known to be a directory
-      if (config.ignore && config.ignore(item.fsPath, true)) {
+      if (skip && skip(item.fsPath, true)) {
         logger.debug(`[change-collector] ${item.fsPath} skipped: directory ignored by config`);
         continue;
       }
-      const scan = await scanLocalTree(item.fsPath, { ignore: config.ignore });
+      const scan = await scanLocalTree(item.fsPath, { ignore: skip });
       scan.files.forEach(file => addFile(file.fsPath, file.size, file.mtime));
       continue;
     }
@@ -467,7 +468,8 @@ async function processPending(mode: ProcessingMode): Promise<void> {
       continue;
     }
 
-    if (config.ignore && config.ignore(item.fsPath)) {
+    const skip = uploadIgnoreOf(config);
+    if (skip && skip(item.fsPath)) {
       logger.debug(`[change-collector] ${item.fsPath} skipped: ignored by config`);
       continue;
     }
@@ -629,7 +631,9 @@ export function enqueueChange(uri: vscode.Uri, source: ChangeSource): void {
     return;
   }
 
-  if (config.ignore && config.ignore(fsPath)) {
+  // `ignore` and `uploadExclude` alike: neither may restart the window
+  const skip = uploadIgnoreOf(config);
+  if (skip && skip(fsPath)) {
     logger.debug(`[change-collector] ${fsPath} skipped: ignored by config`);
     return;
   }

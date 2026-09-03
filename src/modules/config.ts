@@ -57,6 +57,11 @@ const configScheme = {
   tempFilePatterns: Joi.array()
     .min(0)
     .items(Joi.string()),
+  // gitignore patterns kept off the server in the local → remote direction
+  // only; see core/fileService
+  uploadExclude: Joi.array()
+    .min(0)
+    .items(Joi.string()),
   watcher: {
     files: Joi.string().allow(false, null),
     autoUpload: Joi.boolean(),
@@ -115,6 +120,7 @@ const defaultConfig = {
   // ignoreFile: undefined,
   ignoreTempFiles: true,
   tempFilePatterns: [],
+  uploadExclude: [],
   // watcher: {
   //   files: false,
   //   autoUpload: false,

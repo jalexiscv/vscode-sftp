@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import app from '../app';
 import { COMMAND_ACTIVITY_FOCUS, COMMAND_PLAN_PREVIEW } from '../constants';
-import { FileService, ServiceConfig, UResource } from '../core';
+import { FileService, ServiceConfig, UResource, uploadIgnoreOf } from '../core';
 import { isSubpathOf, reportError, simplifyPath } from '../helper';
 import {
   executeCommand,
@@ -188,7 +188,7 @@ export default checkCommand({
       },
       (progress, token) =>
         scanLocalTree(scopeDir, {
-          ignore: config.ignore,
+          ignore: uploadIgnoreOf(config),
           isCancelled: () => token.isCancellationRequested,
           onProgress: (files, dirs) => progress.report({ message: `${files} files in ${dirs} folders` }),
         })

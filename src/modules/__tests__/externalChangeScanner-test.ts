@@ -910,3 +910,36 @@ describe('rebuildSyncIndex', () => {
     expect(getPlans().length).toBe(1);
   });
 });
+
+describe('uploadExclude', () => {
+  // what a `/storage` pattern resolves to, on either side and either separator
+  const excludeStorage = (fsPath: string) => /[\\/]storage([\\/]|$)/.test(fsPath);
+
+  test('a scan leaves an excluded directory alone', async () => {
+    vol.fromJSON({ [p('a.txt')]: 'a', [p('storage', 'app.log')]: 'never uploaded' });
+    const service = fakeService({ uploadExclude: excludeStorage });
+    const index = await indexed(service, 'a.txt');
+    index.markSeeded();
+
+    const outcome = await runScan(service, 'manual');
+
+    expect(outcome.status).toBe('up-to-date');
+    expect(outcome.filesScanned).toBe(1);
+  });
+
+  test('a rebuild prunes it on both sides, like ignore', async () => {
+    vol.fromJSON({
+      [p('a.txt')]: 'a',
+      [p('storage', 'app.log')]: 'local log',
+      '/remote/a.txt': 'a',
+      '/remote/storage/app.log': 'remote log',
+      '/remote/storage/uploads/photo.jpg': 'photo',
+    });
+    const service = fakeService({ uploadExclude: excludeStorage });
+
+    const summary = await rebuildSyncIndex(service);
+
+    expect(summary).toMatchObject({ indexed: 1, differ: 0, onlyLocal: 0, onlyRemote: 0 });
+    expect((await indexFor(service)).get('storage/app.log')).toBeUndefined();
+  });
+});

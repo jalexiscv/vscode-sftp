@@ -4,7 +4,7 @@ import * as debounce from 'lodash.debounce';
 import logger from '../logger';
 import { isValidFile, isInWorkspace, fileDepth, isSamePath } from '../helper';
 import { removeRemote } from '../fileHandlers';
-import { WatcherService } from '../core';
+import { WatcherService, isExcludedFromMirroring } from '../core';
 import app from '../app';
 import StatusBarItem from '../ui/statusBarItem';
 import { getRunningTransformTasks, getFileService } from './serviceManager';
@@ -102,6 +102,25 @@ function serviceNameOf(uri: vscode.Uri): string | undefined {
   return fileService ? fileService.name : undefined;
 }
 
+/**
+ * Whether the config keeps the remote copy of a deleted path. removeRemote
+ * checks `ignore` on its own, but only as a file: a deleted directory can no
+ * longer be told from one, and `uploadExclude` is not its concern.
+ */
+function isKeptOnRemote(uri: vscode.Uri): boolean {
+  const fileService = getFileService(uri);
+  if (!fileService) {
+    return false;
+  }
+
+  try {
+    return isExcludedFromMirroring(fileService.getConfig(), uri.fsPath);
+  } catch (error) {
+    // an unusable config is reported by removeRemote itself
+    return false;
+  }
+}
+
 async function doDelete() {
   const files = Array.from(deleteQueue.values()).sort(
     (a, b) => fileDepth(b.fsPath) - fileDepth(a.fsPath)
@@ -135,6 +154,11 @@ async function doDelete() {
   const targets = dropDescendants(files).filter(uri => {
     if (runningTasks.find(task => isSamePath(task.localFsPath, uri.fsPath))) {
       logger.info(`[watcher/removed] skip ${uri.fsPath}, it belongs to a running transfer`);
+      return false;
+    }
+
+    if (isKeptOnRemote(uri)) {
+      logger.info(`[watcher/removed] skip ${uri.fsPath}, ignored or excluded by config`);
       return false;
     }
 

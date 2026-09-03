@@ -56,6 +56,13 @@ interface ServiceOption {
   ignoreFile: string;
   ignoreTempFiles: boolean;
   tempFilePatterns: string[];
+  /**
+   * gitignore patterns — typically directories — that never travel local →
+   * remote: not uploaded by any command, save, watcher, scan or sync, and
+   * whose remote copy is left alone when the local one is deleted or renamed.
+   * Unlike `ignore` they can still be downloaded, listed and diffed.
+   */
+  uploadExclude: string[];
   deleteRemoteOnLocalDelete: boolean;
   deleteRemoteConfirmThreshold: number;
   renameRemoteOnLocalRename: boolean;
@@ -122,19 +129,58 @@ export interface FileServiceConfig
   };
 }
 
+/**
+ * Whether `fsPath` (local or remote, absolute) matches a pattern list of the
+ * config. Pass `isDirectory` when the caller knows it holds a directory:
+ * gitignore patterns with a trailing slash (`node_modules/`) only match a
+ * directory, and only when it is tested as one.
+ */
+export type PathMatcher = (fsPath: string, isDirectory?: boolean) => boolean;
+
 export interface ServiceConfig
   extends Root,
     Host,
-    Omit<ServiceOption, 'ignore'>,
+    Omit<ServiceOption, 'ignore' | 'uploadExclude'>,
     SftpOption,
     FtpOption {
+  /** `ignore` (plus the built-in exclusions) as a matcher; null when empty */
+  ignore?: PathMatcher | null;
   /**
-   * Whether `fsPath` (local or remote, absolute) is excluded by the config.
-   * Pass `isDirectory` when the caller knows it holds a directory: gitignore
-   * patterns with a trailing slash (`node_modules/`) only match a directory,
-   * and only when it is tested as one.
+   * `uploadExclude` as a matcher; null when empty. Only the paths that go
+   * local → remote consult it — see {@link uploadIgnoreOf} for the combined
+   * check those paths use.
    */
-  ignore?: ((fsPath: string, isDirectory?: boolean) => boolean) | null;
+  uploadExclude?: PathMatcher | null;
+}
+
+/**
+ * The matcher every local → remote path consults: `ignore` (either direction)
+ * plus `uploadExclude` (this direction only). Null when neither is configured,
+ * so it can be handed straight to whatever expects an ignore function.
+ */
+export function uploadIgnoreOf(config: ServiceConfig): PathMatcher | null {
+  const ignore = config.ignore || null;
+  const excluded = config.uploadExclude || null;
+  if (!ignore) {
+    return excluded;
+  }
+  if (!excluded) {
+    return ignore;
+  }
+  return (fsPath, isDirectory) => ignore(fsPath, isDirectory) || excluded(fsPath, isDirectory);
+}
+
+/**
+ * Whether the deletion or rename of a local path must *not* be mirrored to the
+ * server. The path is gone by the time this is asked, so it cannot be stat'ed:
+ * it is tested both as a file and as a directory, and a `dir/` pattern that
+ * matches either way keeps the remote copy. Erring this way costs at most a
+ * deletion the user has to repeat by hand; erring the other way removes a
+ * directory the config said to leave alone.
+ */
+export function isExcludedFromMirroring(config: ServiceConfig, fsPath: string): boolean {
+  const matcher = uploadIgnoreOf(config);
+  return matcher !== null && (matcher(fsPath) || matcher(fsPath, true));
 }
 
 export interface WatcherService {
@@ -238,6 +284,7 @@ function getHostInfo(config) {
     'ignoreFile',
     'ignoreTempFiles',
     'tempFilePatterns',
+    'uploadExclude',
     'watcher',
     'concurrency',
     'syncOption',
@@ -433,7 +480,7 @@ function getCompleteConfig(
 // pattern lists accumulate base + profile instead of the profile replacing the
 // base, so a profile can narrow what gets uploaded without restating the
 // project-wide excludes
-const CONCATENATED_KEYS = ['ignore', 'tempFilePatterns'];
+const CONCATENATED_KEYS = ['ignore', 'tempFilePatterns', 'uploadExclude'];
 
 // nested option objects merge key by key, so `{"remoteTrash": {"enabled": false}}`
 // in a profile keeps the inherited path and retention
@@ -799,7 +846,14 @@ export default class FileService {
     if (serviceConfig.protocol === 'ftp') {
       serviceConfig.concurrency = 1;
     }
-    serviceConfig.ignore = this._createIgnoreFn(fileServiceConfig);
+    serviceConfig.ignore = this._createMatcher(
+      filesIgnoredFromConfig(fileServiceConfig),
+      fileServiceConfig.remotePath
+    );
+    serviceConfig.uploadExclude = this._createMatcher(
+      Array.isArray(fileServiceConfig.uploadExclude) ? fileServiceConfig.uploadExclude : [],
+      fileServiceConfig.remotePath
+    );
 
     return serviceConfig;
   }
@@ -815,16 +869,19 @@ export default class FileService {
     }
   }
 
-  private _createIgnoreFn(config: FileServiceConfig): ServiceConfig['ignore'] {
+  /**
+   * Turns a gitignore pattern list into a {@link PathMatcher} that accepts
+   * both local paths (under the base dir) and remote ones (under
+   * `remoteContext`), so one matcher serves either side of a transfer.
+   */
+  private _createMatcher(patterns: string[], remoteContext: string): PathMatcher | null {
     const localContext = this.baseDir;
-    const remoteContext = config.remotePath;
 
-    const ignoreConfig = filesIgnoredFromConfig(config);
-    if (ignoreConfig.length <= 0) {
+    if (patterns.length <= 0) {
       return null;
     }
 
-    const ignore = Ignore.from(ignoreConfig);
+    const ignore = Ignore.from(patterns);
     const isWindows = process.platform === 'win32';
     const ignoreFunc = (fsPath: string, isDirectory?: boolean) => {
       // vscode will always return path with / as separator
