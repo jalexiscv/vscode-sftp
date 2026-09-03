@@ -2,7 +2,11 @@ import * as vscode from 'vscode';
 import app from '../app';
 import logger from '../logger';
 import { FileService, ServiceConfig, FileSystem, FileEntry, FileType, upath } from '../core';
-import { resolveExternalChangesConfig, resolvePollInterval } from '../core/fileService';
+import {
+  resolveExternalChangesConfig,
+  resolvePollInterval,
+  uploadIgnoreOf,
+} from '../core/fileService';
 import { toRemotePath } from '../helper';
 import { showInformationMessage, withProgress } from '../host';
 import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../constants';
@@ -302,7 +306,7 @@ async function doScan(
   let diff: DiffAgainstIndexResult;
   try {
     scan = await scanLocalTree(service.baseDir, {
-      ignore: config.ignore,
+      ignore: uploadIgnoreOf(config),
       isCancelled,
       onProgress: (files, dirs) => {
         status(`${files} file(s) scanned`);
@@ -616,7 +620,7 @@ export async function rebuildSyncIndex(
   const remote = new Map<string, FileEntry>();
   logger.info(`[rebuild-index] ${name}: listing ${config.remotePath}`);
   const remoteCancelled = await walkRemote(remoteFs, config.remotePath, {
-    ignore: config.ignore,
+    ignore: uploadIgnoreOf(config),
     skipDir,
     isCancelled,
     onFile: entry => {
@@ -638,7 +642,7 @@ export async function rebuildSyncIndex(
   }
 
   const local = await scanLocalTree(service.baseDir, {
-    ignore: config.ignore,
+    ignore: uploadIgnoreOf(config),
     isCancelled,
     onProgress: files => {
       localFiles = files;

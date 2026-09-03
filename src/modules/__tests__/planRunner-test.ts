@@ -386,6 +386,21 @@ describe('runPlan', () => {
     expect(itemOf(plan, 'x.txt').error).toBe('no configuration covers this path');
   });
 
+  test('a path uploadExclude matches is skipped, and the item says why', async () => {
+    vol.fromJSON({ '/local/a.txt': 'a', '/local/storage/app.log': 'l' }, '/');
+    const service = createService(createRemoteFs(), {
+      uploadExclude: (fsPath: string) => /storage/.test(fsPath),
+    });
+    getFileServiceMock.mockImplementation(() => service);
+    const plan = planOf([draft('/local/a.txt'), draft('/local/storage/app.log')]);
+
+    const summary = await runPlan(plan.id);
+
+    expect(summary).toMatchObject({ verified: 1, skipped: 1, failed: 0 });
+    expect(itemOf(plan, 'app.log').error).toBe('excluded from upload (uploadExclude)');
+    expect(fs.existsSync('/remote/storage')).toBe(false);
+  });
+
   test('a connection failure fails every item of the service with the message', async () => {
     vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
     const service = createService(createRemoteFs());

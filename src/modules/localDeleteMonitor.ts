@@ -12,6 +12,7 @@ import {
   reportError,
   simplifyPath,
 } from '../helper';
+import { isExcludedFromMirroring } from '../core';
 import { removeRemote } from '../fileHandlers';
 import { renameRemote } from '../fileHandlers/rename';
 import { handleCtxFromUri } from '../fileHandlers/createFileHandler';
@@ -304,8 +305,10 @@ async function processDeletions() {
       continue;
     }
 
-    if (config.ignore && config.ignore(item.fsPath)) {
-      logger.debug(`[delete-monitor] ${item.fsPath} skipped: ignored by config`);
+    // `ignore` and `uploadExclude` alike: the remote copy of an excluded
+    // path is the server's, whatever happens to the local one
+    if (isExcludedFromMirroring(config, item.fsPath)) {
+      logger.debug(`[delete-monitor] ${item.fsPath} skipped: ignored or excluded by config`);
       continue;
     }
 
@@ -455,10 +458,13 @@ async function handleRename(oldUri: vscode.Uri, newUri: vscode.Uri) {
     return;
   }
 
-  // A rename out of an ignored path into a tracked one (or vice versa) isn't a
-  // rename as far as the remote is concerned; let the normal upload/delete
-  // paths handle those.
-  if (config.ignore && (config.ignore(oldUri.fsPath) || config.ignore(newUri.fsPath))) {
+  // A rename out of an ignored or excluded path into a tracked one (or vice
+  // versa) isn't a rename as far as the remote is concerned; let the normal
+  // upload/delete paths handle those.
+  if (
+    isExcludedFromMirroring(config, oldUri.fsPath) ||
+    isExcludedFromMirroring(config, newUri.fsPath)
+  ) {
     return;
   }
 
