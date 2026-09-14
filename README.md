@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.25.0](#novedades-de-la-v1250)
+- [Novedades de la v1.26.0](#novedades-de-la-v1260)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 730 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 757 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -120,16 +120,25 @@ Cada corrección fue verificada (build de webpack limpio, 730 tests, linter sin 
 | **Registro de actividad persistente** | Cada tarea —venga de un comando, de un guardado o del watcher— se registra con su ruta remota y el resultado de la verificación, y sobrevive a las recargas de la ventana (`activity-log.json`); los fallos previos a la transferencia (conexión, credenciales, permisos) también aparecen |
 | **Correcciones y endurecimiento** | `uploadFile()` rechaza cuando falla la transferencia; la supresión de la sincronización automática durante descargas se aplica de verdad; los patrones `dir/` de `ignore` podan el subárbol; se cortan los bucles de symlinks; los errores SFTP numéricos se describen. Dos revisiones adversariales antes de publicar; mientras el índice no está sembrado, los escaneos automáticos solo vuelven a subir lo que la propia extensión subió |
 
-## Novedades de la v1.25.0
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — exclusión solo de subida
 
-La v1.25.0 añade la pieza que faltaba en las listas de exclusión: carpetas que **nunca deben subirse** pero que sí quieres poder descargar. Hasta ahora `ignore` era la única lista, y actúa en las dos direcciones: proteger el `storage/` o el `public/uploads/` del servidor obligaba a renunciar también a bajarlos.
-
-| Novedad | Qué aporta |
-|---------|------------|
+| Área | Cambio |
+|------|--------|
 | **Exclusión solo de subida (`uploadExclude`)** | Una lista de patrones gitignore, con la misma sintaxis y anclaje que `ignore`, que nunca viaja hacia el servidor: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, el watcher, los escaneos y planes, `Upload Changed Files` y `Sync Local -> Remote` (con `syncOption.delete`, la copia remota tampoco se borra). En un perfil se suma a la lista base |
 | **El servidor conserva su copia** | Borrar o renombrar en local una ruta excluida no toca el servidor (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`); `Rebuild Sync Index` la poda en ambos lados |
 | **Lo que no cambia** | Las descargas, `Sync Remote -> Local`, el explorador remoto y el diff siguen viendo esas rutas; `Force Upload` omite la lista, como omite `ignore`. Un comando de subida sobre una ruta excluida lo avisa con una notificación y no conecta; `Upload Changed Files` lista los archivos apartados en un grupo propio |
 | **Corrección** | Un borrado local cuyo patrón `dir/` de `ignore` solo casa como directorio ya no se replica en el servidor: la ruta borrada se evalúa ahora como archivo y como directorio |
+
+## Novedades de la v1.26.0
+
+La v1.26.0 responde a un problema concreto: cuando un escaneo encontraba miles de archivos que la extensión nunca subió ella misma —un sitio espejado a mano o con `uploadOnSave` durante años—, solo podía subirlos, dejarlos pendientes u omitirlos. Ahora pueden **darse por subidos**, y el índice puede sembrarse desde el árbol local sin listar el servidor. Además, la lista `uploadExclude` se edita desde la propia interfaz.
+
+| Novedad | Qué aporta |
+|---------|------------|
+| **Dar por subido (`Mark as uploaded`)** | Cuarto botón en el diálogo de confirmación de cualquier plan, y `Mark Plan as Uploaded` / `Mark as Uploaded` sobre un plan o un archivo en la vista de actividad: los archivos se registran en el índice como ya presentes en el servidor, en su versión actual, sin transferir nada, y no vuelven a proponerse hasta que cambien. Estado propio `assumed`, distinto de `verified` en resúmenes, informes e iconos |
+| **Sembrar el índice sin listar el servidor** | `SFTP: Mark Local Files as Uploaded` (también `Mark all as uploaded` en el aviso de índice no construido) recorre el árbol local, muestra el recuento y, al confirmar, siembra el índice con todo lo que hay en local; a partir de ahí solo se propone lo que cambie. La alternativa rápida a `Rebuild Sync Index` para sitios con decenas de miles de archivos por FTP |
+| **Exclusiones de subida desde la interfaz** | Clic derecho sobre una carpeta → `SFTP: Exclude from Upload` (y `SFTP: Include in Upload Again` sobre una ya excluida), `SFTP: Manage Upload Exclusions` para revisar, añadir o quitar entradas, y una lista con `×` en el administrador de conexiones. Todo escribe la lista `uploadExclude` de `sftp.json`, respetando su formato |
+| **Seguridad** | El log `config at …` del canal de salida enmascaraba la contraseña de la raíz pero no la de cada perfil; ahora enmascara ambas |
 
 ## Qué esperamos de esta versión
 
@@ -155,7 +164,7 @@ La v1.25.0 añade la pieza que faltaba en las listas de exclusión: carpetas que
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## Documentación

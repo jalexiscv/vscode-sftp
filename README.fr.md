@@ -19,7 +19,7 @@ VSCode-SFTP vous permet d'ajouter, de modifier ou de supprimer des fichiers dans
 
 - [Pourquoi ce fork existe](#pourquoi-ce-fork-existe)
 - [Ce que nous avons mis à jour](#ce-que-nous-avons-mis-à-jour)
-- [Nouveautés de la v1.25.0](#nouveautés-de-la-v1250)
+- [Nouveautés de la v1.26.0](#nouveautés-de-la-v1260)
 - [Ce que nous attendons de cette version](#ce-que-nous-attendons-de-cette-version)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 730 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 757 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -120,16 +120,25 @@ Chaque correction a été vérifiée (build webpack propre, 730 tests, linter sa
 | **Journal d'activité persistant** | Chaque tâche — venue d'une commande, d'une sauvegarde ou du watcher — est enregistrée avec le chemin distant et le résultat de la vérification, et survit aux rechargements de la fenêtre (`activity-log.json`) ; les échecs antérieurs au transfert (connexion, identifiants, permissions) apparaissent aussi |
 | **Corrections et durcissement** | `uploadFile()` rejette quand le transfert échoue ; la suspension de la synchronisation automatique pendant les téléchargements est réellement appliquée ; les motifs `dir/` de `ignore` élaguent le sous-arbre ; les boucles de liens symboliques sont coupées ; les erreurs SFTP numériques sont décrites. Deux revues adversariales avant publication ; tant que l'index n'est pas amorcé, les analyses automatiques ne renvoient que ce que l'extension a elle-même envoyé |
 
-## Nouveautés de la v1.25.0
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — exclusion d'envoi seule
 
-La v1.25.0 ajoute la pièce manquante des listes d'exclusion : des dossiers qui ne doivent **jamais être envoyés** mais que vous voulez quand même pouvoir télécharger. Jusqu'ici `ignore` était la seule liste, et elle agit dans les deux sens : protéger le `storage/` ou le `public/uploads/` du serveur revenait à renoncer aussi à les télécharger.
-
-| Nouveauté | Ce que cela apporte |
-|-----------|---------------------|
+| Domaine | Changement |
+|---------|------------|
 | **Exclusion d'envoi seule (`uploadExclude`)** | Une liste de motifs gitignore, avec la même syntaxe et le même ancrage que `ignore`, qui ne part jamais vers le serveur : `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, le watcher, les analyses et les plans, `Upload Changed Files` et `Sync Local -> Remote` (avec `syncOption.delete`, la copie distante n'est pas supprimée non plus). Dans un profil, elle s'ajoute à la liste de base |
 | **Le serveur garde sa copie** | Supprimer ou renommer en local un chemin exclu ne touche pas au serveur (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`) ; `Rebuild Sync Index` l'élague des deux côtés |
 | **Ce qui ne change pas** | Les téléchargements, `Sync Remote -> Local`, l'explorateur distant et le diff voient toujours ces chemins ; `Force Upload` ignore la liste, comme il ignore `ignore`. Une commande d'envoi sur un chemin exclu le signale par une notification et ne se connecte pas ; `Upload Changed Files` liste les fichiers mis de côté dans un groupe à part |
 | **Correction** | Une suppression locale dont le motif `dir/` de `ignore` ne correspond qu'à un répertoire n'est plus répercutée sur le serveur : le chemin supprimé est désormais testé à la fois comme fichier et comme répertoire |
+
+## Nouveautés de la v1.26.0
+
+La v1.26.0 répond à un problème concret : quand une analyse trouvait des milliers de fichiers que l'extension n'avait jamais envoyés elle-même — un site répliqué à la main ou avec `uploadOnSave` pendant des années —, on ne pouvait que les envoyer, les laisser en attente ou les ignorer. Ils peuvent désormais être **marqués comme envoyés**, et l'index peut être amorcé depuis l'arborescence locale sans lister le serveur. La liste `uploadExclude` s'édite en outre depuis l'interface.
+
+| Nouveauté | Ce que cela apporte |
+|-----------|---------------------|
+| **Marquer comme envoyé (`Mark as uploaded`)** | Un quatrième bouton dans la boîte de confirmation de tout plan, et `Mark Plan as Uploaded` / `Mark as Uploaded` sur un plan ou un fichier dans la vue d'activité : les fichiers sont enregistrés dans l'index comme déjà présents sur le serveur, dans leur version actuelle, sans rien transférer, et ne sont plus proposés tant qu'ils ne changent pas. Un état propre `assumed`, distinct de `verified` dans les résumés, les rapports et les icônes |
+| **Amorcer l'index sans lister le serveur** | `SFTP: Mark Local Files as Uploaded` (aussi `Mark all as uploaded` dans l'avis d'index non construit) parcourt l'arborescence locale, affiche le nombre et, une fois confirmé, amorce l'index avec tout ce qui est en local ; ensuite seul ce qui change est proposé. L'alternative rapide à `Rebuild Sync Index` pour les sites de dizaines de milliers de fichiers en FTP |
+| **Exclusions d'envoi depuis l'interface** | Clic droit sur un dossier → `SFTP: Exclude from Upload` (et `SFTP: Include in Upload Again` sur un dossier exclu), `SFTP: Manage Upload Exclusions` pour revoir, ajouter ou retirer des entrées, et une liste avec `×` dans le gestionnaire de connexions. Tous écrivent la liste `uploadExclude` de `sftp.json` en respectant son format |
+| **Sécurité** | La ligne `config at …` du canal de sortie masquait le mot de passe de la racine mais pas celui de chaque profil ; les deux sont désormais masqués |
 
 ## Ce que nous attendons de cette version
 
@@ -155,7 +164,7 @@ La v1.25.0 ajoute la pièce manquante des listes d'exclusion : des dossiers qui 
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## Documentation

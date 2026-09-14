@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.25.0](#neuerungen-in-v1250)
+- [Neuerungen in v1.26.0](#neuerungen-in-v1260)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 730 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 757 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -120,16 +120,25 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Persistentes Aktivitätsprotokoll** | Jede Aufgabe — aus einem Befehl, einem Speichern oder dem Watcher — wird mit Remote-Pfad und Verifizierungsergebnis protokolliert und überlebt das Neuladen des Fensters (`activity-log.json`); auch Fehler vor der Übertragung (Verbindung, Zugangsdaten, Berechtigungen) erscheinen |
 | **Korrekturen und Härtung** | `uploadFile()` lehnt ab, wenn die Übertragung fehlschlägt; die Unterdrückung der automatischen Synchronisierung während Downloads greift tatsächlich; `dir/`-Muster in `ignore` beschneiden den Teilbaum; Symlink-Schleifen werden unterbrochen; numerische SFTP-Fehler werden beschrieben. Zwei adversariale Reviews vor der Veröffentlichung; bis der Index aufgebaut ist, laden automatische Scans nur erneut hoch, was die Erweiterung selbst hochgeladen hat |
 
-## Neuerungen in v1.25.0
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — Nur-Upload-Ausschluss
 
-v1.25.0 ergänzt das fehlende Stück der Ausschlusslisten: Ordner, die **nie hochgeladen** werden dürfen, die du aber weiterhin herunterladen können willst. Bisher war `ignore` die einzige Liste, und sie wirkt in beide Richtungen — `storage/` oder `public/uploads/` des Servers zu schützen hieß, auch auf deren Download zu verzichten.
-
-| Neuerung | Was sie bringt |
-|----------|----------------|
+| Bereich | Änderung |
+|---------|----------|
 | **Nur-Upload-Ausschluss (`uploadExclude`)** | Eine Liste von gitignore-Mustern, mit derselben Syntax und Verankerung wie `ignore`, die nie zum Server wandert: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, der Watcher, Scans und Pläne, `Upload Changed Files` und `Sync Local -> Remote` (mit `syncOption.delete` wird die Remote-Kopie auch nicht gelöscht). In einem Profil wird sie zur Basisliste hinzugefügt |
 | **Der Server behält seine Kopie** | Einen ausgeschlossenen Pfad lokal zu löschen oder umzubenennen lässt den Server unberührt (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`); `Rebuild Sync Index` beschneidet ihn auf beiden Seiten |
 | **Was sich nicht ändert** | Downloads, `Sync Remote -> Local`, der Remote-Explorer und der Diff sehen diese Pfade weiterhin; `Force Upload` umgeht die Liste, wie es `ignore` umgeht. Ein Upload-Befehl auf einen ausgeschlossenen Pfad meldet das in einer Benachrichtigung und verbindet sich nicht; `Upload Changed Files` listet die beiseitegelegten Dateien in einer eigenen Gruppe |
 | **Korrektur** | Eine lokale Löschung, deren `dir/`-Muster in `ignore` nur als Verzeichnis passt, wird nicht mehr auf den Server gespiegelt: Der gelöschte Pfad wird jetzt sowohl als Datei als auch als Verzeichnis geprüft |
+
+## Neuerungen in v1.26.0
+
+v1.26.0 beantwortet ein konkretes Problem: Fand ein Scan Tausende Dateien, die die Erweiterung nie selbst hochgeladen hatte — eine seit Jahren von Hand oder mit `uploadOnSave` gespiegelte Site —, blieb nur, sie hochzuladen, offen zu lassen oder zu überspringen. Jetzt können sie **als hochgeladen markiert** werden, und der Index lässt sich aus dem lokalen Baum säen, ohne den Server aufzulisten. Außerdem wird die Liste `uploadExclude` aus der Oberfläche heraus bearbeitet.
+
+| Neuerung | Was sie bringt |
+|----------|----------------|
+| **Als hochgeladen markieren (`Mark as uploaded`)** | Ein vierter Button im Bestätigungsdialog jedes Plans sowie `Mark Plan as Uploaded` / `Mark as Uploaded` auf einem Plan oder einer Datei in der Aktivitätsansicht: Die Dateien werden im Index als bereits auf dem Server vorhanden vermerkt, in ihrer aktuellen Version, ohne Übertragung, und erst wieder vorgeschlagen, wenn sie sich ändern. Eigener Status `assumed`, in Zusammenfassungen, Berichten und Symbolen von `verified` unterschieden |
+| **Index säen, ohne den Server aufzulisten** | `SFTP: Mark Local Files as Uploaded` (auch `Mark all as uploaded` im Hinweis zum nicht gebauten Index) durchläuft den lokalen Baum, zeigt die Anzahl und sät nach Bestätigung den Index mit allem, was lokal liegt; ab dann wird nur vorgeschlagen, was sich ändert. Die schnelle Alternative zu `Rebuild Sync Index` für Sites mit Zehntausenden Dateien über FTP |
+| **Upload-Ausschlüsse aus der Oberfläche** | Rechtsklick auf einen Ordner → `SFTP: Exclude from Upload` (und `SFTP: Include in Upload Again` auf einem ausgeschlossenen), `SFTP: Manage Upload Exclusions` zum Prüfen, Hinzufügen und Entfernen von Einträgen sowie eine Liste mit `×` im Verbindungsmanager. Alle schreiben die Liste `uploadExclude` in `sftp.json` und behalten deren Formatierung bei |
+| **Sicherheit** | Die Zeile `config at …` im Ausgabekanal maskierte das Passwort der Basis, nicht aber das jedes Profils; jetzt werden beide maskiert |
 
 ## Was wir von dieser Version erwarten
 
@@ -155,7 +164,7 @@ v1.25.0 ergänzt das fehlende Stück der Ausschlusslisten: Ordner, die **nie hoc
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## Dokumentation
