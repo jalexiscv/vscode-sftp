@@ -134,6 +134,8 @@ Use `uploadExclude` (since 1.25.0). It takes the same gitignore patterns as `ign
 
 `ignore` remains the list for paths that must not be transferred in either direction. `Force Upload` bypasses both. See [uploadExclude](docs/configuration.md#uploadexclude).
 
+You do not have to edit the file: right-click the folder in the explorer and pick `SFTP: Exclude from Upload` (the same menu offers `SFTP: Include in Upload Again` once it is excluded), run `SFTP: Manage Upload Exclusions` to review, add or remove entries, or use the list in `SFTP: Open Connection Manager`.
+
 ## How can I upload files as root?
 
 See [vscode-sftp issue #559](https://github.com/liximomo/vscode-sftp/issues/559).

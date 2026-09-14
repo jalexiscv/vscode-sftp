@@ -426,6 +426,8 @@ Unlike [ignore](#ignore), which applies to both directions, an excluded path can
 
 Same syntax and anchoring as `ignore`, relative to the context: `/storage` anchors at the root, `uploads/` matches a directory at any depth. In a profile the list is added to the base one, like `ignore`.
 
+The list can be edited without opening the file: right-click a folder in the explorer → `SFTP: Exclude from Upload` (and `SFTP: Include in Upload Again` on an excluded one), `SFTP: Manage Upload Exclusions` for the whole list, or the **Connection Manager**, which shows it per connection with an input and a `×` per entry. See [commands](commands.md#sftp-exclude-from-upload--sftp-include-in-upload-again--sftp-manage-upload-exclusions).
+
 | Key | Value | Default |
 | --- | --- | --- |
 | *uploadExclude* | *string[]* | `[]` |
