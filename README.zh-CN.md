@@ -19,7 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
-- [v1.25.0 新功能](#v1250-新功能)
+- [v1.26.0 新功能](#v1260-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、730 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、757 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -120,16 +120,25 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **持久化的活动记录** | 每个任务——无论来自命令、保存还是 watcher——都会连同远程路径和验证结果被记录，并在窗口重新加载后保留（`activity-log.json`）；传输开始前的失败（连接、凭据、权限）也会显示 |
 | **修复与加固** | `uploadFile()` 在传输失败时会拒绝；下载期间对自动同步的抑制真正生效；`ignore` 中的 `dir/` 模式会整体剪除子树；切断符号链接循环；数字形式的 SFTP 错误有了描述。发布前进行了两轮对抗性评审；在索引建立之前，自动扫描只会重新上传扩展自己上传过的文件 |
 
-## v1.25.0 新功能
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — 仅上传排除
 
-v1.25.0 补上了排除列表缺失的一块：那些**绝不能上传**、但你仍希望能够下载的文件夹。此前 `ignore` 是唯一的列表，而且它对两个方向都生效——要保护服务器上的 `storage/` 或 `public/uploads/`，就意味着也放弃下载它们。
-
-| 新功能 | 作用 |
-|--------|------|
+| 领域 | 变更 |
+|------|------|
 | **仅上传排除（`uploadExclude`）** | 一组 gitignore 模式，语法和锚定方式与 `ignore` 相同，但永远不会传到服务器：`Upload File` / `Upload Folder` / `Upload Project`、`uploadOnSave`、watcher、扫描与计划、`Upload Changed Files` 以及 `Sync Local -> Remote`（启用 `syncOption.delete` 时，远程副本也不会被删除）。在 profile 中它会追加到基础列表上 |
 | **服务器保留自己的副本** | 在本地删除或重命名被排除的路径不会影响服务器（`deleteRemoteOnLocalDelete`、`renameRemoteOnLocalRename`、`watcher.autoDelete`）；`Rebuild Sync Index` 会在两侧一并剪除它 |
 | **不变的部分** | 下载、`Sync Remote -> Local`、远程资源管理器和对比仍然能看到这些路径；`Force Upload` 会绕过该列表，就像它绕过 `ignore` 一样。对被排除路径执行上传命令时会弹出通知说明，并且不会建立连接；`Upload Changed Files` 会把被搁置的文件单独列成一组 |
 | **修复** | 本地删除的路径若只在 `ignore` 的 `dir/` 模式中按目录匹配，将不再被镜像到服务器：被删除的路径现在会同时按文件和按目录进行测试 |
+
+## v1.26.0 新功能
+
+v1.26.0 解决一个具体问题：当扫描发现成千上万个扩展从未自行上传过的文件——多年来手工或通过 `uploadOnSave` 镜像的站点——此前只能上传、搁置或跳过它们。现在可以把它们**视为已上传**，并且无需列出服务器就能从本地目录树播种索引。此外，`uploadExclude` 列表可以直接在界面中编辑。
+
+| 新功能 | 作用 |
+|--------|------|
+| **视为已上传（`Mark as uploaded`）** | 任何计划的确认对话框新增第四个按钮，活动视图中的计划或文件上也有 `Mark Plan as Uploaded` / `Mark as Uploaded`：文件以当前版本记入索引，视为已在服务器上，不传输任何内容，直到再次变更前不会被提议。独立的 `assumed` 状态，在摘要、报告和图标中与 `verified` 区分 |
+| **无需列出服务器即可播种索引** | `SFTP: Mark Local Files as Uploaded`（索引未构建提示中的 `Mark all as uploaded` 同样可用）遍历本地目录树，显示数量，确认后用本地现有的一切播种索引；此后只提议发生变更的文件。对于通过 FTP 管理数万个文件的站点，这是 `Rebuild Sync Index` 的快速替代方案 |
+| **在界面中管理上传排除** | 右键文件夹 → `SFTP: Exclude from Upload`（已排除的文件夹上则显示 `SFTP: Include in Upload Again`），`SFTP: Manage Upload Exclusions` 用于查看、添加或删除条目，连接管理器中也有带 `×` 的列表。它们都写入 `sftp.json` 的 `uploadExclude` 列表并保留其格式 |
+| **安全** | 输出通道中的 `config at …` 行只遮蔽了根级密码，未遮蔽每个 profile 的密码；现在两者都会被遮蔽 |
 
 ## 我们对这个版本的期望
 
@@ -155,7 +164,7 @@ v1.25.0 补上了排除列表缺失的一块：那些**绝不能上传**、但�
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## 文档

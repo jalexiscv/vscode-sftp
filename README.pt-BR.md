@@ -19,7 +19,7 @@ O VSCode-SFTP permite adicionar, editar ou excluir arquivos em um diretório loc
 
 - [Por que este fork existe](#por-que-este-fork-existe)
 - [O que atualizamos](#o-que-atualizamos)
-- [Novidades da v1.25.0](#novidades-da-v1250)
+- [Novidades da v1.26.0](#novidades-da-v1260)
 - [O que esperamos desta versão](#o-que-esperamos-desta-versão)
 - [Instalação](#instalação)
 - [Documentação](#documentação)
@@ -46,7 +46,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 730 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 757 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -120,16 +120,25 @@ Cada correção foi verificada (build do webpack limpo, 730 testes, linter sem e
 | **Registro de atividade persistente** | Cada tarefa — venha de um comando, de um salvamento ou do watcher — é registrada com o caminho remoto e o resultado da verificação, e sobrevive aos recarregamentos da janela (`activity-log.json`); as falhas anteriores à transferência (conexão, credenciais, permissões) também aparecem |
 | **Correções e endurecimento** | `uploadFile()` rejeita quando a transferência falha; a supressão da sincronização automática durante downloads passa a valer de fato; os padrões `dir/` do `ignore` podam a subárvore; laços de symlinks são cortados; erros SFTP numéricos são descritos. Duas revisões adversariais antes de publicar; enquanto o índice não é semeado, as varreduras automáticas só reenviam o que a própria extensão enviou |
 
-## Novidades da v1.25.0
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — exclusão só de envio
 
-A v1.25.0 acrescenta a peça que faltava nas listas de exclusão: pastas que **nunca devem ser enviadas**, mas que você ainda quer poder baixar. Até agora o `ignore` era a única lista, e ele age nas duas direções — proteger o `storage/` ou o `public/uploads/` do servidor significava abrir mão de baixá-los também.
-
-| Novidade | O que traz |
-|----------|------------|
+| Área | Mudança |
+|------|---------|
 | **Exclusão só de envio (`uploadExclude`)** | Uma lista de padrões gitignore, com a mesma sintaxe e ancoragem do `ignore`, que nunca viaja para o servidor: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, o watcher, varreduras e planos, `Upload Changed Files` e `Sync Local -> Remote` (com `syncOption.delete`, a cópia remota também não é apagada). Num perfil, soma-se à lista base |
 | **O servidor mantém sua cópia** | Apagar ou renomear localmente um caminho excluído não toca no servidor (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`); `Rebuild Sync Index` o poda dos dois lados |
 | **O que não muda** | Downloads, `Sync Remote -> Local`, o explorador remoto e o diff continuam vendo esses caminhos; `Force Upload` ignora a lista, como ignora o `ignore`. Um comando de envio sobre um caminho excluído avisa numa notificação e não conecta; `Upload Changed Files` lista os arquivos separados num grupo próprio |
 | **Correção** | Uma exclusão local cujo padrão `dir/` do `ignore` só casa como diretório não é mais espelhada no servidor: o caminho apagado agora é testado como arquivo e como diretório |
+
+## Novidades da v1.26.0
+
+A v1.26.0 responde a um problema concreto: quando uma varredura encontrava milhares de arquivos que a extensão nunca tinha enviado ela mesma — um site espelhado à mão ou com `uploadOnSave` durante anos —, só dava para enviá-los, deixá-los pendentes ou pulá-los. Agora eles podem ser **dados como enviados**, e o índice pode ser semeado a partir da árvore local sem listar o servidor. Além disso, a lista `uploadExclude` é editada na própria interface.
+
+| Novidade | O que traz |
+|----------|------------|
+| **Dar como enviado (`Mark as uploaded`)** | Um quarto botão no diálogo de confirmação de qualquer plano, e `Mark Plan as Uploaded` / `Mark as Uploaded` sobre um plano ou um arquivo na visão de atividade: os arquivos são registrados no índice como já presentes no servidor, na versão atual, sem transferir nada, e não voltam a ser propostos até mudarem. Estado próprio `assumed`, distinto de `verified` em resumos, relatórios e ícones |
+| **Semear o índice sem listar o servidor** | `SFTP: Mark Local Files as Uploaded` (também `Mark all as uploaded` no aviso de índice não construído) percorre a árvore local, mostra a contagem e, ao confirmar, semeia o índice com tudo o que há em local; daí em diante só se propõe o que mudar. A alternativa rápida ao `Rebuild Sync Index` para sites com dezenas de milhares de arquivos por FTP |
+| **Exclusões de envio pela interface** | Clique direito numa pasta → `SFTP: Exclude from Upload` (e `SFTP: Include in Upload Again` numa já excluída), `SFTP: Manage Upload Exclusions` para revisar, adicionar ou remover entradas, e uma lista com `×` no gerenciador de conexões. Tudo escreve a lista `uploadExclude` do `sftp.json`, respeitando seu formato |
+| **Segurança** | A linha `config at …` do canal de saída mascarava a senha da raiz, mas não a de cada perfil; agora mascara ambas |
 
 ## O que esperamos desta versão
 
@@ -155,7 +164,7 @@ A v1.25.0 acrescenta a peça que faltava nas listas de exclusão: pastas que **n
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## Documentação

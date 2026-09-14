@@ -19,7 +19,7 @@ VSCode-SFTP lets you add, edit, or delete files in a local directory and sync th
 
 - [Why this fork exists](#why-this-fork-exists)
 - [What we updated](#what-we-updated)
-- [What's new in v1.25.0](#whats-new-in-v1250)
+- [What's new in v1.26.0](#whats-new-in-v1260)
 - [What we expect from this release](#what-we-expect-from-this-release)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 730 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 757 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -120,16 +120,25 @@ Every fix was verified (clean webpack build, 730 tests, linter with no errors) b
 | **Persistent activity log** | Every task — from a command, a save or the watcher — is recorded with its remote path and verification result and survives window reloads (`activity-log.json`); failures before the transfer (connection, credentials, permissions) show up too |
 | **Fixes and hardening** | `uploadFile()` rejects when the transfer fails; the suppression of automatic sync during downloads is really applied; `dir/` patterns in `ignore` prune the subtree; symlink loops are cut; numeric SFTP errors are described. Two adversarial reviews before shipping; until the index is seeded, automatic scans only re-upload what the extension uploaded itself |
 
-## What's new in v1.25.0
+### [v1.25.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.25.0) — upload-only exclusions
 
-v1.25.0 adds the missing piece of the exclusion lists: folders that must **never be uploaded** but that you still want to be able to download. Until now `ignore` was the only list, and it works in both directions — protecting the server's `storage/` or `public/uploads/` meant giving up downloading them too.
-
-| Feature | What it gives you |
-|---------|-------------------|
+| Area | Change |
+|------|--------|
 | **Upload-only exclusion (`uploadExclude`)** | A list of gitignore patterns, with the same syntax and anchoring as `ignore`, that never travels to the server: `Upload File` / `Upload Folder` / `Upload Project`, `uploadOnSave`, the watcher, scans and plans, `Upload Changed Files` and `Sync Local -> Remote` (with `syncOption.delete`, the remote copy is not deleted either). In a profile it is added to the base list |
 | **The server keeps its copy** | Deleting or renaming an excluded path locally leaves the server alone (`deleteRemoteOnLocalDelete`, `renameRemoteOnLocalRename`, `watcher.autoDelete`); `Rebuild Sync Index` prunes it on both sides |
 | **What does not change** | Downloads, `Sync Remote -> Local`, the Remote Explorer and diffs still see those paths; `Force Upload` bypasses the list, as it bypasses `ignore`. An upload command on an excluded path says so in a notification and does not connect; `Upload Changed Files` lists the files it set aside in a group of its own |
 | **Fix** | A local deletion whose `dir/` pattern in `ignore` only matches as a directory is no longer mirrored to the server: the deleted path is now tested both as a file and as a directory |
+
+## What's new in v1.26.0
+
+v1.26.0 answers one concrete problem: when a scan found thousands of files the extension had never uploaded itself — a site mirrored by hand or with `uploadOnSave` for years — the only answers were to upload them, leave them pending or skip them. They can now be **marked as uploaded**, and the index can be seeded from the local tree without listing the server. The `uploadExclude` list is also edited from the interface.
+
+| Feature | What it gives you |
+|---------|-------------------|
+| **Mark as uploaded** | A fourth button in the confirmation dialog of any plan, and `Mark Plan as Uploaded` / `Mark as Uploaded` on a plan or a file in the activity view: the files are recorded in the index as being on the server already, in their current version, without transferring anything, and are not proposed again until they change. Their own `assumed` status, told apart from `verified` in summaries, reports and icons |
+| **Seed the index without listing the server** | `SFTP: Mark Local Files as Uploaded` (also `Mark all as uploaded` on the unbuilt-index notice) walks the local tree, shows the count and, once confirmed, seeds the index with everything that is local; from then on only what changes is proposed. The fast alternative to `Rebuild Sync Index` for sites with tens of thousands of files over FTP |
+| **Upload exclusions from the interface** | Right-click a folder → `SFTP: Exclude from Upload` (and `SFTP: Include in Upload Again` on an excluded one), `SFTP: Manage Upload Exclusions` to review, add or remove entries, and a list with `×` in the connection manager. All of them write the `uploadExclude` list of `sftp.json`, keeping its formatting |
+| **Security** | The `config at …` line of the output channel masked the root password but not each profile's; both are masked now |
 
 ## What we expect from this release
 
@@ -155,7 +164,7 @@ v1.25.0 adds the missing piece of the exclusion lists: folders that must **never
 Or from the command line:
 
 ```
-code --install-extension sftp-1.25.0.vsix
+code --install-extension sftp-1.26.0.vsix
 ```
 
 ## Documentation

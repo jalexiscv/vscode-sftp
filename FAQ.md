@@ -136,6 +136,12 @@ Use `uploadExclude` (since 1.25.0). It takes the same gitignore patterns as `ign
 
 You do not have to edit the file: right-click the folder in the explorer and pick `SFTP: Exclude from Upload` (the same menu offers `SFTP: Include in Upload Again` once it is excluded), run `SFTP: Manage Upload Exclusions` to review, add or remove entries, or use the list in `SFTP: Open Connection Manager`.
 
+## The scan wants to upload thousands of files that are already on the server. How do I tell it so?
+
+Since 1.26.0 you can **mark them as uploaded** instead of uploading, skipping or leaving them pending. In the confirmation dialog pick `Mark as uploaded`: the files are recorded in the sync index as being on the server already, in their current version, nothing is transferred, and only files that change from then on are proposed. The same answer is available on a whole plan (`Mark Plan as Uploaded`) or a single file (`Mark as Uploaded`) in the SFTP Activity view; items settled this way show as `assumed`, apart from `verified`.
+
+If the index was never built (the notice `the sync index for … is not built yet` and `N unindexed file(s) ignored until the index is built` in the output channel) and the local tree is what the server holds, run `SFTP: Mark Local Files as Uploaded` — or pick `Mark all as uploaded` on that notice. It walks the local tree, shows the count and seeds the index from it without listing the server, which over FTP with tens of thousands of files is the difference between a few seconds and many minutes. Use `SFTP: Rebuild Sync Index` instead when you want the server actually listed and compared.
+
 ## How can I upload files as root?
 
 See [vscode-sftp issue #559](https://github.com/liximomo/vscode-sftp/issues/559).
