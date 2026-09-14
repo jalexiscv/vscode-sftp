@@ -120,3 +120,8 @@ export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
 export const COMMAND_SCAN_EXTERNAL_CHANGES = 'sftp.scanExternalChanges';
 export const COMMAND_REBUILD_SYNC_INDEX = 'sftp.rebuildSyncIndex';
 export const COMMAND_MARK_LOCAL_TREE_UPLOADED = 'sftp.markLocalTreeUploaded';
+
+// lista uploadExclude editada desde la interfaz (explorador y QuickPick)
+export const COMMAND_UPLOAD_EXCLUDE_ADD = 'sftp.uploadExclude.add';
+export const COMMAND_UPLOAD_EXCLUDE_REMOVE = 'sftp.uploadExclude.remove';
+export const COMMAND_UPLOAD_EXCLUDE_MANAGE = 'sftp.uploadExclude.manage';

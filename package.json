@@ -461,6 +461,24 @@
         "title": "Mark Local Files as Uploaded",
         "category": "SFTP",
         "icon": "$(check-all)"
+      },
+      {
+        "command": "sftp.uploadExclude.add",
+        "title": "Exclude from Upload",
+        "category": "SFTP",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "sftp.uploadExclude.remove",
+        "title": "Include in Upload Again",
+        "category": "SFTP",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "sftp.uploadExclude.manage",
+        "title": "Manage Upload Exclusions",
+        "category": "SFTP",
+        "icon": "$(list-filter)"
       }
     ],
     "menus": {
@@ -712,9 +730,31 @@
         {
           "command": "sftp.markLocalTreeUploaded",
           "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.uploadExclude.add",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.uploadExclude.remove",
+          "when": "false"
+        },
+        {
+          "command": "sftp.uploadExclude.manage",
+          "when": "sftp.enabled"
         }
       ],
       "explorer/context": [
+        {
+          "command": "sftp.uploadExclude.add",
+          "group": "sftp.exclude@1",
+          "when": "sftp.enabled && !explorerResourceIsRoot && !(resourcePath in sftp.uploadExcludedPaths)"
+        },
+        {
+          "command": "sftp.uploadExclude.remove",
+          "group": "sftp.exclude@1",
+          "when": "sftp.enabled && !explorerResourceIsRoot && resourcePath in sftp.uploadExcludedPaths"
+        },
         {
           "command": "sftp.revealInRemoteExplorer",
           "group": "navigation@20",
@@ -830,6 +870,11 @@
           "command": "sftp.openConnectionManager",
           "when": "view == remoteExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "sftp.uploadExclude.manage",
+          "when": "view == remoteExplorer",
+          "group": "sftp.config@1"
         },
         {
           "command": "sftp.pauseAutoSync",

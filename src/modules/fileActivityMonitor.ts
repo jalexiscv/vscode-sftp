@@ -24,6 +24,7 @@ import { downloadFile } from '../fileHandlers';
 import { isPaused, isSuppressed } from './syncControl';
 import { enqueueChange } from './changeCollector';
 import { runScan } from './externalChangeScanner';
+import { refreshContext as refreshUploadExclusions } from './uploadExclusions';
 
 /**
  * Reacts to what happens inside the editor: a saved document, an opened one,
@@ -84,6 +85,8 @@ async function handleConfigSave(uri: vscode.Uri) {
     reportError(error);
   } finally {
     app.remoteExplorer.refresh();
+    // the uploadExclude lists may have changed with the file
+    refreshUploadExclusions();
   }
 
   // a reloaded config may point at another destination (another index), and
