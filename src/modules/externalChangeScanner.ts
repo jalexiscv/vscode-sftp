@@ -8,7 +8,7 @@ import {
   uploadIgnoreOf,
 } from '../core/fileService';
 import { toRemotePath } from '../helper';
-import { showInformationMessage, withProgress } from '../host';
+import { showChoiceMessage, showInformationMessage, withProgress } from '../host';
 import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../constants';
 import { getAllFileService } from './serviceManager';
 import { isPaused, onDidChangePauseState } from './syncControl';
@@ -54,12 +54,20 @@ import { confirmAndRunPlan, PlanDecision } from './planConfirmation';
  * A manual scan plans everything. Once seeded, an automatic scan that finds
  * `new` files always asks before uploading them, whatever their number; a
  * `Skip` is remembered in the index so the same files are not asked about
- * again until they change.
+ * again until they change, and `Mark as uploaded` records them as verified
+ * without a transfer.
+ *
+ * For a tree that is known to be on the server already — the usual case of a
+ * site that has been mirrored with `uploadOnSave` for years — listing the
+ * remote side to build the index is needless, and over FTP with tens of
+ * thousands of files it is slow: {@link markLocalTreeAsUploaded} seeds the
+ * index from the local tree alone, on the user's word.
  *
  * Key lifecycle methods:
  * - {@link init} installs the triggers; {@link destroy} removes them.
  * - {@link scanService} / {@link scanAll} run a scan for one or every service.
  * - {@link rebuildSyncIndex} seeds the index from the server.
+ * - {@link markLocalTreeAsUploaded} seeds it from the local tree, unverified.
  */
 
 export type ScanTrigger = 'startup' | 'resume' | 'focus' | 'manual' | 'poll' | 'config';
@@ -119,6 +127,26 @@ export interface RebuildOptions {
   onProgress?: (progress: RebuildProgress) => void;
 }
 
+export interface MarkUploadedSummary {
+  /** local files recorded as uploaded */
+  marked: number;
+  /** items of this service's open plans settled as `assumed` along the way */
+  settledPlanItems: number;
+  /** the scan was cancelled or the confirmation declined; the index was left as it was */
+  cancelled: boolean;
+}
+
+export interface MarkUploadedOptions {
+  isCancelled?: () => boolean;
+  onProgress?: (scannedFiles: number) => void;
+  /**
+   * Asked once the local tree is counted and before anything is written;
+   * resolving false leaves the index as it was. Without it the write goes
+   * ahead — the caller confirmed already.
+   */
+  confirm?: (files: number) => Promise<boolean>;
+}
+
 // a focus regained less than this after the last scan of a service is not a
 // reason to scan again
 const FOCUS_MIN_INTERVAL_MS = 5 * 60 * 1000;
@@ -134,7 +162,11 @@ const REMOTE_WALK_CONCURRENCY = 4;
 const MTIME_TOLERANCE_IN_SECONDS = 2;
 
 const BUILD_INDEX_LABEL = 'Build index now';
+const MARK_ALL_UPLOADED_LABEL = 'Mark all as uploaded';
 const DONT_SHOW_AGAIN_LABEL = 'Don\'t show again';
+
+// plan item statuses that "mark as uploaded" settles: what a run would pick up
+const OPEN_ITEM_STATUSES = ['pending', 'stale', 'failed'];
 
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
@@ -261,11 +293,19 @@ function notifyUnbuiltIndex(service: FileService, index: SyncIndex, unindexed: n
     ? `SFTP: the sync index for ${name} is empty, so external changes can't be detected yet.`
     : `SFTP: the sync index for ${name} is not built yet; ${unindexed} unindexed file(s) ` +
       'are left alone until it is.';
-  Promise.resolve(showInformationMessage(message, BUILD_INDEX_LABEL, DONT_SHOW_AGAIN_LABEL)).then(
+  // "Mark all as uploaded" is the fast path for a tree that is on the server
+  // already: no remote listing, the local tree becomes the baseline
+  Promise.resolve(
+    showInformationMessage(message, BUILD_INDEX_LABEL, MARK_ALL_UPLOADED_LABEL, DONT_SHOW_AGAIN_LABEL)
+  ).then(
     choice => {
       if (choice === BUILD_INDEX_LABEL) {
         rebuildSyncIndexInteractive(service).catch(error =>
           logger.error(error, `rebuild sync index of ${name}`)
+        );
+      } else if (choice === MARK_ALL_UPLOADED_LABEL) {
+        markLocalTreeAsUploadedInteractive(service).catch(error =>
+          logger.error(error, `mark local tree of ${name} as uploaded`)
         );
       } else if (choice === DONT_SHOW_AGAIN_LABEL) {
         dismissUnbuiltNotice(index.key);
@@ -391,15 +431,19 @@ async function doScan(
   if (
     !automatic &&
     !index.isSeeded() &&
-    outcome.decision === 'run' &&
+    (outcome.decision === 'run' || outcome.decision === 'assume') &&
     outcome.summary.pending === 0 &&
     outcome.summary.uploading === 0
   ) {
     // the user confirmed the whole tree's worth of differences and the run
-    // went through: from here on the index covers the tree
+    // went through — or declared them uploaded already: either way, from
+    // here on the index covers the tree
     index.markSeeded();
     forgetUnbuiltNotice(index.key);
-    logger.info(`[scan] ${name}: sync index marked as built after a confirmed manual scan`);
+    logger.info(
+      `[scan] ${name}: sync index marked as built after a manual scan ` +
+        (outcome.decision === 'assume' ? 'marked as uploaded' : 'confirmed and uploaded')
+    );
   }
 
   return {
@@ -757,6 +801,153 @@ export async function rebuildSyncIndexInteractive(service: FileService): Promise
   return summary;
 }
 
+/**
+ * Settles the open items (pending, stale, failed) of every plan of `service`
+ * as `assumed`: the user just declared the whole local tree uploaded, so a
+ * plan still waiting for a decision on some of those files has its answer.
+ * An automatic scan blocked behind such a plan ("a previous scan is still
+ * pending review") is unblocked by the same stroke. Returns how many items.
+ */
+function settleOpenPlanItems(serviceName: string): number {
+  let settled = 0;
+  getPlans().forEach(plan => {
+    if (plan.serviceName !== serviceName) {
+      return;
+    }
+    plan.items.forEach(item => {
+      if (OPEN_ITEM_STATUSES.indexOf(item.status) !== -1) {
+        updateItem(plan.id, item.localPath, { status: 'assumed', error: undefined });
+        settled++;
+      }
+    });
+  });
+  return settled;
+}
+
+/**
+ * Seeds the index from the local tree alone, on the user's word: every local
+ * file (pruned by `ignore` and `uploadExclude`, like a scan) is recorded as
+ * verified — flagged as assumed — with its current size and mtime, the index
+ * is marked as seeded, and the open items of this service's plans are
+ * settled as `assumed`. Nothing is listed on the server and nothing is
+ * transferred: from here on, only what changes locally is proposed. The old
+ * index is replaced only once the scan completes and `options.confirm` (when
+ * given) agreed; a cancelled or declined call leaves it untouched.
+ *
+ * This is the answer to "the extension found thousands of files it never
+ * uploaded" on a site that has been mirrored by hand or by `uploadOnSave` for
+ * years: `Rebuild Sync Index` would list every remote directory to reach the
+ * same conclusion, and a scan plan of that size saturates the connection and
+ * the view.
+ */
+export async function markLocalTreeAsUploaded(
+  service: FileService,
+  options: MarkUploadedOptions = {}
+): Promise<MarkUploadedSummary> {
+  const name = nameOf(service);
+  const config = service.getConfig();
+  const isCancelled = () => destroyed || (options.isCancelled ? options.isCancelled() : false);
+  const cancelled: MarkUploadedSummary = { marked: 0, settledPlanItems: 0, cancelled: true };
+
+  const index = await indexFor(service, config);
+  const local = await scanLocalTree(service.baseDir, {
+    ignore: uploadIgnoreOf(config),
+    isCancelled,
+    onProgress: files => {
+      if (options.onProgress) {
+        options.onProgress(files);
+      }
+    },
+  });
+  if (local.cancelled) {
+    logger.info(`[mark-uploaded] ${name}: cancelled after ${local.files.length} files; index left as it was`);
+    return cancelled;
+  }
+  if (options.confirm && !(await options.confirm(local.files.length))) {
+    logger.info(`[mark-uploaded] ${name}: declined by the user; index left as it was`);
+    return cancelled;
+  }
+
+  const now = Date.now();
+  index.clear();
+  local.files.forEach(file => {
+    index.set(toRelPath(service.baseDir, file.fsPath), {
+      size: file.size,
+      mtime: file.mtime,
+      verifiedAt: now,
+      status: 'verified',
+      assumed: true,
+    });
+  });
+  index.markSeeded(now);
+  await index.save();
+  forgetUnbuiltNotice(index.key);
+
+  const settledPlanItems = settleOpenPlanItems(service.name);
+  logger.info(
+    `[mark-uploaded] ${name}: ${local.files.length} local file(s) recorded as uploaded on the ` +
+      `user's word (${local.durationMs} ms), ${settledPlanItems} open plan item(s) settled; ` +
+      'index marked as built'
+  );
+  return { marked: local.files.length, settledPlanItems, cancelled: false };
+}
+
+export function formatMarkUploadedSummary(summary: MarkUploadedSummary): string {
+  if (summary.cancelled) {
+    return 'Nothing was marked; the sync index was left as it was.';
+  }
+  let message =
+    `${summary.marked.toLocaleString()} local file(s) recorded as uploaded; ` +
+    'from now on only files that change are proposed.';
+  if (summary.settledPlanItems > 0) {
+    message += ` ${summary.settledPlanItems.toLocaleString()} pending plan item(s) were settled too.`;
+  }
+  return message;
+}
+
+/**
+ * {@link markLocalTreeAsUploaded} behind a cancellable progress notification
+ * and a modal confirmation that states the count and what it means, with the
+ * summary shown at the end. Shared by the command and the unbuilt-index
+ * notice.
+ */
+export async function markLocalTreeAsUploadedInteractive(
+  service: FileService
+): Promise<MarkUploadedSummary> {
+  const name = nameOf(service);
+  let host = '';
+  try {
+    host = service.getConfig().host;
+  } catch (error) {
+    // the config problem surfaces from markLocalTreeAsUploaded itself
+  }
+  const target = [name, host].filter(part => Boolean(part)).join(' - ');
+
+  const summary = await withProgress(
+    { title: `SFTP: counting the local files of ${name}`, cancellable: true },
+    (progress, token) =>
+      markLocalTreeAsUploaded(service, {
+        isCancelled: () => token.isCancellationRequested,
+        onProgress: files => progress.report({ message: `${files} local file(s) listed` }),
+        confirm: async files => {
+          const confirmLabel = `Mark ${files.toLocaleString()} file(s) as uploaded`;
+          const choice = await showChoiceMessage(
+            `SFTP: record ${files.toLocaleString()} local file(s) as already uploaded to ${target}?\n\n` +
+              'Nothing is transferred and the server is not checked: the sync index will take ' +
+              'every local file, as it is now, to be on the server, and only files that change ' +
+              'from here on will be proposed. Use "Rebuild Sync Index" instead if you want the ' +
+              'server listed and compared.',
+            [confirmLabel],
+            { modal: true }
+          );
+          return choice === confirmLabel;
+        },
+      })
+  );
+  showInformationMessage(`SFTP: ${name}: ${formatMarkUploadedSummary(summary)}`);
+  return summary;
+}
+
 function onPauseStateChanged() {
   const paused = isPaused();
   if (wasPaused && !paused) {
@@ -882,5 +1073,6 @@ export const testHooks = {
   onPauseStateChanged,
   FOCUS_MIN_INTERVAL_MS,
   BUILD_INDEX_LABEL,
+  MARK_ALL_UPLOADED_LABEL,
   DONT_SHOW_AGAIN_LABEL,
 };

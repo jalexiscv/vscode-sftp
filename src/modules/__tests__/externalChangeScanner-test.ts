@@ -47,6 +47,9 @@ import {
   rebuildSyncIndex,
   rebuildSyncIndexInteractive,
   formatRebuildSummary,
+  markLocalTreeAsUploaded,
+  markLocalTreeAsUploadedInteractive,
+  formatMarkUploadedSummary,
   init,
   destroy,
   testHooks,
@@ -65,6 +68,7 @@ const {
   onPauseStateChanged,
   FOCUS_MIN_INTERVAL_MS,
   BUILD_INDEX_LABEL,
+  MARK_ALL_UPLOADED_LABEL,
   DONT_SHOW_AGAIN_LABEL,
 } = testHooks;
 
@@ -184,6 +188,7 @@ describe('runScan', () => {
     expect(showInformationMessageMock.mock.calls[0][0]).toContain('sync index for staging is empty');
     expect(showInformationMessageMock.mock.calls[0].slice(1)).toEqual([
       BUILD_INDEX_LABEL,
+      MARK_ALL_UPLOADED_LABEL,
       DONT_SHOW_AGAIN_LABEL,
     ]);
 
@@ -414,6 +419,7 @@ describe('first use: an index that was never built', () => {
     expect(showInformationMessageMock.mock.calls[0][0]).toContain('is not built yet; 5 unindexed file(s)');
     expect(showInformationMessageMock.mock.calls[0].slice(1)).toEqual([
       BUILD_INDEX_LABEL,
+      MARK_ALL_UPLOADED_LABEL,
       DONT_SHOW_AGAIN_LABEL,
     ]);
 
@@ -475,6 +481,53 @@ describe('first use: an index that was never built', () => {
       ['later.ts', 'new'],
     ]);
     expect(next.ignoredNew).toBeUndefined();
+  });
+
+  test('a manual scan whose plan is marked as uploaded seeds the index too', async () => {
+    const { service, index } = await freshCheckout();
+    confirmAndRunPlanMock.mockImplementationOnce((plan: any) => {
+      const { updateItem, summarize } = require('../uploadPlan');
+      plan.items.forEach((item: any) => updateItem(plan.id, item.localPath, { status: 'assumed' }));
+      return Promise.resolve({ decision: 'assume', summary: summarize(plan) });
+    });
+
+    const outcome = await runScan(service, 'manual');
+
+    expect(outcome.decision).toBe('assume');
+    expect(index.isSeeded()).toBe(true);
+  });
+
+  test('"Mark all as uploaded" on the notice seeds the index from the local tree after a confirmation', async () => {
+    const { service, index } = await freshCheckout();
+    showInformationMessageMock.mockResolvedValueOnce(MARK_ALL_UPLOADED_LABEL);
+    showChoiceMessageMock.mockImplementationOnce((_message: string, choices: string[]) =>
+      Promise.resolve(choices[0])
+    );
+
+    await runScan(service, 'startup');
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    expect(showChoiceMessageMock).toHaveBeenCalledTimes(1);
+    const [message, choices, modal] = showChoiceMessageMock.mock.calls[0];
+    expect(message).toContain('record 6 local file(s) as already uploaded to staging - example.test');
+    expect(choices).toEqual(['Mark 6 file(s) as uploaded']);
+    expect(modal).toEqual({ modal: true });
+    expect(index.isSeeded()).toBe(true);
+    expect(index.size).toBe(6);
+    expect(index.get('dir/n5.ts')).toMatchObject({ status: 'verified', assumed: true });
+    // the summary
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(2);
+    expect(showInformationMessageMock.mock.calls[1][0]).toContain(
+      '6 local file(s) recorded as uploaded'
+    );
+
+    // from now on only what changes is proposed, and the notice is gone
+    vol.writeFileSync(p('n1.ts'), 'one, edited');
+    const next = await runScan(service, 'startup');
+    expect(next.plan!.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+      ['n1.ts', 'modified'],
+    ]);
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(2);
   });
 
   test('a manual scan that was skipped, reviewed or cancelled does not seed the index', async () => {
@@ -908,6 +961,119 @@ describe('rebuildSyncIndex', () => {
   test('createPlan is untouched by a rebuild (sanity)', () => {
     createPlan({ serviceName: 'staging', profile: null, source: 'scan', items: [] });
     expect(getPlans().length).toBe(1);
+  });
+});
+
+describe('markLocalTreeAsUploaded', () => {
+  test('records every local file as assumed-verified, replaces the old index and seeds it; the server is never listed', async () => {
+    vol.fromJSON({
+      [p('a.ts')]: 'a',
+      [p('dir', 'b.ts')]: 'bb',
+      [p('.git', 'HEAD')]: 'ref',
+      '/remote/only-remote.ts': 'r',
+    });
+    const service = fakeService({ ignore: (fsPath: string) => /[\\/]\.git([\\/]|$)/.test(fsPath) });
+    // it must not even connect
+    service.getRemoteFileSystem = jest.fn(() => Promise.reject(new Error('no connection expected')));
+    const index = await indexFor(service);
+    index.set('gone.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+    index.set('a.ts', { size: 9, mtime: 9, verifiedAt: 0, status: 'failed', error: 'EACCES' });
+    const progress: number[] = [];
+
+    const summary = await markLocalTreeAsUploaded(service, { onProgress: files => progress.push(files) });
+
+    expect(summary).toEqual({ marked: 2, settledPlanItems: 0, cancelled: false });
+    expect(service.getRemoteFileSystem).not.toHaveBeenCalled();
+    expect(index.isSeeded()).toBe(true);
+    expect(index.size).toBe(2);
+    expect(index.get('gone.ts')).toBeUndefined();
+    expect(index.get('a.ts')).toEqual({
+      size: 1,
+      mtime: vol.statSync(p('a.ts')).mtime.getTime(),
+      verifiedAt: expect.any(Number),
+      status: 'verified',
+      assumed: true,
+    });
+    expect(index.get('dir/b.ts')).toMatchObject({ size: 2, status: 'verified', assumed: true });
+    expect(index.get('.git/HEAD')).toBeUndefined();
+    expect(progress.length).toBeGreaterThan(0);
+    expect(formatMarkUploadedSummary(summary)).toBe(
+      '2 local file(s) recorded as uploaded; from now on only files that change are proposed.'
+    );
+
+    // the next scan finds the tree up to date
+    expect((await runScan(service, 'startup')).status).toBe('up-to-date');
+  });
+
+  test('settles the open items of this service\'s plans and leaves other services alone', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'a', [p('b.ts')]: 'b' });
+    const service = fakeService();
+    const item = (name: string) => ({
+      localPath: p(name),
+      remotePath: `/remote/${name}`,
+      reason: 'new' as const,
+      localSize: 1,
+      localMtime: 1,
+    });
+    const mine = createPlan({ serviceName: 'staging', profile: null, source: 'scan', items: [item('a.ts'), item('b.ts')] });
+    const { updateItem } = require('../uploadPlan');
+    updateItem(mine.id, p('b.ts'), { status: 'failed', error: 'EACCES' });
+    const theirs = createPlan({ serviceName: 'other', profile: null, source: 'scan', items: [item('a.ts')] });
+
+    const summary = await markLocalTreeAsUploaded(service);
+
+    expect(summary.settledPlanItems).toBe(2);
+    expect(mine.items.map(i => i.status)).toEqual(['assumed', 'assumed']);
+    expect(mine.items[1].error).toBeUndefined();
+    expect(mine.finishedAt).toBeDefined();
+    expect(theirs.items[0].status).toBe('pending');
+    expect(formatMarkUploadedSummary(summary)).toContain('2 pending plan item(s) were settled too.');
+    // an automatic scan is no longer blocked behind the plan
+    expect((await runScan(service, 'focus')).status).toBe('up-to-date');
+  });
+
+  test('a cancelled scan or a declined confirmation leaves the index as it was', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'a' });
+    const service = fakeService();
+    const index = await indexFor(service);
+    index.set('keep.ts', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
+
+    const declined = await markLocalTreeAsUploaded(service, { confirm: () => Promise.resolve(false) });
+    expect(declined).toEqual({ marked: 0, settledPlanItems: 0, cancelled: true });
+    expect(formatMarkUploadedSummary(declined)).toContain('left as it was');
+
+    const cancelled = await markLocalTreeAsUploaded(service, { isCancelled: () => true });
+    expect(cancelled.cancelled).toBe(true);
+
+    expect(index.isSeeded()).toBe(false);
+    expect(index.size).toBe(1);
+    expect(index.get('keep.ts')).toBeDefined();
+  });
+
+  test('the interactive form confirms with the count, then reports; a dismissed dialog writes nothing', async () => {
+    vol.fromJSON({ [p('a.ts')]: 'a', [p('b.ts')]: 'b' });
+    const service = fakeService();
+    const index = await indexFor(service);
+
+    // dismissed: showChoiceMessage resolves undefined by default
+    let summary = await markLocalTreeAsUploadedInteractive(service);
+    expect(summary.cancelled).toBe(true);
+    expect(index.size).toBe(0);
+    expect(showInformationMessageMock).toHaveBeenCalledTimes(1);
+    expect(showInformationMessageMock.mock.calls[0][0]).toBe(
+      'SFTP: staging: Nothing was marked; the sync index was left as it was.'
+    );
+
+    showChoiceMessageMock.mockImplementationOnce((_message: string, choices: string[]) =>
+      Promise.resolve(choices[0])
+    );
+    summary = await markLocalTreeAsUploadedInteractive(service);
+    expect(summary).toEqual({ marked: 2, settledPlanItems: 0, cancelled: false });
+    expect(showChoiceMessageMock.mock.calls[1][1]).toEqual(['Mark 2 file(s) as uploaded']);
+    expect(index.isSeeded()).toBe(true);
+    expect(showInformationMessageMock.mock.calls[1][0]).toBe(
+      'SFTP: staging: 2 local file(s) recorded as uploaded; from now on only files that change are proposed.'
+    );
   });
 });
 

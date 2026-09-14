@@ -5,7 +5,7 @@ import { executeCommand, showChoiceMessage } from '../host';
 import { VIEW_ACTIVITY } from '../constants';
 import { UploadPlan, PlanSource, PlanSummary, updateItem, summarize } from './uploadPlan';
 import { runPlan } from './planRunner';
-import { rememberSkipped } from './syncIndexFeeder';
+import { rememberSkipped, rememberAssumedUploaded } from './syncIndexFeeder';
 
 /**
  * The gate between "a plan exists" and "it runs": the confirmation threshold
@@ -17,16 +17,19 @@ import { rememberSkipped } from './syncIndexFeeder';
  * know (`new`: they may be stale local copies of something newer on the
  * server) is shown to the user first — a `git checkout` that touches 400
  * files should never reach the server by accident. The user can review it in
- * the Activity view (the default answer), upload it, or skip it; a skip is
- * remembered in the index so the same files are not asked about again until
- * they change.
+ * the Activity view (the default answer), upload it, mark it as uploaded
+ * already, or skip it. A skip is remembered in the index so the same files
+ * are not asked about again until they change; "mark as uploaded" records
+ * them as verified (flagged as assumed) without transferring anything — the
+ * answer for a tree that is known to be on the server already, when a scan
+ * of thousands of files would otherwise choke the connection.
  *
  * Key lifecycle methods:
  * - {@link needsConfirmation} is the rule.
  * - {@link confirmAndRunPlan} applies it and runs the plan when allowed.
  */
 
-export type PlanDecision = 'run' | 'review' | 'skip';
+export type PlanDecision = 'run' | 'review' | 'skip' | 'assume';
 
 export interface ConfirmPlanOptions {
   serviceName: string;
@@ -48,7 +51,8 @@ export interface ConfirmPlanOptions {
   /**
    * The service the plan belongs to. When given, a "Skip" (and the items it
    * covers) is remembered in the service's sync index, so the same versions
-   * are not planned again by the next scan.
+   * are not planned again by the next scan; a "Mark as uploaded" records them
+   * there as verified.
    */
   service?: FileService;
 }
@@ -68,6 +72,7 @@ const PREVIEW_LINES = 12;
 
 const REVIEW_LABEL = 'Review plan';
 const SKIP_LABEL = 'Skip';
+const ASSUME_LABEL = 'Mark as uploaded';
 
 /**
  * Git-driven plans and plans above the threshold always ask. So does a scan or
@@ -121,12 +126,15 @@ async function ask(plan: UploadPlan, options: ConfirmPlanOptions): Promise<Answe
   // neither uploads nor discards anything when the dialog is answered blindly
   const choice = await showChoiceMessage(
     buildConfirmationMessage(plan, options),
-    [REVIEW_LABEL, uploadLabel, SKIP_LABEL],
+    [REVIEW_LABEL, uploadLabel, ASSUME_LABEL, SKIP_LABEL],
     { modal: true }
   );
 
   if (choice === uploadLabel) {
     return 'run';
+  }
+  if (choice === ASSUME_LABEL) {
+    return 'assume';
   }
   if (choice === SKIP_LABEL) {
     return 'skip';
@@ -141,8 +149,10 @@ async function ask(plan: UploadPlan, options: ConfirmPlanOptions): Promise<Answe
 
 /**
  * Applies the confirmation rule to `plan` and acts on the answer: runs it,
- * leaves it pending and focuses the Activity view, or skips every item (and
- * remembers the skip in the index when the service is known).
+ * leaves it pending and focuses the Activity view, skips every item (and
+ * remembers the skip in the index when the service is known), or settles
+ * every item as `assumed` uploaded (recorded as verified in the index when
+ * the service is known).
  */
 export async function confirmAndRunPlan(
   plan: UploadPlan,
@@ -175,6 +185,14 @@ export async function confirmAndRunPlan(
       );
       if (options.service) {
         await rememberSkipped(options.service, skipped);
+      }
+      break;
+    }
+    case 'assume': {
+      const assumed = plan.items.filter(item => item.status === 'pending');
+      assumed.forEach(item => updateItem(plan.id, item.localPath, { status: 'assumed' }));
+      if (options.service) {
+        await rememberAssumedUploaded(options.service, assumed);
       }
       break;
     }

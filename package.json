@@ -433,6 +433,18 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "sftp.plan.markUploaded",
+        "title": "Mark Plan as Uploaded",
+        "category": "SFTP",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "sftp.plan.markItemUploaded",
+        "title": "Mark as Uploaded",
+        "category": "SFTP",
+        "icon": "$(check)"
+      },
+      {
         "command": "sftp.scanExternalChanges",
         "title": "Scan for External Changes",
         "category": "SFTP",
@@ -443,6 +455,12 @@
         "title": "Rebuild Sync Index",
         "category": "SFTP",
         "icon": "$(database)"
+      },
+      {
+        "command": "sftp.markLocalTreeUploaded",
+        "title": "Mark Local Files as Uploaded",
+        "category": "SFTP",
+        "icon": "$(check-all)"
       }
     ],
     "menus": {
@@ -660,11 +678,19 @@
           "when": "sftp.enabled"
         },
         {
+          "command": "sftp.plan.markUploaded",
+          "when": "sftp.enabled"
+        },
+        {
           "command": "sftp.plan.uploadItem",
           "when": "false"
         },
         {
           "command": "sftp.plan.skipItem",
+          "when": "false"
+        },
+        {
+          "command": "sftp.plan.markItemUploaded",
           "when": "false"
         },
         {
@@ -681,6 +707,10 @@
         },
         {
           "command": "sftp.rebuildSyncIndex",
+          "when": "sftp.enabled"
+        },
+        {
+          "command": "sftp.markLocalTreeUploaded",
           "when": "sftp.enabled"
         }
       ],
@@ -947,6 +977,11 @@
           "when": "view == sftpActivity && viewItem == sftpPlan"
         },
         {
+          "command": "sftp.plan.markUploaded",
+          "group": "1_run@2",
+          "when": "view == sftpActivity && viewItem == sftpPlan"
+        },
+        {
           "command": "sftp.plan.exportReport",
           "group": "2_report@1",
           "when": "view == sftpActivity && viewItem == sftpPlan"
@@ -967,6 +1002,11 @@
           "when": "view == sftpActivity && viewItem == sftpPlanItem"
         },
         {
+          "command": "sftp.plan.markItemUploaded",
+          "group": "inline@3",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
           "command": "sftp.plan.uploadItem",
           "group": "1_run@1",
           "when": "view == sftpActivity && viewItem == sftpPlanItem"
@@ -974,6 +1014,11 @@
         {
           "command": "sftp.plan.skipItem",
           "group": "1_run@2",
+          "when": "view == sftpActivity && viewItem == sftpPlanItem"
+        },
+        {
+          "command": "sftp.plan.markItemUploaded",
+          "group": "1_run@3",
           "when": "view == sftpActivity && viewItem == sftpPlanItem"
         },
         {

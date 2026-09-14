@@ -15,6 +15,7 @@ import {
   forgetInIndex,
   renameInIndex,
   rememberSkipped,
+  rememberAssumedUploaded,
   init,
   destroy,
   testHooks,
@@ -373,6 +374,50 @@ describe('syncIndexFeeder', () => {
       await expect(
         rememberSkipped(broken, [{ localPath: p('a.ts'), localSize: 1, localMtime: 1 }])
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('rememberAssumedUploaded', () => {
+    test('writes a verified entry flagged as assumed, with the size and mtime given', async () => {
+      const index = await indexOfService();
+      index.set('src/a.ts', { size: 1, mtime: 1, verifiedAt: 0, status: 'failed', error: 'EACCES' });
+
+      const written = await rememberAssumedUploaded(service, [
+        { localPath: p('src', 'a.ts'), localSize: 7, localMtime: 1700000007000 },
+        { localPath: p('src', 'b.ts'), localSize: 3, localMtime: 1700000003000 },
+        // outside the base dir: not this index's business
+        { localPath: path.resolve(path.sep, 'elsewhere', 'c.ts'), localSize: 1, localMtime: 1 },
+      ]);
+
+      expect(written).toBe(2);
+      // the failed entry is replaced whole: no error left behind
+      expect(index.get('src/a.ts')).toEqual({
+        size: 7,
+        mtime: 1700000007000,
+        verifiedAt: expect.any(Number),
+        status: 'verified',
+        assumed: true,
+      });
+      expect(index.get('src/a.ts')!.verifiedAt).toBeGreaterThan(0);
+      expect(index.get('src/b.ts')).toMatchObject({ size: 3, status: 'verified', assumed: true });
+      expect(index.size).toBe(2);
+    });
+
+    test('does nothing for an empty list and never throws on a broken config', async () => {
+      const index = await indexOfService();
+      expect(await rememberAssumedUploaded(service, [])).toBe(0);
+      expect(index.size).toBe(0);
+
+      const broken = {
+        name: 'broken',
+        baseDir,
+        getConfig: () => {
+          throw new Error('Unkown Profile');
+        },
+      } as any;
+      await expect(
+        rememberAssumedUploaded(broken, [{ localPath: p('a.ts'), localSize: 1, localMtime: 1 }])
+      ).resolves.toBe(0);
     });
   });
 });

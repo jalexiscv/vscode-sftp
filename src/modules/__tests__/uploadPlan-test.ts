@@ -239,9 +239,26 @@ describe('uploadPlan', () => {
         verified: 1,
         failed: 1,
         skipped: 1,
+        assumed: 0,
         stale: 1,
         bytes: 210,
       });
+    });
+
+    test('counts items the user marked as uploaded apart from verified ones', () => {
+      const plan = createPlan(draft([item('a.php'), item('b.php')]), at);
+      updateItem(plan.id, local('a.php'), { status: 'assumed' });
+      updateItem(plan.id, local('b.php'), { status: 'verified' });
+
+      expect(summarize(plan)).toMatchObject({ assumed: 1, verified: 1, pending: 0 });
+      // assumed is terminal: the plan is closed
+      expect(plan.finishedAt).toBeDefined();
+      expect(plan.items[0].finishedAt).toBeDefined();
+      expect(formatSummary(summarize(plan))).toBe(
+        '2 files — 1 verified, 0 failed, 0 pending, 1 assumed uploaded'
+      );
+      expect(formatReport(plan)).toContain('1 assumed uploaded');
+      expect(formatReport(plan)).toContain(`| assumed | modified | ${local('a.php')} |`);
     });
   });
 

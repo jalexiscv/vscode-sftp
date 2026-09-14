@@ -157,7 +157,7 @@ describe('confirmAndRunPlan', () => {
     const [message, buttons, modal] = showChoiceMessageMock.mock.calls[0];
     expect(message).toContain('25 local file(s)');
     // "Review plan" first: the default button neither uploads nor discards
-    expect(buttons).toEqual(['Review plan', 'Upload 25 file(s)', 'Skip']);
+    expect(buttons).toEqual(['Review plan', 'Upload 25 file(s)', 'Mark as uploaded', 'Skip']);
     expect(modal).toEqual({ modal: true });
     expect(runPlanMock).toHaveBeenCalledWith(p.id);
     expect(outcome.decision).toBe('run');
@@ -262,6 +262,45 @@ describe('confirmAndRunPlan', () => {
     });
     expect(index.get('file-1.ts')).toMatchObject({ status: 'skipped' });
     expect(p.items.every(item => item.status === 'skipped')).toBe(true);
+  });
+
+  test('"Mark as uploaded" settles every pending item as assumed, uploads nothing and records them as verified', async () => {
+    showChoiceMessageMock.mockResolvedValue('Mark as uploaded');
+    const p = plan(3, 'scan', 'new');
+    p.items[0].localSize = 42;
+    p.items[0].localMtime = 1700000042000;
+    // an item settled earlier is left alone
+    p.items[2].status = 'skipped';
+
+    const outcome = await confirmAndRunPlan(p, { ...options, service });
+
+    expect(runPlanMock).not.toHaveBeenCalled();
+    expect(outcome.decision).toBe('assume');
+    expect(p.items.map(item => item.status)).toEqual(['assumed', 'assumed', 'skipped']);
+    expect(outcome.summary.assumed).toBe(2);
+    expect(p.finishedAt).toBeDefined();
+
+    const index = await indexFor(service);
+    expect(index.get('file-0.ts')).toMatchObject({
+      size: 42,
+      mtime: 1700000042000,
+      status: 'verified',
+      assumed: true,
+    });
+    expect(index.get('file-0.ts')!.verifiedAt).toBeGreaterThan(0);
+    expect(index.get('file-1.ts')).toMatchObject({ status: 'verified', assumed: true });
+    expect(index.get('file-2.ts')).toBeUndefined();
+  });
+
+  test('"Mark as uploaded" without a service only updates the plan', async () => {
+    showChoiceMessageMock.mockResolvedValue('Mark as uploaded');
+    const p = plan(25);
+
+    const outcome = await confirmAndRunPlan(p, options);
+
+    expect(outcome.decision).toBe('assume');
+    expect((await indexFor(service)).size).toBe(0);
+    expect(p.items.every(item => item.status === 'assumed')).toBe(true);
   });
 
   test('"Skip" without a service only updates the plan', async () => {
