@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 56 | 2026-09-13 | Dar por subidos los archivos de un plan o el árbol local entero | [Ver detalle](2026-09-13_feat_dar_por_subido.md) |
 | 55 | 2026-09-03 | Release 1.25.0: exclusión de directorios solo para la subida | [Ver detalle](2026-09-03_release_1_25_0.md) |
 | 54 | 2026-09-03 | Exclusión de directorios solo para la subida (`uploadExclude`) | [Ver detalle](2026-09-03_feat_exclusion_de_subida.md) |
 | 53 | 2026-08-23 | Release 1.24.0: cambios externos, planes y verificación | [Ver detalle](2026-08-22_release_1_24_0.md) |
