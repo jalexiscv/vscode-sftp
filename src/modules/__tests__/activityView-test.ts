@@ -349,6 +349,8 @@ describe('activityView format', () => {
       expect(iconFor('verified')).toEqual({ id: 'check', color: 'testing.iconPassed' });
       expect(iconFor('failed')).toEqual({ id: 'error', color: 'problemsErrorIcon.foreground' });
       expect(iconFor('skipped').id).toBe('dash');
+      // a plain check: settled by the user, not by a verification
+      expect(iconFor('assumed')).toEqual({ id: 'check' });
       expect(iconFor('stale')).toEqual({ id: 'warning', color: 'problemsWarningIcon.foreground' });
     });
   });

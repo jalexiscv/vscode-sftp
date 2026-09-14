@@ -122,6 +122,23 @@ export default function getConnectionManagerHtml(nonce: string): string {
   #status.err { color: var(--vscode-errorForeground); white-space: pre-wrap; }
   #status.busy { opacity: 0.8; }
   .dirty-dot { color: var(--vscode-editorWarning-foreground, #cca700); }
+  ul.excl-list { list-style: none; margin: 0 0 6px; padding: 0; }
+  ul.excl-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 2px;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  ul.excl-list li:hover { background: var(--vscode-list-hoverBackground); }
+  ul.excl-list li .pattern { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul.excl-list li .origin { font-size: 11px; opacity: 0.6; font-family: var(--vscode-font-family); }
+  ul.excl-list li.inherited { opacity: 0.7; }
+  ul.excl-list li button { padding: 0 8px; line-height: 18px; }
+  ul.excl-list li.empty { opacity: 0.6; font-family: var(--vscode-font-family); font-style: italic; }
+  .excl-add { display: flex; gap: 6px; max-width: 520px; }
+  .excl-add input { flex: 1; }
 </style>
 </head>
 <body>
@@ -185,6 +202,15 @@ export default function getConnectionManagerHtml(nonce: string): string {
       <div class="checkbox-field">
         <input type="checkbox" id="fUploadOnSave">
         <label for="fUploadOnSave">Subir al guardar (uploadOnSave)</label>
+      </div>
+      <div class="field">
+        <label for="fExclNew">Excluidos de la subida (uploadExclude)</label>
+        <ul id="exclList" class="excl-list"></ul>
+        <div class="excl-add">
+          <input type="text" id="fExclNew" placeholder="/storage, /public/uploads, *.env, cache/">
+          <button id="btnExclAdd" class="secondary">Añadir</button>
+        </div>
+        <span class="hint">Patrones gitignore relativos a la raíz del proyecto: nunca se suben (ni al guardar, ni por el watcher, ni por los escaneos), pero sí pueden descargarse. En una conexión se suman a los de la configuración base. También puedes excluir una carpeta con clic derecho → "SFTP: Exclude from Upload".</span>
       </div>
       <div class="checkbox-field" id="rowDefaultProfile">
         <input type="checkbox" id="fDefaultProfile">
@@ -365,6 +391,8 @@ export default function getConnectionManagerHtml(nonce: string): string {
     if (uos === undefined && !isBase()) { uos = state.base.uploadOnSave; }
     $('fUploadOnSave').checked = !!uos;
 
+    renderExclusions(obj);
+
     $('rowDefaultProfile').style.display = isBase() ? 'none' : 'flex';
     if (!isBase()) {
       $('fDefaultProfile').checked = state.base.defaultProfile === selected;
@@ -380,6 +408,80 @@ export default function getConnectionManagerHtml(nonce: string): string {
     $('rowPassphrase').style.display = showSftp ? 'block' : 'none';
 
     updateButtons();
+  }
+
+  // ---------- uploadExclude ----------
+
+  function exclusionsOf(obj) {
+    return Array.isArray(obj.uploadExclude) ? obj.uploadExclude : [];
+  }
+
+  function renderExclusions(obj) {
+    var list = $('exclList');
+    list.innerHTML = '';
+    var inherited = isBase() ? [] : exclusionsOf(state.base);
+    var own = exclusionsOf(obj);
+
+    function addRow(pattern, origin, removable) {
+      var li = document.createElement('li');
+      if (!removable) { li.className = 'inherited'; }
+      var p = document.createElement('span');
+      p.className = 'pattern';
+      p.textContent = pattern;
+      p.title = pattern;
+      li.appendChild(p);
+      if (origin) {
+        var o = document.createElement('span');
+        o.className = 'origin';
+        o.textContent = origin;
+        li.appendChild(o);
+      }
+      if (removable) {
+        var b = document.createElement('button');
+        b.className = 'secondary';
+        b.textContent = '×';
+        b.title = 'Quitar ' + pattern;
+        b.addEventListener('click', function () { removeExclusion(pattern); });
+        li.appendChild(b);
+      }
+      list.appendChild(li);
+    }
+
+    inherited.forEach(function (pattern) { addRow(pattern, 'heredado de la base', false); });
+    own.forEach(function (pattern) { addRow(pattern, '', true); });
+    if (inherited.length === 0 && own.length === 0) {
+      var empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'Nada excluido: todo el proyecto se sube.';
+      list.appendChild(empty);
+    }
+  }
+
+  function addExclusion(rawValue) {
+    var value = (rawValue || '').trim();
+    if (!value) { return; }
+    var obj = current();
+    var own = exclusionsOf(obj).slice();
+    var inherited = isBase() ? [] : exclusionsOf(state.base);
+    if (own.indexOf(value) !== -1 || inherited.indexOf(value) !== -1) {
+      setStatus('"' + value + '" ya está excluido.', 'err');
+      return;
+    }
+    own.push(value);
+    obj.uploadExclude = own;
+    $('fExclNew').value = '';
+    markDirty();
+    renderExclusions(obj);
+    setStatus('"' + value + '" añadido. Recuerda guardar para aplicar el cambio.', 'ok');
+  }
+
+  function removeExclusion(pattern) {
+    var obj = current();
+    var own = exclusionsOf(obj).filter(function (item) { return item !== pattern; });
+    if (own.length === 0) { delete obj.uploadExclude; } else { obj.uploadExclude = own; }
+    markDirty();
+    renderExclusions(obj);
+    setStatus('"' + pattern + '" quitado. Recuerda guardar para aplicar el cambio.', 'ok');
   }
 
   function updateButtons() {
@@ -484,6 +586,16 @@ export default function getConnectionManagerHtml(nonce: string): string {
   $('fUploadOnSave').addEventListener('change', function (e) {
     current().uploadOnSave = e.target.checked;
     markDirty();
+  });
+
+  $('btnExclAdd').addEventListener('click', function () {
+    addExclusion($('fExclNew').value);
+  });
+  $('fExclNew').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addExclusion(e.target.value);
+    }
   });
 
   $('fDefaultProfile').addEventListener('change', function (e) {

@@ -364,6 +364,8 @@ Unlike [ignore](#ignore), which applies to both directions, an excluded path can
 
 Same syntax and anchoring as `ignore`, relative to the context: `/storage` anchors at the root, `uploads/` matches a directory at any depth. In a profile the list is added to the base one, like `ignore`.
 
+The list can be edited without opening the file: right-click a folder in the explorer → `SFTP: Exclude from Upload` (and `SFTP: Include in Upload Again` on an excluded one), `SFTP: Manage Upload Exclusions` for the whole list, or the **Connection Manager**, which shows it per connection with an input and a `×` per entry. See [commands](commands.md#sftp-exclude-from-upload--sftp-include-in-upload-again--sftp-manage-upload-exclusions).
+
 | Key | Value | Default |
 | --- | --- | --- |
 | *uploadExclude* | *string[]* | `[]` |
@@ -457,7 +459,7 @@ Scan when automatic sync is resumed (`SFTP: Resume Auto Sync`) and when the wind
 
 #### externalChanges.confirmThreshold
 Number of changed files above which SFTP shows the upload plan and asks for confirmation before uploading anything. <br>
-The dialog lists up to 12 paths and offers `Review plan` (the default: the plan stays pending in the **Upload plans** group of the SFTP Activity view, where it can be uploaded, trimmed file by file or removed), `Upload N file(s)` and `Skip`. Two kinds of batch **always** ask, whatever their size: those caused by a git operation — HEAD moved between the change and the upload: checkout, pull, rebase, merge… — and automatic batches that contain `new` files, which the index has never seen; only `modified` files go up without asking below the threshold. `Skip` is remembered: the skipped files are recorded in the index with their current size and mtime and are not proposed again until they change. Set it to `0` to always ask. It applies to every source of changes: scans, the watcher, polling, and even `uploadOnSave` with a *Save All* of many files. Symmetric to `deleteRemoteConfirmThreshold`.
+The dialog lists up to 12 paths and offers `Review plan` (the default: the plan stays pending in the **Upload plans** group of the SFTP Activity view, where it can be uploaded, trimmed file by file, marked as uploaded or removed), `Upload N file(s)`, `Mark as uploaded` (the files are recorded in the index as being on the server already, in their current version, and nothing is transferred) and `Skip`. Two kinds of batch **always** ask, whatever their size: those caused by a git operation — HEAD moved between the change and the upload: checkout, pull, rebase, merge… — and automatic batches that contain `new` files, which the index has never seen; only `modified` files go up without asking below the threshold. `Skip` is remembered: the skipped files are recorded in the index with their current size and mtime and are not proposed again until they change. Set it to `0` to always ask. It applies to every source of changes: scans, the watcher, polling, and even `uploadOnSave` with a *Save All* of many files. Symmetric to `deleteRemoteConfirmThreshold`.
 
 | Key | Value | Default |
 | --- | --- | --- |

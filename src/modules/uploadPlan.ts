@@ -34,7 +34,18 @@ import { LocalFileRecord } from './localScanner';
 
 export type PlanSource = 'watcher' | 'scan' | 'command' | 'git' | 'poll';
 export type PlanReason = 'new' | 'modified' | 'deleted' | 'renamed' | 'missing-remote';
-export type PlanItemStatus = 'pending' | 'uploading' | 'verified' | 'failed' | 'skipped' | 'stale';
+/**
+ * `assumed`: the user declared the item to be on the server already ("mark as
+ * uploaded"); nothing was transferred, the index records it as verified.
+ */
+export type PlanItemStatus =
+  | 'pending'
+  | 'uploading'
+  | 'verified'
+  | 'failed'
+  | 'skipped'
+  | 'assumed'
+  | 'stale';
 
 export interface UploadPlanItem {
   localPath: string;
@@ -69,6 +80,7 @@ export interface PlanSummary {
   verified: number;
   failed: number;
   skipped: number;
+  assumed: number;
   stale: number;
   /** local bytes of every item in the plan */
   bytes: number;
@@ -88,7 +100,7 @@ export interface UploadPlanDraft {
 const MAX_PLANS = 20;
 
 // statuses after which an item will not be touched again by this plan
-const TERMINAL_STATUSES: PlanItemStatus[] = ['verified', 'failed', 'skipped'];
+const TERMINAL_STATUSES: PlanItemStatus[] = ['verified', 'failed', 'skipped', 'assumed'];
 
 const plans: UploadPlan[] = [];
 const listeners: Array<() => void> = [];
@@ -172,8 +184,8 @@ export function getLatestPlan(): UploadPlan | undefined {
 /**
  * Applies `patch` to the item with that local path.
  *
- * Moving to `uploading` stamps `startedAt`; reaching `verified`, `failed` or
- * `skipped` stamps `finishedAt`. A caller that re-queues an item sets its
+ * Moving to `uploading` stamps `startedAt`; reaching `verified`, `failed`,
+ * `skipped` or `assumed` stamps `finishedAt`. A caller that re-queues an item sets its
  * status back to `pending` (and may clear `finishedAt` explicitly). The plan's
  * own `finishedAt` follows: set once no item is pending or uploading, cleared
  * if one becomes so again.
@@ -219,6 +231,7 @@ export function summarize(plan: UploadPlan): PlanSummary {
     verified: 0,
     failed: 0,
     skipped: 0,
+    assumed: 0,
     stale: 0,
     bytes: 0,
   };
@@ -233,9 +246,9 @@ export function summarize(plan: UploadPlan): PlanSummary {
 
 /**
  * One line of numbers for a plan, e.g. `12 files — 10 verified, 1 failed,
- * 1 pending`. The three main counters are always there; uploading, skipped
- * and stale only when non-zero, so the usual case stays short. Shared by the
- * activity view and the end-of-run notification, so both read alike.
+ * 1 pending`. The three main counters are always there; uploading, skipped,
+ * assumed and stale only when non-zero, so the usual case stays short. Shared
+ * by the activity view and the end-of-run notification, so both read alike.
  */
 export function formatSummary(summary: PlanSummary): string {
   const parts = [
@@ -248,6 +261,9 @@ export function formatSummary(summary: PlanSummary): string {
   }
   if (summary.skipped > 0) {
     parts.push(`${summary.skipped} skipped`);
+  }
+  if (summary.assumed > 0) {
+    parts.push(`${summary.assumed} assumed uploaded`);
   }
   if (summary.stale > 0) {
     parts.push(`${summary.stale} stale`);
@@ -303,7 +319,8 @@ export function formatReport(plan: UploadPlan): string {
   lines.push(
     `- Summary: ${summary.total} item(s), ${formatBytes(summary.bytes)} — ` +
       `${summary.verified} verified, ${summary.failed} failed, ${summary.skipped} skipped, ` +
-      `${summary.stale} stale, ${summary.uploading} uploading, ${summary.pending} pending`
+      `${summary.assumed} assumed uploaded, ${summary.stale} stale, ` +
+      `${summary.uploading} uploading, ${summary.pending} pending`
   );
   lines.push('');
   lines.push('| Status | Reason | Local | Remote | Size | Attempts | Error |');

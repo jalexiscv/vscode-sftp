@@ -40,7 +40,12 @@ const serviceManager = new Trie<FileService>(
   }
 );
 
-function maskConfig(config) {
+/**
+ * The config as it may be logged: credentials replaced by a mask, at the top
+ * level and inside every profile — a profile carries its own `password`, and
+ * the merged config keeps the whole `profiles` block.
+ */
+export function maskConfig(config) {
   const copy = {};
   const MASK = '******';
   Object.keys(config).forEach(key => {
@@ -54,6 +59,19 @@ function maskConfig(config) {
       case 'interactiveAuth':
         if (Array.isArray(configValue)) {
           copy[key] = configValue.map(phrase => MASK);
+        } else {
+          copy[key] = configValue;
+        }
+        break;
+      case 'profiles':
+        if (configValue && typeof configValue === 'object') {
+          const profiles = {};
+          Object.keys(configValue).forEach(name => {
+            const profile = configValue[name];
+            profiles[name] =
+              profile && typeof profile === 'object' ? maskConfig(profile) : profile;
+          });
+          copy[key] = profiles;
         } else {
           copy[key] = configValue;
         }

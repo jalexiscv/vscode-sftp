@@ -19,7 +19,9 @@ import { onDidFinishTransfer, TransferOutcome } from './transferEvents';
  * through {@link forgetInIndex} / {@link renameInIndex}; a version the user
  * declined to upload is remembered as `skipped` through
  * {@link rememberSkipped}, so the same question is not asked again until the
- * file changes.
+ * file changes; a version the user declares to be on the server already is
+ * recorded as `verified` with the `assumed` mark through
+ * {@link rememberAssumedUploaded}.
  *
  * {@link indexFor} is the one way to get the index of a service's current
  * destination (host, port, remote path and active profile), shared with the
@@ -248,6 +250,50 @@ export async function rememberSkipped(
     );
   } catch (error) {
     logger.debug(`[sync-index] cannot remember skipped files: ${error.message}`);
+  }
+}
+
+/**
+ * Records that the user takes these versions to be on the server already
+ * ("mark as uploaded"): each file gets a `verified` entry flagged `assumed`,
+ * with the size and mtime it has, so the next scan leaves it alone until it
+ * changes — exactly as if it had been uploaded and verified. Nothing is
+ * transferred or compared: the assertion is the user's. Resolves with the
+ * number of entries written; never throws.
+ */
+export async function rememberAssumedUploaded(
+  service: FileService,
+  files: SkippedLocalFile[],
+  config?: ServiceConfig
+): Promise<number> {
+  if (files.length === 0) {
+    return 0;
+  }
+  try {
+    const index = await indexFor(service, config);
+    const now = Date.now();
+    let written = 0;
+    files.forEach(file => {
+      const relPath = toRelPath(service.baseDir, file.localPath);
+      if (!isInsideBase(relPath)) {
+        return;
+      }
+      index.set(relPath, {
+        size: file.localSize,
+        mtime: file.localMtime,
+        verifiedAt: now,
+        status: 'verified',
+        assumed: true,
+      });
+      written++;
+    });
+    logger.info(
+      `[sync-index] ${service.name || service.baseDir}: ${written} file(s) marked as uploaded by the user`
+    );
+    return written;
+  } catch (error) {
+    logger.debug(`[sync-index] cannot mark files as uploaded: ${error.message}`);
+    return 0;
   }
 }
 

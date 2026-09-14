@@ -10,7 +10,7 @@ import { transfer } from '../fileHandlers/transfer/transfer';
 import { handleCtxFromUri } from '../fileHandlers';
 import { refreshRemoteExplorer } from '../fileHandlers/shared';
 import { getFileService } from './serviceManager';
-import { rememberSkipped } from './syncIndexFeeder';
+import { rememberSkipped, rememberAssumedUploaded } from './syncIndexFeeder';
 import {
   UploadPlan,
   UploadPlanItem,
@@ -59,6 +59,8 @@ import {
  * - {@link runPlan} runs (a subset of) a plan.
  * - {@link skipItem} takes an item out of a plan and remembers the skip in the
  *   sync index.
+ * - {@link markAsUploaded} settles items as `assumed` — on the server
+ *   already, by the user's word — and records them as verified in the index.
  * - {@link isPlanRunning} / {@link onDidChangeRunning} expose the running state
  *   to the view.
  * - {@link whenIdle} resolves once no plan is running (deactivate waits on it).
@@ -610,6 +612,42 @@ export function skipItem(planId: string, localPath: string): void {
       logger.debug(`[plan ${planId}] cannot remember the skip of ${item.localPath}: ${error.message}`)
     );
   }
+}
+
+/**
+ * Settles the pending, failed and stale items of a plan (or the subset named
+ * in `itemPaths`) as `assumed`: the user says they are on the server already,
+ * so nothing is uploaded and the sync index records each of them as verified
+ * — flagged as assumed — with the size and mtime the plan measured. From
+ * there on a scan only proposes them again once they change. Resolves with
+ * the items it settled once the index write is done (best effort: a failure
+ * there is logged, the plan is settled anyway).
+ */
+export async function markAsUploaded(
+  planId: string,
+  itemPaths?: string[]
+): Promise<UploadPlanItem[]> {
+  const plan = getPlan(planId);
+  if (!plan) {
+    return [];
+  }
+  const items = selectItems(plan, itemPaths);
+  if (items.length === 0) {
+    return [];
+  }
+
+  items.forEach(item => updateItem(planId, item.localPath, { status: 'assumed', error: undefined }));
+  logger.info(`[plan ${planId}] ${items.length} item(s) marked as uploaded by the user`);
+
+  // one service per plan: every item of a plan belongs to the service that
+  // built it, so the first item's owner is the index to write
+  const service: FileService | undefined = getFileService(Uri.file(items[0].localPath));
+  if (service) {
+    await rememberAssumedUploaded(service, items);
+  } else {
+    logger.debug(`[plan ${planId}] no service owns ${items[0].localPath}; the index was not updated`);
+  }
+  return items;
 }
 
 export function isPlanRunning(planId: string): boolean {

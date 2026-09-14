@@ -109,6 +109,9 @@ export const COMMAND_PLAN_DIFF_ITEM = 'sftp.plan.diffItem';
 export const COMMAND_PLAN_EXPORT_REPORT = 'sftp.plan.exportReport';
 export const COMMAND_PLAN_REMOVE = 'sftp.plan.remove';
 export const COMMAND_PLAN_CLEAR_ALL = 'sftp.plan.clearAll';
+// "dar por subido": el usuario afirma que los archivos ya están en el servidor
+export const COMMAND_PLAN_MARK_UPLOADED = 'sftp.plan.markUploaded';
+export const COMMAND_PLAN_MARK_ITEM_UPLOADED = 'sftp.plan.markItemUploaded';
 
 // comando que VS Code genera por el id de la vista; no se declara en package.json
 export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
@@ -116,3 +119,9 @@ export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
 // detección de cambios externos e índice de sincronización
 export const COMMAND_SCAN_EXTERNAL_CHANGES = 'sftp.scanExternalChanges';
 export const COMMAND_REBUILD_SYNC_INDEX = 'sftp.rebuildSyncIndex';
+export const COMMAND_MARK_LOCAL_TREE_UPLOADED = 'sftp.markLocalTreeUploaded';
+
+// lista uploadExclude editada desde la interfaz (explorador y QuickPick)
+export const COMMAND_UPLOAD_EXCLUDE_ADD = 'sftp.uploadExclude.add';
+export const COMMAND_UPLOAD_EXCLUDE_REMOVE = 'sftp.uploadExclude.remove';
+export const COMMAND_UPLOAD_EXCLUDE_MANAGE = 'sftp.uploadExclude.manage';

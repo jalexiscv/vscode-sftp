@@ -31,6 +31,7 @@ import uploadStatus from './modules/uploadStatus';
 import externalChangeScanner from './modules/externalChangeScanner';
 import { flushNow as flushPendingChanges } from './modules/changeCollector';
 import { whenIdle as whenNoPlanRuns } from './modules/planRunner';
+import { refreshContext as refreshUploadExclusions } from './modules/uploadExclusions';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -131,6 +132,8 @@ export async function activate(context: vscode.ExtensionContext) {
     if (app.remoteExplorer) {
       app.remoteExplorer.refresh();
     }
+    // a profile may carry its own uploadExclude list
+    refreshUploadExclusions();
   });
 
   // restaurar el perfil de la sesión anterior antes de crear los servicios,
@@ -164,6 +167,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // outside the try above: a failure to load one config must not skip the
   // retention purge for the services that did load
   schedulePurgeExpiredTrash();
+  // the explorer menus need to know which paths are excluded from upload
+  refreshUploadExclusions();
 
   // the startup scan, the resume/focus triggers and the poll timer; runs in
   // the background and needs the services, hence after setup()

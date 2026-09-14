@@ -43,6 +43,7 @@ import {
 import {
   runPlan,
   skipItem,
+  markAsUploaded,
   isPlanRunning,
   onDidChangeRunning,
   whenIdle,
@@ -567,5 +568,54 @@ describe('skipItem', () => {
       mtime: fs.statSync('/local/b.txt').mtime.getTime(),
       status: 'skipped',
     });
+  });
+});
+
+describe('markAsUploaded', () => {
+  test('settles the open items as assumed, uploads nothing and records them as verified in the index', async () => {
+    vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'bb', '/local/c.txt': 'ccc' }, '/');
+    const remoteFs = createRemoteFs();
+    const service = createService(remoteFs);
+    const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+    await runPlan(plan.id, { itemPaths: ['/local/a.txt'] });
+    skipItem(plan.id, '/local/c.txt');
+
+    const marked = await markAsUploaded(plan.id);
+
+    expect(marked.map(item => path.basename(item.localPath))).toEqual(['b.txt']);
+    expect(itemOf(plan, 'a.txt').status).toBe('verified');
+    expect(itemOf(plan, 'b.txt').status).toBe('assumed');
+    expect(itemOf(plan, 'c.txt').status).toBe('skipped');
+    expect(getPlan(plan.id)!.finishedAt).toBeDefined();
+    // nothing was sent
+    expect(fs.existsSync('/remote/b.txt')).toBe(false);
+
+    const index = await indexFor(service);
+    expect(index.get('b.txt')).toMatchObject({
+      size: 2,
+      mtime: fs.statSync('/local/b.txt').mtime.getTime(),
+      status: 'verified',
+      assumed: true,
+    });
+    expect(index.get('c.txt')).toMatchObject({ status: 'skipped' });
+  });
+
+  test('a subset by path, a failed item, and an unknown plan', async () => {
+    vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
+    const remoteFs = createRemoteFs();
+    failPutFor(remoteFs, () => true);
+    createService(remoteFs);
+    const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt')]);
+    await runPlan(plan.id);
+    expect(itemOf(plan, 'a.txt').status).toBe('failed');
+
+    const marked = await markAsUploaded(plan.id, ['/local/a.txt']);
+
+    expect(marked.length).toBe(1);
+    expect(itemOf(plan, 'a.txt').status).toBe('assumed');
+    expect(itemOf(plan, 'a.txt').error).toBeUndefined();
+    expect(itemOf(plan, 'b.txt').status).toBe('failed');
+    expect(await markAsUploaded('nope')).toEqual([]);
+    expect(await markAsUploaded(plan.id, ['/local/a.txt'])).toEqual([]);
   });
 });

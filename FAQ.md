@@ -134,6 +134,8 @@ Use `uploadExclude` (since 1.25.0). It takes the same gitignore patterns as `ign
 
 `ignore` remains the list for paths that must not be transferred in either direction. `Force Upload` bypasses both. See [uploadExclude](docs/configuration.md#uploadexclude).
 
+You do not have to edit the file: right-click the folder in the explorer and pick `SFTP: Exclude from Upload` (the same menu offers `SFTP: Include in Upload Again` once it is excluded), run `SFTP: Manage Upload Exclusions` to review, add or remove entries, or use the list in `SFTP: Open Connection Manager`.
+
 ## How can I upload files as root?
 
 See [vscode-sftp issue #559](https://github.com/liximomo/vscode-sftp/issues/559).
@@ -174,9 +176,9 @@ Since 1.24.0 a batch of more than `externalChanges.confirmThreshold` files (20 b
 
 ## How do I upload files that changed while VS Code was closed?
 
-Nothing to configure. Since 1.24.0 the extension keeps a **sync index** of what was last uploaded and verified, file by file, and compares the local tree with it when it activates, when `sftp.json` is reloaded, when auto sync is resumed and when the window regains focus after a while. Whatever changed since its last verified upload — a `git pull` in a terminal, a code generator, edits made with the window closed — is uploaded through an upload plan; files the index has never seen, batches above `externalChanges.confirmThreshold` (20 by default) and batches caused by git are confirmed first (`Review plan`, `Upload N file(s)` or `Skip` — and `Skip` is remembered until the files change again). You can also run it by hand with `SFTP: Scan for External Changes`, and preview it with `SFTP: Preview Upload (Dry Run)`.
+Nothing to configure. Since 1.24.0 the extension keeps a **sync index** of what was last uploaded and verified, file by file, and compares the local tree with it when it activates, when `sftp.json` is reloaded, when auto sync is resumed and when the window regains focus after a while. Whatever changed since its last verified upload — a `git pull` in a terminal, a code generator, edits made with the window closed — is uploaded through an upload plan; files the index has never seen, batches above `externalChanges.confirmThreshold` (20 by default) and batches caused by git are confirmed first (`Review plan`, `Upload N file(s)`, `Mark as uploaded` or `Skip` — `Skip` is remembered until the files change again, and `Mark as uploaded` records the files as being on the server already without transferring them). You can also run it by hand with `SFTP: Scan for External Changes`, and preview it with `SFTP: Preview Upload (Dry Run)`.
 
-After installing, run `SFTP: Rebuild Sync Index` once per server (or upload the project once and run a manual scan) so the extension knows what is already on the server. Until then, automatic scans only re-upload files it has already uploaded itself, and it reminds you once per server (`Build index now` / `Don't show again`). From then on every verified upload keeps the index current. See [externalChanges](docs/configuration.md#externalchanges) and [External changes and upload verification](docs/configuration.md#external-changes-and-upload-verification).
+After installing, run `SFTP: Rebuild Sync Index` once per server (or upload the project once and run a manual scan) so the extension knows what is already on the server. Until then, automatic scans only re-upload files it has already uploaded itself, and it reminds you once per server (`Build index now` / `Mark all as uploaded` / `Don't show again`). If the local tree is what the server holds already and listing the server would take too long (tens of thousands of files over FTP), `SFTP: Mark Local Files as Uploaded` seeds the index from the local tree without connecting. From then on every verified upload keeps the index current. See [externalChanges](docs/configuration.md#externalchanges) and [External changes and upload verification](docs/configuration.md#external-changes-and-upload-verification).
 
 ## How do I know an upload really succeeded?
 

@@ -2,7 +2,7 @@ import * as path from 'path';
 import app from '../../app';
 import { TransferDirection } from '../../core';
 import * as activityLog from '../activityLog';
-import { createFileService, disposeFileService } from '../serviceManager';
+import { createFileService, disposeFileService, maskConfig } from '../serviceManager';
 
 /**
  * The Activity view is fed from the transfer hooks installed here, one entry
@@ -131,5 +131,36 @@ describe('serviceManager transfer hooks', () => {
     await scheduler.run();
 
     expect(statusWhileRunning).toBe(ActivityStatus.Pending);
+  });
+});
+
+describe('maskConfig', () => {
+  test('masks the credentials at the top level and inside every profile', () => {
+    const masked = maskConfig({
+      host: 'example.test',
+      username: 'deploy',
+      password: 'top secret',
+      passphrase: 'also secret',
+      interactiveAuth: ['answer'],
+      profiles: {
+        prod: { host: 'prod.test', username: 'root', password: 'prod secret', port: 21 },
+        staging: { privateKeyPath: '~/.ssh/id', passphrase: 'stage secret' },
+        odd: null,
+      },
+    });
+
+    expect(masked).toEqual({
+      host: 'example.test',
+      username: '******',
+      password: '******',
+      passphrase: '******',
+      interactiveAuth: ['******'],
+      profiles: {
+        prod: { host: 'prod.test', username: '******', password: '******', port: 21 },
+        staging: { privateKeyPath: '~/.ssh/id', passphrase: '******' },
+        odd: null,
+      },
+    });
+    expect(JSON.stringify(masked)).not.toContain('secret');
   });
 });

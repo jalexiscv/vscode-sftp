@@ -44,6 +44,9 @@ const planItemIcons: { [status in PlanItemStatus]: IconSpec } = {
   verified: { id: 'check', color: PASSED_COLOR },
   failed: { id: 'error', color: ERROR_COLOR },
   skipped: { id: 'dash' },
+  // settled by the user's word, not by a verification: a check without the
+  // "passed" colour tells the two apart at a glance
+  assumed: { id: 'check' },
   stale: { id: 'warning', color: WARNING_COLOR },
 };
 

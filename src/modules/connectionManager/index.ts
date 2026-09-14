@@ -28,6 +28,7 @@ const NON_CONNECT_OPTIONS = [
   'downloadOnOpen',
   'ignore',
   'ignoreFile',
+  'uploadExclude',
   'watcher',
   'concurrency',
   'syncOption',

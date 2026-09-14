@@ -56,6 +56,12 @@ export interface IndexEntry {
    */
   status: 'verified' | 'failed' | 'skipped';
   error?: string;
+  /**
+   * true on a `verified` entry the user asserted rather than the extension
+   * checked ("mark as uploaded"): the file is taken to be on the server in
+   * this version, nothing was transferred or compared.
+   */
+  assumed?: boolean;
 }
 
 interface IndexFile {
