@@ -83,6 +83,13 @@ export interface ExternalChangesConfig {
   scanOnResume: boolean;
   /** batches above this many files ask before uploading; 0 always asks */
   confirmThreshold: number;
+  /**
+   * a scan or a watcher burst that finds more changed files than this is not
+   * turned into a plan: the count is reported with a way out instead, so a
+   * tree of tens of thousands of files never saturates the view, the index or
+   * the extension host; 0 removes the limit
+   */
+  maxPlanItems: number;
 }
 
 export interface RemoteTrashConfig {
@@ -553,6 +560,7 @@ const DEFAULT_EXTERNAL_CHANGES: ExternalChangesConfig = {
   scanOnStartup: true,
   scanOnResume: true,
   confirmThreshold: 20,
+  maxPlanItems: 2000,
 };
 
 /**
@@ -583,6 +591,10 @@ export function resolveExternalChangesConfig(config: {
       typeof external!.confirmThreshold === 'number' && external!.confirmThreshold >= 0
         ? external!.confirmThreshold
         : DEFAULT_EXTERNAL_CHANGES.confirmThreshold,
+    maxPlanItems:
+      typeof external!.maxPlanItems === 'number' && external!.maxPlanItems >= 0
+        ? Math.floor(external!.maxPlanItems)
+        : DEFAULT_EXTERNAL_CHANGES.maxPlanItems,
   };
 }
 

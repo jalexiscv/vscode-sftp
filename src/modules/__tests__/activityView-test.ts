@@ -65,6 +65,10 @@ import {
   GroupNode,
   PlanNode,
   PlanItemNode,
+  MoreNode,
+  PLAN_ITEMS_PAGE,
+  isMoreNode,
+  moreNode,
 } from '../activityView/nodes';
 import {
   activityLabel,
@@ -229,6 +233,41 @@ describe('activityView nodes', () => {
       const plan = makePlan(['a.php']);
       expect(buildChildNodes(planItemNode(plan, plan.items[0]), [], [plan])).toEqual([]);
       expect(buildChildNodes(entry(), [], [plan])).toEqual([]);
+    });
+
+    test('a plan longer than a page lists the first page and a "more" row', () => {
+      const names = Array.from({ length: PLAN_ITEMS_PAGE + 5 }, (_, i) => `f${i}.php`);
+      const plan = makePlan(names);
+
+      const children = buildChildNodes(planNode(plan), [], [plan]);
+
+      expect(children.length).toBe(PLAN_ITEMS_PAGE + 1);
+      expect(children.slice(0, -1).every(node => isPlanItemNode(node))).toBe(true);
+      const last = children[children.length - 1];
+      expect(isMoreNode(last)).toBe(true);
+      expect(last as MoreNode).toMatchObject({
+        plan,
+        shown: PLAN_ITEMS_PAGE,
+        total: PLAN_ITEMS_PAGE + 5,
+      });
+
+      // the caller says how many items are visible; enough shows them all
+      const grown = buildChildNodes(planNode(plan), [], [plan], () => PLAN_ITEMS_PAGE * 2);
+      expect(grown.length).toBe(PLAN_ITEMS_PAGE + 5);
+      expect(grown.every(node => isPlanItemNode(node))).toBe(true);
+    });
+
+    test('a plan that fits in a page has no "more" row; the row is a leaf with a stable id', () => {
+      const plan = makePlan(['a.php']);
+      expect(buildChildNodes(planNode(plan), [], [plan]).every(node => isPlanItemNode(node))).toBe(
+        true
+      );
+
+      const more = moreNode(plan, 1);
+      expect(buildChildNodes(more, [], [plan])).toEqual([]);
+      expect(nodeId(more)).toBe(`plan:${plan.id}:`);
+      expect(localPathOf(more)).toBeUndefined();
+      expect(isPlanItemNode(more)).toBe(false);
     });
   });
 });
@@ -512,5 +551,40 @@ describe('ActivityTreeDataProvider', () => {
     activityLog.fail(id, 'boom');
     const [node] = provider.getChildren();
     expect(provider.getTreeItem(node).contextValue).toBe('activity.failed');
+  });
+});
+
+describe('ActivityTreeDataProvider: paginated plan items', () => {
+  beforeEach(() => {
+    resetPlans();
+  });
+
+  test('showMore reveals the next page of a plan, page by page', () => {
+    const provider = new ActivityTreeDataProvider();
+    const total = PLAN_ITEMS_PAGE * 2 + 1;
+    const plan = makePlan(Array.from({ length: total }, (_, i) => `f${i}.php`));
+    const [plansGroup] = provider.getChildren();
+    const [node] = provider.getChildren(plansGroup);
+
+    let children = provider.getChildren(node);
+    expect(children.length).toBe(PLAN_ITEMS_PAGE + 1);
+    const more = children[children.length - 1] as MoreNode;
+    expect(isMoreNode(more)).toBe(true);
+    const row = provider.getTreeItem(more);
+    expect(row.label).toBe(`${PLAN_ITEMS_PAGE + 1} more file(s)…`);
+    expect(row.contextValue).toBe('sftpPlanMore');
+    expect(row.command!.command).toBe('sftp.plan.showMore');
+    expect(row.command!.arguments).toEqual([more]);
+
+    provider.showMore(plan.id);
+    children = provider.getChildren(node);
+    expect(children.length).toBe(PLAN_ITEMS_PAGE * 2 + 1);
+    expect((children[children.length - 1] as MoreNode).shown).toBe(PLAN_ITEMS_PAGE * 2);
+
+    provider.showMore(plan.id);
+    children = provider.getChildren(node);
+    expect(children.length).toBe(total);
+    expect(children.every(child => isPlanItemNode(child))).toBe(true);
+    provider.dispose();
   });
 });

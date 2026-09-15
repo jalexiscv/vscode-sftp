@@ -30,6 +30,8 @@ export interface FsPromises {
   rename(from: string, to: string): Promise<void>;
   mkdir(dir: string, options: { recursive: true }): Promise<void>;
   unlink(fsPath: string): Promise<void>;
+  /** the directory must be empty */
+  rmdir(dir: string): Promise<void>;
   realpath(fsPath: string): Promise<string>;
 }
 

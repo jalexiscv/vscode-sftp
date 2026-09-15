@@ -11,12 +11,20 @@ jest.mock('../serviceManager', () => ({
 jest.mock('../planConfirmation', () => ({
   confirmAndRunPlan: jest.fn(() => Promise.resolve({ decision: 'run', summary: {} })),
 }));
+// the oversize warning and its buttons; the default vscode mock returns a
+// value that never settles when awaited
+jest.mock('../../host', () => ({
+  ...jest.requireActual('../../host'),
+  showWarningMessage: jest.fn(() => Promise.resolve(undefined)),
+  executeCommand: jest.fn(() => Promise.resolve()),
+}));
 
 import * as path from 'path';
 import { vol } from 'memfs';
 import { TransferDirection } from '../../core';
 import { getFileService, getRunningTransformTasks } from '../serviceManager';
 import { confirmAndRunPlan } from '../planConfirmation';
+import { executeCommand, showWarningMessage } from '../../host';
 import {
   setPaused,
   suppressAutoSync,
@@ -964,5 +972,100 @@ describe('batching window', () => {
 
     await flushNow();
     expect(pendingCount()).toBe(0);
+  });
+});
+
+describe('default handler: externalChanges.maxPlanItems', () => {
+  const showWarningMessageMock = showWarningMessage as jest.Mock;
+  const executeCommandMock = executeCommand as jest.Mock;
+  const three = ['a.ts', 'b.ts', 'c.ts'];
+
+  function threeFiles(external: any) {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'a', [p('src', 'b.ts')]: 'b', [p('src', 'c.ts')]: 'c' });
+    installServices(fakeService(p('src'), { externalChanges: external }));
+  }
+
+  beforeEach(() => {
+    showWarningMessageMock.mockReset();
+    showWarningMessageMock.mockImplementation(() => Promise.resolve(undefined));
+    executeCommandMock.mockClear();
+  });
+
+  test('a burst above the limit is dropped, not planned, with one warning per service', async () => {
+    threeFiles({ maxPlanItems: 2 });
+
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+    expect(getPlans()).toEqual([]);
+    expect(pendingCount()).toBe(0);
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+    expect(showWarningMessageMock.mock.calls[0][0]).toContain('3 local file(s) changed at once');
+    expect(showWarningMessageMock.mock.calls[0].slice(1)).toEqual([
+      'Mark all as uploaded',
+      'Manage upload exclusions',
+    ]);
+
+    // a second burst is dropped quietly
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+
+    // a batch within the limit is planned as before
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+    expect(getPlans()[0].items.length).toBe(1);
+  });
+
+  test('a dropped folder that expands past the limit is dropped too', async () => {
+    vol.fromJSON({
+      [p('src', 'pkg', 'a.ts')]: 'a',
+      [p('src', 'pkg', 'b.ts')]: 'b',
+      [p('src', 'pkg', 'c.ts')]: 'c',
+    });
+    installServices(fakeService(p('src'), { externalChanges: { maxPlanItems: 2 } }));
+
+    enqueueChange(uri(p('src', 'pkg')), 'watcher');
+    await flushNow();
+
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('the warning buttons run the mark-as-uploaded and the exclusions commands', async () => {
+    threeFiles({ maxPlanItems: 2 });
+    showWarningMessageMock.mockResolvedValueOnce('Mark all as uploaded');
+
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    expect(executeCommandMock).toHaveBeenCalledWith('sftp.markLocalTreeUploaded');
+
+    __resetForTest();
+    installServices(fakeService(p('src'), { externalChanges: { maxPlanItems: 2 } }));
+    showWarningMessageMock.mockResolvedValueOnce('Manage upload exclusions');
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    expect(executeCommandMock).toHaveBeenCalledWith('sftp.uploadExclude.manage');
+  });
+
+  test('at the limit, or with the limit off, the batch is planned as before', async () => {
+    threeFiles({ maxPlanItems: 3 });
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(1);
+
+    resetPlans();
+    threeFiles({ maxPlanItems: 0 });
+    three.forEach(name => enqueueChange(uri(p('src', name)), 'watcher'));
+    await flushNow();
+    expect(confirmAndRunPlanMock).toHaveBeenCalledTimes(2);
+    expect(showWarningMessageMock).not.toHaveBeenCalled();
   });
 });

@@ -32,7 +32,25 @@ export interface PlanItemNode {
   item: UploadPlanItem;
 }
 
-export type ActivityTreeNode = GroupNode | PlanNode | PlanItemNode | ActivityEntry;
+/**
+ * The row after the last item shown of a plan whose items are paginated:
+ * "N more files…". Clicking it shows the next page.
+ */
+export interface MoreNode {
+  nodeType: 'more';
+  plan: UploadPlan;
+  /** items shown so far */
+  shown: number;
+  /** items the plan has */
+  total: number;
+}
+
+export type ActivityTreeNode = GroupNode | PlanNode | PlanItemNode | MoreNode | ActivityEntry;
+
+// A plan lists this many items before a "more" row takes over. A tree of
+// 90k rows is what made the view — and the extension host with it — crawl;
+// a page is what a person can review anyway.
+export const PLAN_ITEMS_PAGE = 200;
 
 // activityLog numbers real entries from 1, so a negative id can never collide
 // with one. It marks the row shown when there is nothing to display.
@@ -55,6 +73,10 @@ export function isPlanNode(node: ActivityTreeNode | undefined): node is PlanNode
 
 export function isPlanItemNode(node: ActivityTreeNode | undefined): node is PlanItemNode {
   return Boolean(node) && (node as PlanItemNode).nodeType === 'planItem';
+}
+
+export function isMoreNode(node: ActivityTreeNode | undefined): node is MoreNode {
+  return Boolean(node) && (node as MoreNode).nodeType === 'more';
 }
 
 export function isActivityEntry(node: ActivityTreeNode | undefined): node is ActivityEntry {
@@ -92,6 +114,11 @@ export function nodeId(node: ActivityTreeNode): string {
   if (isPlanItemNode(node)) {
     return `plan:${node.plan.id}:${node.item.localPath}`;
   }
+  if (isMoreNode(node)) {
+    // stable across pages, so the row keeps the selection when the next page
+    // is shown; a local path can't collide with it (never empty)
+    return `plan:${node.plan.id}:`;
+  }
   return String(node.id);
 }
 
@@ -110,18 +137,33 @@ export function buildRootNodes(entries: ActivityEntry[], plans: UploadPlan[]): A
   ];
 }
 
+/**
+ * `visibleItems` says how many items of a plan the view shows (the provider
+ * grows it page by page); absent, the first page. A plan with more items than
+ * that ends in a {@link MoreNode} instead of listing them all.
+ */
 export function buildChildNodes(
   node: ActivityTreeNode,
   entries: ActivityEntry[],
-  plans: UploadPlan[]
+  plans: UploadPlan[],
+  visibleItems?: (planId: string) => number
 ): ActivityTreeNode[] {
   if (isGroupNode(node)) {
     return node.group === 'plans' ? plans.map(planNode) : activityRows(entries);
   }
   if (isPlanNode(node)) {
-    return node.plan.items.map(item => planItemNode(node.plan, item));
+    const { plan } = node;
+    const limit = Math.max(1, visibleItems ? visibleItems(plan.id) : PLAN_ITEMS_PAGE);
+    if (plan.items.length <= limit) {
+      return plan.items.map(item => planItemNode(plan, item));
+    }
+    const rows: ActivityTreeNode[] = plan.items
+      .slice(0, limit)
+      .map(item => planItemNode(plan, item));
+    rows.push(moreNode(plan, limit));
+    return rows;
   }
-  // plan items and activity entries are leaves
+  // plan items, "more" rows and activity entries are leaves
   return [];
 }
 
@@ -131,6 +173,10 @@ export function planNode(plan: UploadPlan): PlanNode {
 
 export function planItemNode(plan: UploadPlan, item: UploadPlanItem): PlanItemNode {
   return { nodeType: 'planItem', plan, item };
+}
+
+export function moreNode(plan: UploadPlan, shown: number): MoreNode {
+  return { nodeType: 'more', plan, shown, total: plan.items.length };
 }
 
 function activityRows(entries: ActivityEntry[]): ActivityTreeNode[] {

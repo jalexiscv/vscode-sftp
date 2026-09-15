@@ -3,6 +3,7 @@ import {
   COMMAND_ACTIVITY_REFRESH,
   COMMAND_ACTIVITY_RETRY,
   COMMAND_ACTIVITY_REVEAL,
+  COMMAND_PLAN_SHOW_MORE,
   VIEW_ACTIVITY,
 } from '../../constants';
 import { reportError } from '../../helper';
@@ -12,7 +13,7 @@ import { ActivityEntry, getEntry, onDidChange } from '../activityLog';
 import { getPlans, onDidChange as onDidChangePlans } from '../uploadPlan';
 import { onDidChangeRunning } from '../planRunner';
 import ActivityTreeDataProvider from './treeDataProvider';
-import { ActivityTreeNode, isActivityEntry, isPlaceholder, localPathOf } from './nodes';
+import { ActivityTreeNode, isActivityEntry, isMoreNode, isPlaceholder, localPathOf } from './nodes';
 
 /**
  * The SFTP Activity view: the tree of upload plans and past operations, plus
@@ -56,6 +57,11 @@ export default class ActivityView {
     registerCommand(context, COMMAND_ACTIVITY_REFRESH, () => this.refresh());
     registerCommand(context, COMMAND_ACTIVITY_RETRY, (node: ActivityTreeNode) => this.retry(node));
     registerCommand(context, COMMAND_ACTIVITY_REVEAL, (node: ActivityTreeNode) => this.reveal(node));
+    registerCommand(context, COMMAND_PLAN_SHOW_MORE, (node: ActivityTreeNode) => {
+      if (isMoreNode(node)) {
+        this._treeDataProvider.showMore(node.plan.id);
+      }
+    });
   }
 
   refresh(): void {

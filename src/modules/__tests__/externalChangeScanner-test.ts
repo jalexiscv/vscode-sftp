@@ -17,6 +17,7 @@ jest.mock('../planConfirmation', () => ({
 jest.mock('../../host', () => ({
   ...jest.requireActual('../../host'),
   showInformationMessage: jest.fn(() => Promise.resolve(undefined)),
+  showWarningMessage: jest.fn(() => Promise.resolve(undefined)),
   showChoiceMessage: jest.fn(() => Promise.resolve(undefined)),
   executeCommand: jest.fn(() => Promise.resolve()),
   withProgress: jest.fn((_options: any, task: any) =>
@@ -33,7 +34,12 @@ import app from '../../app';
 import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../../constants';
 import { getAllFileService } from '../serviceManager';
 import { confirmAndRunPlan } from '../planConfirmation';
-import { showInformationMessage, showChoiceMessage } from '../../host';
+import {
+  executeCommand,
+  showInformationMessage,
+  showChoiceMessage,
+  showWarningMessage,
+} from '../../host';
 import { setPaused, __resetForTest as resetSyncControl } from '../syncControl';
 import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
 import { indexFor } from '../syncIndexFeeder';
@@ -1107,5 +1113,124 @@ describe('uploadExclude', () => {
 
     expect(summary).toMatchObject({ indexed: 1, differ: 0, onlyLocal: 0, onlyRemote: 0 });
     expect((await indexFor(service)).get('storage/app.log')).toBeUndefined();
+  });
+});
+
+describe('externalChanges.maxPlanItems', () => {
+  const { MANAGE_EXCLUSIONS_LABEL } = testHooks;
+  const showWarningMessageMock = showWarningMessage as jest.Mock;
+  const executeCommandMock = executeCommand as jest.Mock;
+
+  // three files, each indexed with another size: a seeded index that a scan
+  // finds three `modified` files against
+  async function threeModified(external: any) {
+    vol.fromJSON({ [p('a.ts')]: 'aa', [p('b.ts')]: 'bb', [p('c.ts')]: 'cc' });
+    const service = fakeService({ externalChanges: external });
+    const index = await indexFor(service);
+    ['a.ts', 'b.ts', 'c.ts'].forEach(relPath =>
+      index.set(relPath, { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' })
+    );
+    index.markSeeded();
+    return service;
+  }
+
+  beforeEach(() => {
+    showWarningMessageMock.mockReset();
+    showWarningMessageMock.mockImplementation(() => Promise.resolve(undefined));
+    executeCommandMock.mockClear();
+  });
+
+  test('a scan above the limit plans nothing, warns with the ways out and holds automatic scans', async () => {
+    const service = await threeModified({ maxPlanItems: 2 });
+
+    const outcome = await runScan(service, 'startup');
+
+    expect(outcome).toMatchObject({ status: 'too-many', plan: null, changed: 3, filesScanned: 3 });
+    expect(outcome.reason).toMatch(/maxPlanItems \(2\)/);
+    expect(getPlans()).toEqual([]);
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+    expect(showWarningMessageMock.mock.calls[0][0]).toContain('3 local file(s) differ');
+    expect(showWarningMessageMock.mock.calls[0].slice(1)).toEqual([
+      MARK_ALL_UPLOADED_LABEL,
+      MANAGE_EXCLUSIONS_LABEL,
+    ]);
+
+    // walking the tree again would only say the same
+    const focus = await runScan(service, 'focus');
+    expect(focus.status).toBe('skipped');
+    expect(focus.reason).toMatch(/3 changed file\(s\)/);
+    expect((await runScan(service, 'poll')).status).toBe('skipped');
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+
+    // a reloaded sftp.json and a manual scan get their chance, and say so again
+    expect((await runScan(service, 'config')).status).toBe('too-many');
+    expect((await runScan(service, 'manual')).status).toBe('too-many');
+    expect(showWarningMessageMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('at the limit, or with the limit off, the plan is built as before', async () => {
+    const atLimit = await threeModified({ maxPlanItems: 3 });
+    const outcome = await runScan(atLimit, 'startup');
+    expect(outcome.status).toBe('planned');
+    expect(outcome.plan!.items.length).toBe(3);
+
+    resetPlans();
+    vol.reset();
+    const unlimited = await threeModified({ maxPlanItems: 0 });
+    expect((await runScan(unlimited, 'manual')).status).toBe('planned');
+    expect(showWarningMessageMock).not.toHaveBeenCalled();
+  });
+
+  test('"Mark all as uploaded" on the warning seeds the index and lifts the hold', async () => {
+    const service = await threeModified({ maxPlanItems: 2 });
+    showWarningMessageMock.mockResolvedValueOnce(MARK_ALL_UPLOADED_LABEL);
+    // the modal confirmation of the interactive mark
+    showChoiceMessageMock.mockImplementationOnce((_message: string, choices: string[]) =>
+      Promise.resolve(choices[0])
+    );
+
+    expect((await runScan(service, 'startup')).status).toBe('too-many');
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    expect((await indexFor(service)).get('a.ts')).toMatchObject({ assumed: true, size: 2 });
+    expect((await runScan(service, 'focus')).status).toBe('up-to-date');
+  });
+
+  test('"Manage upload exclusions" on the warning runs the command', async () => {
+    const service = await threeModified({ maxPlanItems: 2 });
+    showWarningMessageMock.mockResolvedValueOnce(MANAGE_EXCLUSIONS_LABEL);
+
+    await runScan(service, 'manual');
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    expect(executeCommandMock).toHaveBeenCalledWith('sftp.uploadExclude.manage');
+  });
+
+  test('a rebuild of the index lifts the hold', async () => {
+    const service = await threeModified({ maxPlanItems: 2 });
+    vol.fromJSON({ '/remote/a.ts': 'aa', '/remote/b.ts': 'bb', '/remote/c.ts': 'cc' });
+    expect((await runScan(service, 'startup')).status).toBe('too-many');
+    expect((await runScan(service, 'focus')).status).toBe('skipped');
+
+    await rebuildSyncIndex(service);
+
+    expect((await runScan(service, 'focus')).status).toBe('up-to-date');
+  });
+
+  test('a scan back within the limit lifts the hold on its own', async () => {
+    const service = await threeModified({ maxPlanItems: 2 });
+    expect((await runScan(service, 'startup')).status).toBe('too-many');
+
+    // the user excluded two of the files
+    vol.unlinkSync(p('b.ts'));
+    vol.unlinkSync(p('c.ts'));
+    const outcome = await runScan(service, 'config');
+
+    expect(outcome.status).toBe('planned');
+    expect(outcome.plan!.items.length).toBe(1);
+    // held no more: the next automatic scan is only waiting on the plan
+    const focus = await runScan(service, 'focus');
+    expect(focus.reason).toMatch(/pending review/);
   });
 });

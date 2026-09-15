@@ -142,6 +142,12 @@ Since 1.26.0 you can **mark them as uploaded** instead of uploading, skipping or
 
 If the index was never built (the notice `the sync index for … is not built yet` and `N unindexed file(s) ignored until the index is built` in the output channel) and the local tree is what the server holds, run `SFTP: Mark Local Files as Uploaded` — or pick `Mark all as uploaded` on that notice. It walks the local tree, shows the count and seeds the index from it without listing the server, which over FTP with tens of thousands of files is the difference between a few seconds and many minutes. Use `SFTP: Rebuild Sync Index` instead when you want the server actually listed and compared.
 
+## The extension says "N changed file(s), too many to plan" (or dropped a burst). What now?
+
+Since 1.27.0 a scan or a watcher burst that finds more changed files than `externalChanges.maxPlanItems` (2000 by default) is not turned into an upload plan: a plan of 90 000 pending items cannot be reviewed and only made the Activity view, the status bar, the sync index and the whole extension host crawl. The warning offers the two usual ways out: `Mark all as uploaded` when the local tree is what the server already holds, and `Manage upload exclusions` when whole folders (`vendor`, `node_modules`, `storage`, build output) should never go up. The third one is to upload the project once (`SFTP: Upload Project`) and scan again. Until then, the automatic scans of that connection stay off; a manual `SFTP: Scan for External Changes`, an index rebuild, a mark-as-uploaded or a reload of `sftp.json` runs them again. If you really want a plan that big, raise the limit or set it to `0` in `sftp.json`.
+
+Note that since 1.27.0 the sync index and the activity log are discarded the first time a new version activates in a workspace, so after an upgrade the index starts empty and the notice `the sync index for … is empty` comes back: seed it with `SFTP: Mark Local Files as Uploaded` or rebuild it, as on first use.
+
 ## How can I upload files as root?
 
 See [vscode-sftp issue #559](https://github.com/liximomo/vscode-sftp/issues/559).
