@@ -8,8 +8,17 @@ import {
   uploadIgnoreOf,
 } from '../core/fileService';
 import { toRemotePath } from '../helper';
-import { showChoiceMessage, showInformationMessage, withProgress } from '../host';
-import { STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED } from '../constants';
+import {
+  executeCommand,
+  showChoiceMessage,
+  showInformationMessage,
+  showWarningMessage,
+  withProgress,
+} from '../host';
+import {
+  COMMAND_UPLOAD_EXCLUDE_MANAGE,
+  STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED,
+} from '../constants';
 import { getAllFileService } from './serviceManager';
 import { isPaused, onDidChangePauseState } from './syncControl';
 import { indexFor } from './syncIndexFeeder';
@@ -76,6 +85,7 @@ export type ScanStatus =
   | 'planned'
   | 'up-to-date'
   | 'empty-index'
+  | 'too-many'
   | 'skipped'
   | 'cancelled'
   | 'error';
@@ -83,6 +93,8 @@ export type ScanStatus =
 export interface ScanOutcome {
   status: ScanStatus;
   plan: UploadPlan | null;
+  /** for `too-many`: how many files differed, against `externalChanges.maxPlanItems` */
+  changed?: number;
   /** what the confirmation decided, when a plan was built */
   decision?: PlanDecision;
   /** the plan's summary when the scan returned */
@@ -164,6 +176,7 @@ const MTIME_TOLERANCE_IN_SECONDS = 2;
 const BUILD_INDEX_LABEL = 'Build index now';
 const MARK_ALL_UPLOADED_LABEL = 'Mark all as uploaded';
 const DONT_SHOW_AGAIN_LABEL = 'Don\'t show again';
+const MANAGE_EXCLUSIONS_LABEL = 'Manage upload exclusions';
 
 // plan item statuses that "mark as uploaded" settles: what a run would pick up
 const OPEN_ITEM_STATUSES = ['pending', 'stale', 'failed'];
@@ -184,6 +197,11 @@ const lastPollAt = new Map<string, number>();
 // user asked never to see again (persisted per workspace)
 const unbuiltNoticeShown = new Set<string>();
 const unbuiltNoticeDismissed = new Set<string>();
+// base dirs whose last scan found more changed files than
+// externalChanges.maxPlanItems: automatic scans would only walk the same tree
+// to the same conclusion, so they stay off until something changes the
+// picture (a manual scan, a rebuild, "mark as uploaded", a config reload)
+const overflowed = new Map<string, number>();
 
 function foldRel(relPath: string): string {
   return CASE_INSENSITIVE_FS ? relPath.toLowerCase() : relPath;
@@ -315,6 +333,35 @@ function notifyUnbuiltIndex(service: FileService, index: SyncIndex, unindexed: n
   );
 }
 
+/**
+ * Tells the user that a scan found more changed files than
+ * `externalChanges.maxPlanItems`, with the two ways out: declare the local
+ * tree uploaded (the usual answer on a site that is on the server already) or
+ * trim the tree with `uploadExclude`. Not modal: nothing is waiting on it.
+ */
+function notifyTooManyChanges(service: FileService, changed: number, limit: number) {
+  const name = nameOf(service);
+  const message =
+    `SFTP: ${name}: ${changed.toLocaleString()} local file(s) differ from the sync index, ` +
+    `above the ${limit.toLocaleString()} allowed per upload plan (externalChanges.maxPlanItems). ` +
+    'Nothing was planned. If those files are on the server already, mark them as uploaded; ' +
+    'if they should never go up, exclude them; otherwise upload the project and scan again.';
+  Promise.resolve(showWarningMessage(message, MARK_ALL_UPLOADED_LABEL, MANAGE_EXCLUSIONS_LABEL)).then(
+    choice => {
+      if (choice === MARK_ALL_UPLOADED_LABEL) {
+        markLocalTreeAsUploadedInteractive(service).catch(error =>
+          logger.error(error, `mark local tree of ${name} as uploaded`)
+        );
+      } else if (choice === MANAGE_EXCLUSIONS_LABEL) {
+        Promise.resolve(executeCommand(COMMAND_UPLOAD_EXCLUDE_MANAGE)).then(undefined, error =>
+          logger.error(error, 'manage upload exclusions')
+        );
+      }
+    },
+    error => logger.debug(`[scan] too-many prompt failed: ${error.message}`)
+  );
+}
+
 async function doScan(
   service: FileService,
   config: ServiceConfig,
@@ -387,6 +434,7 @@ async function doScan(
   }
 
   if (items.length === 0) {
+    overflowed.delete(service.baseDir);
     logger.info(
       `[scan] ${name}: up to date (${scan.files.length} files, ${scan.durationMs} ms` +
         (diff.missingLocally.length > 0
@@ -411,6 +459,32 @@ async function doScan(
     `[scan] ${name}: ${items.length} file(s) changed since their last verified upload ` +
       `(${diff.unchanged} unchanged, ${scan.durationMs} ms, trigger ${trigger})`
   );
+
+  // A plan of tens of thousands of items saturates the view, the status bar,
+  // the index and the connection, and answering it file by file is not a
+  // real option: report the count with the two ways out instead, and keep
+  // the automatic scans from walking the same tree again until something
+  // changes the picture.
+  const limit = resolveExternalChangesConfig(config).maxPlanItems;
+  if (limit > 0 && items.length > limit) {
+    overflowed.set(service.baseDir, items.length);
+    logger.warn(
+      `[scan] ${name}: ${items.length} changed file(s) exceed externalChanges.maxPlanItems ` +
+        `(${limit}); nothing planned. Mark the local files as uploaded, add upload exclusions ` +
+        'or raise the limit, then scan again'
+    );
+    app.sftpBarItem.showMsg(`${name}: ${items.length} changed file(s), too many to plan`, 4000);
+    notifyTooManyChanges(service, items.length, limit);
+    return {
+      status: 'too-many',
+      plan: null,
+      changed: items.length,
+      filesScanned: scan.files.length,
+      ignoredNew,
+      reason: `${items.length} changed file(s) exceed externalChanges.maxPlanItems (${limit})`,
+    };
+  }
+  overflowed.delete(service.baseDir);
   app.sftpBarItem.showMsg(`${name}: ${items.length} changed file(s)`, 2000);
 
   const plan = createPlan({
@@ -496,8 +570,19 @@ export function runScan(
     if (openScanPlans(service.name).length > 0) {
       return skipped('a previous scan is still pending review');
     }
+    // a reloaded sftp.json may carry new exclusions or another limit: that
+    // scan gets its chance; the rest would only repeat the overflow
+    if (trigger === 'config') {
+      overflowed.delete(service.baseDir);
+    } else if (overflowed.has(service.baseDir)) {
+      return skipped(
+        `the last scan found ${overflowed.get(service.baseDir)} changed file(s), above ` +
+          'externalChanges.maxPlanItems; scan manually once that is settled'
+      );
+    }
   } else {
     supersedeOpenScanPlans(service.name);
+    overflowed.delete(service.baseDir);
   }
 
   const run = doScan(service, config, trigger, options).then(
@@ -756,6 +841,8 @@ export async function rebuildSyncIndex(
       `${summary.differ} differ in size, ${summary.onlyLocal} only local, ` +
       `${summary.onlyRemote} only remote; index marked as built`
   );
+  // the index changed: the automatic scans get another chance
+  overflowed.delete(service.baseDir);
   return summary;
 }
 
@@ -882,6 +969,8 @@ export async function markLocalTreeAsUploaded(
   index.markSeeded(now);
   await index.save();
   forgetUnbuiltNotice(index.key);
+  // the tree is the baseline now: the automatic scans get another chance
+  overflowed.delete(service.baseDir);
 
   const settledPlanItems = settleOpenPlanItems(service.name);
   logger.info(
@@ -1060,6 +1149,7 @@ export function __resetForTest() {
   lastScanAt.clear();
   unbuiltNoticeShown.clear();
   unbuiltNoticeDismissed.clear();
+  overflowed.clear();
   extensionContext = null;
   wasPaused = false;
 }
@@ -1075,4 +1165,5 @@ export const testHooks = {
   BUILD_INDEX_LABEL,
   MARK_ALL_UPLOADED_LABEL,
   DONT_SHOW_AGAIN_LABEL,
+  MANAGE_EXCLUSIONS_LABEL,
 };

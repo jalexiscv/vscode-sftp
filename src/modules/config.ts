@@ -101,6 +101,7 @@ const configScheme = {
     scanOnStartup: Joi.boolean(),
     scanOnResume: Joi.boolean(),
     confirmThreshold: Joi.number().integer().min(0),
+    maxPlanItems: Joi.number().integer().min(0),
   },
 };
 
@@ -169,11 +170,13 @@ const defaultConfig = {
   },
 
   // edits made while VS Code was closed are picked up by a scan at activation
-  // and on resume; a batch above the threshold asks before uploading
+  // and on resume; a batch above the threshold asks before uploading, and one
+  // above maxPlanItems is reported instead of planned
   externalChanges: {
     scanOnStartup: true,
     scanOnResume: true,
     confirmThreshold: 20,
+    maxPlanItems: 2000,
   },
 };
 

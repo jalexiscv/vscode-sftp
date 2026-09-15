@@ -8,6 +8,8 @@ import fsPromises from '../helper/fsPromises';
 import { isValidFile, isSamePath, fileDepth, toRemotePath } from '../helper';
 import { FileService, ServiceConfig, TransferDirection } from '../core';
 import { resolveExternalChangesConfig, uploadIgnoreOf } from '../core/fileService';
+import { executeCommand, showWarningMessage } from '../host';
+import { COMMAND_MARK_LOCAL_TREE_UPLOADED, COMMAND_UPLOAD_EXCLUDE_MANAGE } from '../constants';
 import { getFileService, getRunningTransformTasks } from './serviceManager';
 import {
   isPaused,
@@ -307,18 +309,77 @@ function planSourceFor(batch: ChangeBatch): PlanSource {
   return 'command';
 }
 
+const MARK_ALL_UPLOADED_LABEL = 'Mark all as uploaded';
+const MANAGE_EXCLUSIONS_LABEL = 'Manage upload exclusions';
+
+// services already told this session that a burst was dropped; a checkout
+// that touches the whole tree fires one batch per window, and one warning
+// per batch would bury the user
+const oversizeNotified = new Set<string>();
+
+/**
+ * Drops a batch that holds more changes than `externalChanges.maxPlanItems`
+ * and says so once per service and session. A `git checkout` across a
+ * branch, a `composer install` or a build touching tens of thousands of
+ * files would otherwise stat every one of them, build a plan the size of the
+ * tree and hold it in the view and the status bar; the files still differ
+ * from the index, so a manual scan — or the next startup scan — reports
+ * them with the ways out.
+ */
+function dropOversizedBatch(batch: ChangeBatch, count: number, limit: number): void {
+  const name = batch.service.name || batch.service.baseDir;
+  logger.warn(
+    `[change-collector] ${name}: ${count} changed file(s) from ${planSourceFor(batch)} exceed ` +
+      `externalChanges.maxPlanItems (${limit}); dropped. Mark the local files as uploaded, ` +
+      'add upload exclusions or raise the limit, then run "SFTP: Scan for External Changes"'
+  );
+  if (oversizeNotified.has(batch.service.baseDir)) {
+    return;
+  }
+  oversizeNotified.add(batch.service.baseDir);
+  const message =
+    `SFTP: ${name}: ${count.toLocaleString()} local file(s) changed at once, above the ` +
+    `${limit.toLocaleString()} allowed per upload plan (externalChanges.maxPlanItems). ` +
+    'Nothing was uploaded. If those files are on the server already, mark them as uploaded; ' +
+    'if they should never go up, exclude them; otherwise upload the project and scan again.';
+  Promise.resolve(showWarningMessage(message, MARK_ALL_UPLOADED_LABEL, MANAGE_EXCLUSIONS_LABEL)).then(
+    choice => {
+      if (choice === MARK_ALL_UPLOADED_LABEL) {
+        Promise.resolve(executeCommand(COMMAND_MARK_LOCAL_TREE_UPLOADED)).then(undefined, error =>
+          logger.error(error, 'mark local files as uploaded')
+        );
+      } else if (choice === MANAGE_EXCLUSIONS_LABEL) {
+        Promise.resolve(executeCommand(COMMAND_UPLOAD_EXCLUDE_MANAGE)).then(undefined, error =>
+          logger.error(error, 'manage upload exclusions')
+        );
+      }
+    },
+    error => logger.debug(`[change-collector] oversize prompt failed: ${error.message}`)
+  );
+}
+
 /**
  * Default handler: the batch becomes one upload plan per service, which is
  * confirmed when large or git-driven and then handed to planRunner — without
  * waiting for the uploads, so a long run never holds the next batch back. A
  * directory in the batch (a folder dropped into the workspace arrives as one
  * event for it, and maybe one per file inside) is expanded into its files, so
- * the plan stays per file and nothing is uploaded twice.
+ * the plan stays per file and nothing is uploaded twice. A batch above
+ * `externalChanges.maxPlanItems` — before or after that expansion — is
+ * dropped with a warning instead of planned.
  */
 async function planBatch(batch: ChangeBatch): Promise<void> {
   const { service } = batch;
   const config = resolveConfig(service);
   if (!config) {
+    return;
+  }
+
+  // checked before the stats: a burst of 90k events must not cost 90k lstat
+  // calls only to be dropped afterwards
+  const limit = resolveExternalChangesConfig(config).maxPlanItems;
+  if (limit > 0 && batch.items.length > limit) {
+    dropOversizedBatch(batch, batch.items.length, limit);
     return;
   }
 
@@ -373,6 +434,11 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
   }
 
   if (items.length === 0) {
+    return;
+  }
+  // a dropped folder arrives as one event and expands into its whole tree
+  if (limit > 0 && items.length > limit) {
+    dropOversizedBatch(batch, items.length, limit);
     return;
   }
 
@@ -734,6 +800,7 @@ export function destroy() {
   heldKeys.clear();
   recentlyHandled.clear();
   pendingListeners.length = 0;
+  oversizeNotified.clear();
   dropBurstCaches();
 }
 

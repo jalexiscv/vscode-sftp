@@ -7,8 +7,10 @@ import {
   initSyncIndex,
   getSyncIndex,
   flushSyncIndex,
+  holdSyncIndexSaves,
   indexKeyFor,
   toRelPath,
+  testHooks,
   __resetForTest,
 } from '../syncIndex';
 
@@ -498,6 +500,59 @@ describe('syncIndex', () => {
 
     test('tolerates a trailing slash on the base dir', () => {
       expect(toRelPath('/home/u/repo/', '/home/u/repo/src/a.ts')).toBe('src/a.ts');
+    });
+  });
+
+  describe('holdSyncIndexSaves', () => {
+    // real timers, as in "changes are saved on their own": memfs completes
+    // its callbacks through setImmediate
+    const pastDebounce = () => new Promise(resolve => setTimeout(resolve, 1300));
+
+    test('the held delay is much longer than the usual one', () => {
+      expect(testHooks.SAVE_DEBOUNCE_HELD_MS).toBeGreaterThan(10 * testHooks.SAVE_DEBOUNCE_MS);
+    });
+
+    test('a held change is not written after the usual delay; releasing writes it', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('held');
+      const release = holdSyncIndexSaves();
+      index.set('a.ts', entry());
+
+      await pastDebounce();
+      expect(storedFiles()).toEqual([]);
+
+      release();
+      // a second release is a no-op, not a second decrement
+      release();
+      await pastDebounce();
+      expect(storedFiles()).toHaveLength(1);
+    });
+
+    test('nested holds release together', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('nested');
+      const outer = holdSyncIndexSaves();
+      const inner = holdSyncIndexSaves();
+      index.set('a.ts', entry());
+
+      inner();
+      await pastDebounce();
+      expect(storedFiles()).toEqual([]);
+
+      outer();
+      await pastDebounce();
+      expect(storedFiles()).toHaveLength(1);
+    });
+
+    test('an explicit flush is not held back', async () => {
+      initSyncIndex({ storagePath: storage });
+      const index = await getSyncIndex('held-flush');
+      const release = holdSyncIndexSaves();
+      index.set('a.ts', entry());
+
+      await flushSyncIndex();
+      expect(storedFiles()).toHaveLength(1);
+      release();
     });
   });
 });

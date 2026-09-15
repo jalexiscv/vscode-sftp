@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { COMMAND_ACTIVITY_REVEAL } from '../../constants';
+import { COMMAND_ACTIVITY_REVEAL, COMMAND_PLAN_SHOW_MORE } from '../../constants';
 import { ActivityEntry, ActivityStatus, getEntries } from '../activityLog';
 import { getPlans } from '../uploadPlan';
 import { isPlanRunning } from '../planRunner';
@@ -21,11 +21,14 @@ import {
 import {
   ActivityTreeNode,
   GroupNode,
+  MoreNode,
+  PLAN_ITEMS_PAGE,
   PlanItemNode,
   PlanNode,
   buildChildNodes,
   buildRootNodes,
   isGroupNode,
+  isMoreNode,
   isPlaceholder,
   isPlanItemNode,
   isPlanNode,
@@ -125,6 +128,25 @@ function planItemItem(node: PlanItemNode): vscode.TreeItem {
   };
 }
 
+function moreItem(node: MoreNode): vscode.TreeItem {
+  const left = node.total - node.shown;
+  const next = Math.min(left, PLAN_ITEMS_PAGE);
+  return {
+    id: nodeId(node),
+    label: `${left.toLocaleString()} more file(s)…`,
+    description: `showing ${node.shown.toLocaleString()} of ${node.total.toLocaleString()}`,
+    tooltip: `Show the next ${next.toLocaleString()} file(s) of this plan`,
+    iconPath: new themeIcon('ellipsis'),
+    contextValue: 'sftpPlanMore',
+    collapsibleState: vscode.TreeItemCollapsibleState.None,
+    command: {
+      command: COMMAND_PLAN_SHOW_MORE,
+      title: 'Show More Files',
+      arguments: [node],
+    },
+  };
+}
+
 function activityItem(entry: ActivityEntry): vscode.TreeItem {
   if (isPlaceholder(entry)) {
     return {
@@ -155,11 +177,25 @@ export default class ActivityTreeDataProvider implements vscode.TreeDataProvider
   readonly onDidChangeTreeData: vscode.Event<ActivityTreeNode | undefined> = this._onDidChangeTreeData
     .event;
   private _refreshTimer: any = null;
+  // plan id -> items shown; absent means the first page. Grown by showMore,
+  // never shrunk: a plan that was expanded stays expanded across refreshes.
+  private _visibleItems = new Map<string, number>();
 
   /** Rebuilds the tree now. */
   refresh(): void {
     this._cancelScheduledRefresh();
     this._onDidChangeTreeData.fire();
+  }
+
+  /** Shows the next page of a plan's items and rebuilds the tree. */
+  showMore(planId: string): void {
+    this._visibleItems.set(planId, this._visibleItemsOf(planId) + PLAN_ITEMS_PAGE);
+    this.refresh();
+  }
+
+  /** How many items of a plan the tree lists before its "more" row. */
+  private _visibleItemsOf(planId: string): number {
+    return this._visibleItems.get(planId) || PLAN_ITEMS_PAGE;
   }
 
   /**
@@ -204,6 +240,9 @@ export default class ActivityTreeDataProvider implements vscode.TreeDataProvider
     if (isPlanItemNode(node)) {
       return planItemItem(node);
     }
+    if (isMoreNode(node)) {
+      return moreItem(node);
+    }
     return activityItem(node);
   }
 
@@ -212,6 +251,6 @@ export default class ActivityTreeDataProvider implements vscode.TreeDataProvider
     if (!node) {
       return buildRootNodes(getEntries(), getPlans());
     }
-    return buildChildNodes(node, getEntries(), getPlans());
+    return buildChildNodes(node, getEntries(), getPlans(), planId => this._visibleItemsOf(planId));
   }
 }

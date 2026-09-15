@@ -207,6 +207,12 @@
             "description": "Number of changed files above which SFTP shows the upload plan and asks for confirmation before uploading. Batches caused by a git operation always ask. Set to 0 to always ask.",
             "minimum": 0,
             "default": 20
+          },
+          "maxPlanItems": {
+            "type": "integer",
+            "description": "Number of changed files above which a scan or a watcher burst is not turned into an upload plan: the count is reported with a way out (mark the local files as uploaded, review the upload exclusions) instead of listing tens of thousands of pending files. Automatic scans stay off for that connection until a manual scan, an index rebuild or a reload of sftp.json. Set to 0 to remove the limit.",
+            "minimum": 0,
+            "default": 2000
           }
         }
       },

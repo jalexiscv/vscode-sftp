@@ -11,6 +11,7 @@ import { handleCtxFromUri } from '../fileHandlers';
 import { refreshRemoteExplorer } from '../fileHandlers/shared';
 import { getFileService } from './serviceManager';
 import { rememberSkipped, rememberAssumedUploaded } from './syncIndexFeeder';
+import { holdSyncIndexSaves } from './syncIndex';
 import {
   UploadPlan,
   UploadPlanItem,
@@ -520,6 +521,9 @@ async function execute(plan: UploadPlan, options: RunPlanOptions): Promise<PlanS
   const startedAt = Date.now();
   logger.info(`[plan ${plan.id}] uploading ${selected.length} file(s) to ${plan.serviceName}`);
   app.sftpBarItem.startSpinner();
+  // every verified file marks the index dirty; without this a long run had
+  // the whole index serialised once a second for its entire duration
+  const releaseIndexSaves = holdSyncIndexSaves();
   try {
     const verified = await runItems(plan, selected);
     const stale = await markStale(plan, verified);
@@ -540,6 +544,7 @@ async function execute(plan: UploadPlan, options: RunPlanOptions): Promise<PlanS
         updateItem(plan.id, item.localPath, { status: 'failed', error: error.message })
       );
   } finally {
+    releaseIndexSaves();
     app.sftpBarItem.stopSpinner();
   }
 

@@ -445,6 +445,12 @@
         "icon": "$(check)"
       },
       {
+        "command": "sftp.plan.showMore",
+        "title": "Show More Files",
+        "category": "SFTP",
+        "icon": "$(ellipsis)"
+      },
+      {
         "command": "sftp.scanExternalChanges",
         "title": "Scan for External Changes",
         "category": "SFTP",
@@ -717,6 +723,10 @@
         },
         {
           "command": "sftp.plan.remove",
+          "when": "false"
+        },
+        {
+          "command": "sftp.plan.showMore",
           "when": "false"
         },
         {

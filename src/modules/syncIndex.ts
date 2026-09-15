@@ -82,6 +82,15 @@ const INDEX_DIR_NAME = 'sync-index';
 // keeps a 50k-entry index from being serialised hundreds of times per batch.
 const SAVE_DEBOUNCE_MS = 1000;
 
+// While a plan runs (see holdSyncIndexSaves) the index changes once per
+// uploaded file for minutes on end; a 90k-entry index serialised every second
+// for the whole run is what kept the extension host busy on big trees. Held
+// saves still land this often, so a crash mid-run loses a minute at most.
+const SAVE_DEBOUNCE_HELD_MS = 60 * 1000;
+
+// callers holding the saves back; see holdSyncIndexSaves
+let saveHolds = 0;
+
 // On windows, renaming over a file that an antivirus or an indexer holds open
 // fails with EPERM for a few milliseconds; two short retries cover that window
 // without turning a flush on deactivate into a long wait.
@@ -293,6 +302,18 @@ export class SyncIndex {
     this._scheduleSave();
   }
 
+  /**
+   * Re-arms a pending debounced save with the current delay. Called when the
+   * last hold is released, so a save armed for a minute lands in a second.
+   */
+  _rescheduleSave(): void {
+    if (!this._saveTimer || !this._dirty) {
+      return;
+    }
+    this._cancelScheduledSave();
+    this._scheduleSave();
+  }
+
   private _scheduleSave() {
     if (!this._filePath || this._saveTimer) {
       return;
@@ -301,7 +322,7 @@ export class SyncIndex {
     this._saveTimer = setTimeout(() => {
       this._saveTimer = null;
       this.save().catch(error => logger.error(error, `save sync index ${this.key}`));
-    }, SAVE_DEBOUNCE_MS);
+    }, saveHolds > 0 ? SAVE_DEBOUNCE_HELD_MS : SAVE_DEBOUNCE_MS);
 
     // unref'd so a pending save never holds the process open (jest would
     // otherwise report a worker that failed to exit)
@@ -504,6 +525,29 @@ export function getSyncIndex(key: string): Promise<SyncIndex> {
 }
 
 /**
+ * Slows the debounced saves of every index down to one per minute until the
+ * returned function is called (once; further calls are no-ops). Long runs
+ * hold the saves while they upload: each verified file marks the index dirty,
+ * and a big index serialised every second for the length of the run was
+ * measurable on the extension host. Explicit `save()` calls are unaffected,
+ * and releasing the last hold re-arms a pending save with the normal delay.
+ */
+export function holdSyncIndexSaves(): () => void {
+  saveHolds++;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    saveHolds--;
+    if (saveHolds === 0) {
+      loaded.forEach(index => index._rescheduleSave());
+    }
+  };
+}
+
+/**
  * Writes every loaded index that has unsaved changes.
  *
  * All of them are attempted even when one fails; the first failure is rethrown
@@ -575,4 +619,11 @@ export function __resetForTest() {
   loaded.clear();
   loading.clear();
   storageRoot = undefined;
+  saveHolds = 0;
 }
+
+// exported for tests
+export const testHooks = {
+  SAVE_DEBOUNCE_MS,
+  SAVE_DEBOUNCE_HELD_MS,
+};

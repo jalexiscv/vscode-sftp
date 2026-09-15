@@ -32,6 +32,7 @@ import externalChangeScanner from './modules/externalChangeScanner';
 import { flushNow as flushPendingChanges } from './modules/changeCollector';
 import { whenIdle as whenNoPlanRuns } from './modules/planRunner';
 import { refreshContext as refreshUploadExclusions } from './modules/uploadExclusions';
+import { discardStorageOnVersionChange, extensionVersionOf } from './modules/storageReset';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -78,7 +79,16 @@ export async function activate(context: vscode.ExtensionContext) {
   // installed @types/vscode (1.40) only knows the deprecated `storagePath`,
   // which points at the same folder and is the fallback on older hosts
   const storageUri: { fsPath: string } | undefined = (context as any).storageUri;
-  initSyncIndex({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
+  const storagePath = storageUri ? storageUri.fsPath : context.storagePath;
+  // a new version of the extension starts with a clean storage: the sync
+  // indexes and the activity log of the previous one are discarded before
+  // either module loads them. Never throws; a stubborn file is logged.
+  await discardStorageOnVersionChange({
+    storagePath,
+    version: extensionVersionOf(context),
+    state: context.workspaceState,
+  });
+  initSyncIndex({ storagePath });
   // before the view and the services exist: the loaded entries must be there
   // when the tree first renders, and nothing may be recorded before the load
   // the log can't import the handlers itself (they import it back), so the
@@ -96,7 +106,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     return undefined;
   });
-  await initActivityLog({ storagePath: storageUri ? storageUri.fsPath : context.storagePath });
+  await initActivityLog({ storagePath });
 
   try {
     initCommands(context);

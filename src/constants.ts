@@ -23,6 +23,11 @@ export const STATE_KEY_TRASH_INDEX = 'sftp.state.trashIndex';
 // de "índice sin construir" el usuario pidió no volver a ver
 export const STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED = 'sftp.state.unbuiltIndexNoticeDismissed';
 
+// clave de workspaceState con la versión de la extensión que escribió los
+// archivos del almacenamiento (índice de sincronización, log de actividad);
+// cuando no coincide con la instalada, se descartan al activar
+export const STATE_KEY_STORAGE_VERSION = 'sftp.state.storageVersion';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 
@@ -112,6 +117,8 @@ export const COMMAND_PLAN_CLEAR_ALL = 'sftp.plan.clearAll';
 // "dar por subido": el usuario afirma que los archivos ya están en el servidor
 export const COMMAND_PLAN_MARK_UPLOADED = 'sftp.plan.markUploaded';
 export const COMMAND_PLAN_MARK_ITEM_UPLOADED = 'sftp.plan.markItemUploaded';
+// la vista pagina los elementos de un plan; este comando muestra la página siguiente
+export const COMMAND_PLAN_SHOW_MORE = 'sftp.plan.showMore';
 
 // comando que VS Code genera por el id de la vista; no se declara en package.json
 export const COMMAND_ACTIVITY_FOCUS = `${VIEW_ACTIVITY}.focus`;
