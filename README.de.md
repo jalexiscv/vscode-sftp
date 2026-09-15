@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.26.0](#neuerungen-in-v1260)
+- [Neuerungen in v1.27.0](#neuerungen-in-v1270)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 757 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 786 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -129,16 +129,25 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Was sich nicht ändert** | Downloads, `Sync Remote -> Local`, der Remote-Explorer und der Diff sehen diese Pfade weiterhin; `Force Upload` umgeht die Liste, wie es `ignore` umgeht. Ein Upload-Befehl auf einen ausgeschlossenen Pfad meldet das in einer Benachrichtigung und verbindet sich nicht; `Upload Changed Files` listet die beiseitegelegten Dateien in einer eigenen Gruppe |
 | **Korrektur** | Eine lokale Löschung, deren `dir/`-Muster in `ignore` nur als Verzeichnis passt, wird nicht mehr auf den Server gespiegelt: Der gelöschte Pfad wird jetzt sowohl als Datei als auch als Verzeichnis geprüft |
 
-## Neuerungen in v1.26.0
+### [v1.26.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.26.0) — Als hochgeladen markieren und Ausschlüsse aus der Oberfläche
 
-v1.26.0 beantwortet ein konkretes Problem: Fand ein Scan Tausende Dateien, die die Erweiterung nie selbst hochgeladen hatte — eine seit Jahren von Hand oder mit `uploadOnSave` gespiegelte Site —, blieb nur, sie hochzuladen, offen zu lassen oder zu überspringen. Jetzt können sie **als hochgeladen markiert** werden, und der Index lässt sich aus dem lokalen Baum säen, ohne den Server aufzulisten. Außerdem wird die Liste `uploadExclude` aus der Oberfläche heraus bearbeitet.
-
-| Neuerung | Was sie bringt |
-|----------|----------------|
+| Bereich | Änderung |
+|---------|----------|
 | **Als hochgeladen markieren (`Mark as uploaded`)** | Ein vierter Button im Bestätigungsdialog jedes Plans sowie `Mark Plan as Uploaded` / `Mark as Uploaded` auf einem Plan oder einer Datei in der Aktivitätsansicht: Die Dateien werden im Index als bereits auf dem Server vorhanden vermerkt, in ihrer aktuellen Version, ohne Übertragung, und erst wieder vorgeschlagen, wenn sie sich ändern. Eigener Status `assumed`, in Zusammenfassungen, Berichten und Symbolen von `verified` unterschieden |
 | **Index säen, ohne den Server aufzulisten** | `SFTP: Mark Local Files as Uploaded` (auch `Mark all as uploaded` im Hinweis zum nicht gebauten Index) durchläuft den lokalen Baum, zeigt die Anzahl und sät nach Bestätigung den Index mit allem, was lokal liegt; ab dann wird nur vorgeschlagen, was sich ändert. Die schnelle Alternative zu `Rebuild Sync Index` für Sites mit Zehntausenden Dateien über FTP |
 | **Upload-Ausschlüsse aus der Oberfläche** | Rechtsklick auf einen Ordner → `SFTP: Exclude from Upload` (und `SFTP: Include in Upload Again` auf einem ausgeschlossenen), `SFTP: Manage Upload Exclusions` zum Prüfen, Hinzufügen und Entfernen von Einträgen sowie eine Liste mit `×` im Verbindungsmanager. Alle schreiben die Liste `uploadExclude` in `sftp.json` und behalten deren Formatierung bei |
 | **Sicherheit** | Die Zeile `config at …` im Ausgabekanal maskierte das Passwort der Basis, nicht aber das jedes Profils; jetzt werden beide maskiert |
+
+## Neuerungen in v1.27.0
+
+v1.27.0 entstand aus einem realen Projekt mit über 90.000 Dateien, das die Erweiterung mit 90.000 ausstehenden Uploads und einem kriechenden Extension Host — dem Prozess, den alle Erweiterungen teilen — zurückließ. Ein Plan dieser Größe lässt sich nicht prüfen, und solange er bestand, arbeiteten Aktivitätsansicht, Sync-Index und Verbindung ohne Pause daran. Jetzt hat ein Plan eine Obergrenze, die Ansicht blättert, der Index wird während eines Laufs ruhig geschrieben, und nach der Installation einer neuen Version startet die Erweiterung mit leerem Speicher.
+
+| Neuerung | Was sie bringt |
+|----------|----------------|
+| **Obergrenze pro Plan (`externalChanges.maxPlanItems`)** | Ein Scan, ein Polling-Tick oder ein Watcher-Schub, der mehr geänderte Dateien als die Grenze findet (standardmäßig 2000; `0` hebt sie auf), wird nicht mehr zu einem Plan: Eine Warnung nennt die Anzahl und bietet `Mark all as uploaded` (der lokale Baum wird zur Referenz) und `Manage upload exclusions`; der dritte Ausweg ist, das Projekt einmal hochzuladen und erneut zu scannen. Die automatischen Scans dieser Verbindung warten auf einen manuellen Scan, ein Rebuild, ein Als-hochgeladen-Markieren oder ein Neuladen von `sftp.json`; der Collector verwirft den Schub vor dem ersten `stat` und meldet das einmal pro Sitzung |
+| **Seitenweise Aktivitätsansicht** | Ein Plan listet seine ersten 200 Dateien und eine Zeile `N more file(s)…`, die die nächste Seite zeigt; zuvor erzeugte der Baum bei jedem Refresh eine Zeile pro Element, mehrmals pro hochgeladener Datei |
+| **Index ruhig geschrieben** | Während ein Plan läuft, wird der Sync-Index einmal pro Minute statt einmal pro Sekunde gespeichert (jeder verifizierte Upload markierte ihn als geändert) und noch einmal am Ende; ein explizites Speichern wird nie zurückgehalten |
+| **Leerer Speicher pro Version** | Beim ersten Aktivieren einer neuen Version in einem Workspace werden Sync-Index und Aktivitätsprotokoll der vorherigen Version vor dem Laden verworfen (der Ausgabekanal protokolliert es); der Index startet leer und der Hinweis zum Säen oder Neuaufbau erscheint wieder wie beim ersten Gebrauch. Im Projekt selbst wird nichts angefasst |
 
 ## Was wir von dieser Version erwarten
 
@@ -164,7 +173,7 @@ v1.26.0 beantwortet ein konkretes Problem: Fand ein Scan Tausende Dateien, die d
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.26.0.vsix
+code --install-extension sftp-1.27.0.vsix
 ```
 
 ## Dokumentation
@@ -410,7 +419,8 @@ _Hinweis:_ Alle diese Werte sind jene, die die Erweiterung bereits standardmäß
   "externalChanges": {
     "scanOnStartup": true,
     "scanOnResume": true,
-    "confirmThreshold": 20
+    "confirmThreshold": 20,
+    "maxPlanItems": 2000
   },
   "verifyUpload": "stat",
   "uploadRetries": 2

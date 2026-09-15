@@ -19,7 +19,7 @@ O VSCode-SFTP permite adicionar, editar ou excluir arquivos em um diretório loc
 
 - [Por que este fork existe](#por-que-este-fork-existe)
 - [O que atualizamos](#o-que-atualizamos)
-- [Novidades da v1.26.0](#novidades-da-v1260)
+- [Novidades da v1.27.0](#novidades-da-v1270)
 - [O que esperamos desta versão](#o-que-esperamos-desta-versão)
 - [Instalação](#instalação)
 - [Documentação](#documentação)
@@ -46,7 +46,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 757 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 786 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -129,16 +129,25 @@ Cada correção foi verificada (build do webpack limpo, 757 testes, linter sem e
 | **O que não muda** | Downloads, `Sync Remote -> Local`, o explorador remoto e o diff continuam vendo esses caminhos; `Force Upload` ignora a lista, como ignora o `ignore`. Um comando de envio sobre um caminho excluído avisa numa notificação e não conecta; `Upload Changed Files` lista os arquivos separados num grupo próprio |
 | **Correção** | Uma exclusão local cujo padrão `dir/` do `ignore` só casa como diretório não é mais espelhada no servidor: o caminho apagado agora é testado como arquivo e como diretório |
 
-## Novidades da v1.26.0
+### [v1.26.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.26.0) — dar como enviado e exclusões pela interface
 
-A v1.26.0 responde a um problema concreto: quando uma varredura encontrava milhares de arquivos que a extensão nunca tinha enviado ela mesma — um site espelhado à mão ou com `uploadOnSave` durante anos —, só dava para enviá-los, deixá-los pendentes ou pulá-los. Agora eles podem ser **dados como enviados**, e o índice pode ser semeado a partir da árvore local sem listar o servidor. Além disso, a lista `uploadExclude` é editada na própria interface.
-
-| Novidade | O que traz |
-|----------|------------|
+| Área | Mudança |
+|------|---------|
 | **Dar como enviado (`Mark as uploaded`)** | Um quarto botão no diálogo de confirmação de qualquer plano, e `Mark Plan as Uploaded` / `Mark as Uploaded` sobre um plano ou um arquivo na visão de atividade: os arquivos são registrados no índice como já presentes no servidor, na versão atual, sem transferir nada, e não voltam a ser propostos até mudarem. Estado próprio `assumed`, distinto de `verified` em resumos, relatórios e ícones |
 | **Semear o índice sem listar o servidor** | `SFTP: Mark Local Files as Uploaded` (também `Mark all as uploaded` no aviso de índice não construído) percorre a árvore local, mostra a contagem e, ao confirmar, semeia o índice com tudo o que há em local; daí em diante só se propõe o que mudar. A alternativa rápida ao `Rebuild Sync Index` para sites com dezenas de milhares de arquivos por FTP |
 | **Exclusões de envio pela interface** | Clique direito numa pasta → `SFTP: Exclude from Upload` (e `SFTP: Include in Upload Again` numa já excluída), `SFTP: Manage Upload Exclusions` para revisar, adicionar ou remover entradas, e uma lista com `×` no gerenciador de conexões. Tudo escreve a lista `uploadExclude` do `sftp.json`, respeitando seu formato |
 | **Segurança** | A linha `config at …` do canal de saída mascarava a senha da raiz, mas não a de cada perfil; agora mascara ambas |
+
+## Novidades da v1.27.0
+
+A v1.27.0 nasce de um projeto real com mais de 90 000 arquivos que a extensão deixou com 90 000 envios pendentes e o extension host — o processo que todas as extensões compartilham — se arrastando. Um plano desse tamanho não pode ser revisado e, enquanto existia, a visão de atividade, o índice de sincronização e a conexão trabalhavam nele sem parar. Agora um plano tem um limite, a visão pagina, o índice é gravado com calma durante uma execução e, ao instalar uma versão nova, a extensão parte de um armazenamento limpo.
+
+| Novidade | O que traz |
+|----------|------------|
+| **Limite por plano (`externalChanges.maxPlanItems`)** | Uma varredura, um tick de sondagem ou uma rajada do watcher que encontra mais arquivos alterados que o limite (2000 por padrão; `0` o remove) não vira mais um plano: um aviso informa a contagem e oferece `Mark all as uploaded` (a árvore local passa a ser a referência) e `Manage upload exclusions`; a terceira saída é enviar o projeto uma vez e varrer de novo. As varreduras automáticas dessa conexão esperam uma varredura manual, um rebuild, um dar como enviado ou uma recarga do `sftp.json`; o coletor descarta a rajada antes de um único `stat` e avisa uma vez por sessão |
+| **Visão de atividade paginada** | Um plano lista seus primeiros 200 arquivos e uma linha `N more file(s)…` que mostra a página seguinte; antes a árvore materializava uma linha por item a cada atualização, várias vezes por arquivo enviado |
+| **Índice gravado com calma** | Enquanto um plano roda, o índice de sincronização é salvo uma vez por minuto em vez de uma vez por segundo (cada envio verificado o marcava como sujo), e mais uma vez ao terminar; um salvamento explícito nunca é retido |
+| **Armazenamento limpo por versão** | Na primeira vez que uma versão nova é ativada num workspace, o índice de sincronização e o log de atividade da anterior são descartados antes de serem carregados (o canal de saída registra); o índice começa vazio e o aviso para semeá-lo ou reconstruí-lo volta, como no primeiro uso. Nada do projeto é tocado |
 
 ## O que esperamos desta versão
 
@@ -164,7 +173,7 @@ A v1.26.0 responde a um problema concreto: quando uma varredura encontrava milha
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.26.0.vsix
+code --install-extension sftp-1.27.0.vsix
 ```
 
 ## Documentação
@@ -410,7 +419,8 @@ _Nota:_ todos esses valores são os que a extensão já usa por padrão, exceto 
   "externalChanges": {
     "scanOnStartup": true,
     "scanOnResume": true,
-    "confirmThreshold": 20
+    "confirmThreshold": 20,
+    "maxPlanItems": 2000
   },
   "verifyUpload": "stat",
   "uploadRetries": 2

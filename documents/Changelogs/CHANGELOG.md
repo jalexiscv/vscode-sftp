@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 60 | 2026-09-15 | Release 1.27.0: límites para proyectos grandes y almacenamiento limpio por versión | [Ver detalle](2026-09-15_release_1_27_0.md) |
 | 59 | 2026-09-15 | Límites para proyectos grandes y descarte del almacenamiento al cambiar de versión | [Ver detalle](2026-09-15_feat_limites_proyectos_grandes.md) |
 | 58 | 2026-09-13 | Release 1.26.0: dar por subido y exclusiones desde la interfaz | [Ver detalle](2026-09-13_release_1_26_0.md) |
 | 57 | 2026-09-13 | Exclusiones de subida editables desde la interfaz     | [Ver detalle](2026-09-13_feat_exclusiones_desde_interfaz.md) |
