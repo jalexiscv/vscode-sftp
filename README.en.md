@@ -19,7 +19,7 @@ VSCode-SFTP lets you add, edit, or delete files in a local directory and sync th
 
 - [Why this fork exists](#why-this-fork-exists)
 - [What we updated](#what-we-updated)
-- [What's new in v1.26.0](#whats-new-in-v1260)
+- [What's new in v1.27.0](#whats-new-in-v1270)
 - [What we expect from this release](#what-we-expect-from-this-release)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 757 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 786 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -129,16 +129,25 @@ Every fix was verified (clean webpack build, 757 tests, linter with no errors) b
 | **What does not change** | Downloads, `Sync Remote -> Local`, the Remote Explorer and diffs still see those paths; `Force Upload` bypasses the list, as it bypasses `ignore`. An upload command on an excluded path says so in a notification and does not connect; `Upload Changed Files` lists the files it set aside in a group of its own |
 | **Fix** | A local deletion whose `dir/` pattern in `ignore` only matches as a directory is no longer mirrored to the server: the deleted path is now tested both as a file and as a directory |
 
-## What's new in v1.26.0
+### [v1.26.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.26.0) — mark as uploaded and exclusions from the interface
 
-v1.26.0 answers one concrete problem: when a scan found thousands of files the extension had never uploaded itself — a site mirrored by hand or with `uploadOnSave` for years — the only answers were to upload them, leave them pending or skip them. They can now be **marked as uploaded**, and the index can be seeded from the local tree without listing the server. The `uploadExclude` list is also edited from the interface.
-
-| Feature | What it gives you |
-|---------|-------------------|
+| Area | Change |
+|------|--------|
 | **Mark as uploaded** | A fourth button in the confirmation dialog of any plan, and `Mark Plan as Uploaded` / `Mark as Uploaded` on a plan or a file in the activity view: the files are recorded in the index as being on the server already, in their current version, without transferring anything, and are not proposed again until they change. Their own `assumed` status, told apart from `verified` in summaries, reports and icons |
 | **Seed the index without listing the server** | `SFTP: Mark Local Files as Uploaded` (also `Mark all as uploaded` on the unbuilt-index notice) walks the local tree, shows the count and, once confirmed, seeds the index with everything that is local; from then on only what changes is proposed. The fast alternative to `Rebuild Sync Index` for sites with tens of thousands of files over FTP |
 | **Upload exclusions from the interface** | Right-click a folder → `SFTP: Exclude from Upload` (and `SFTP: Include in Upload Again` on an excluded one), `SFTP: Manage Upload Exclusions` to review, add or remove entries, and a list with `×` in the connection manager. All of them write the `uploadExclude` list of `sftp.json`, keeping its formatting |
 | **Security** | The `config at …` line of the output channel masked the root password but not each profile's; both are masked now |
+
+## What's new in v1.27.0
+
+v1.27.0 comes from a real project of more than 90,000 files that the extension left with 90,000 uploads pending and the extension host — the process every extension shares — crawling. A plan that size cannot be reviewed, and while it existed the activity view, the sync index and the connection worked on it without pause. A plan now has a limit, the view paginates, the index is written calmly during a run and, when a new version is installed, the extension starts from a clean storage.
+
+| Feature | What it gives you |
+|---------|-------------------|
+| **A limit per plan (`externalChanges.maxPlanItems`)** | A scan, a polling tick or a watcher burst that finds more changed files than the limit (2000 by default; `0` removes it) is no longer turned into a plan: a warning states the count and offers `Mark all as uploaded` (the local tree becomes the baseline) and `Manage upload exclusions`; the third way out is to upload the project once and scan again. The automatic scans of that connection wait for a manual scan, a rebuild, a mark-as-uploaded or a reload of `sftp.json`; the collector drops the burst before a single `stat` and says so once per session |
+| **Paginated activity view** | A plan lists its first 200 files and a `N more file(s)…` row that reveals the next page; the tree used to materialise one row per item on every refresh, several times per uploaded file |
+| **Index written calmly** | While a plan runs, the sync index is saved once a minute instead of once a second (every verified upload marked it dirty), and once more when the run ends; an explicit save is never held |
+| **Clean storage per version** | The first time a new version activates in a workspace, the sync index and the activity log of the previous one are discarded before they are loaded (the output channel records it); the index starts empty and the notice to seed or rebuild it comes back, as on first use. Nothing inside the project is touched |
 
 ## What we expect from this release
 
@@ -164,7 +173,7 @@ v1.26.0 answers one concrete problem: when a scan found thousands of files the e
 Or from the command line:
 
 ```
-code --install-extension sftp-1.26.0.vsix
+code --install-extension sftp-1.27.0.vsix
 ```
 
 ## Documentation
@@ -410,7 +419,8 @@ _Note:_ all of these are the values the extension already uses by default, excep
   "externalChanges": {
     "scanOnStartup": true,
     "scanOnResume": true,
-    "confirmThreshold": 20
+    "confirmThreshold": 20,
+    "maxPlanItems": 2000
   },
   "verifyUpload": "stat",
   "uploadRetries": 2

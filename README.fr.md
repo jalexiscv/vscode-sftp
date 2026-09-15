@@ -19,7 +19,7 @@ VSCode-SFTP vous permet d'ajouter, de modifier ou de supprimer des fichiers dans
 
 - [Pourquoi ce fork existe](#pourquoi-ce-fork-existe)
 - [Ce que nous avons mis à jour](#ce-que-nous-avons-mis-à-jour)
-- [Nouveautés de la v1.26.0](#nouveautés-de-la-v1260)
+- [Nouveautés de la v1.27.0](#nouveautés-de-la-v1270)
 - [Ce que nous attendons de cette version](#ce-que-nous-attendons-de-cette-version)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 757 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 786 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -129,16 +129,25 @@ Chaque correction a été vérifiée (build webpack propre, 757 tests, linter sa
 | **Ce qui ne change pas** | Les téléchargements, `Sync Remote -> Local`, l'explorateur distant et le diff voient toujours ces chemins ; `Force Upload` ignore la liste, comme il ignore `ignore`. Une commande d'envoi sur un chemin exclu le signale par une notification et ne se connecte pas ; `Upload Changed Files` liste les fichiers mis de côté dans un groupe à part |
 | **Correction** | Une suppression locale dont le motif `dir/` de `ignore` ne correspond qu'à un répertoire n'est plus répercutée sur le serveur : le chemin supprimé est désormais testé à la fois comme fichier et comme répertoire |
 
-## Nouveautés de la v1.26.0
+### [v1.26.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.26.0) — marquer comme envoyé et exclusions depuis l'interface
 
-La v1.26.0 répond à un problème concret : quand une analyse trouvait des milliers de fichiers que l'extension n'avait jamais envoyés elle-même — un site répliqué à la main ou avec `uploadOnSave` pendant des années —, on ne pouvait que les envoyer, les laisser en attente ou les ignorer. Ils peuvent désormais être **marqués comme envoyés**, et l'index peut être amorcé depuis l'arborescence locale sans lister le serveur. La liste `uploadExclude` s'édite en outre depuis l'interface.
-
-| Nouveauté | Ce que cela apporte |
-|-----------|---------------------|
+| Domaine | Changement |
+|---------|------------|
 | **Marquer comme envoyé (`Mark as uploaded`)** | Un quatrième bouton dans la boîte de confirmation de tout plan, et `Mark Plan as Uploaded` / `Mark as Uploaded` sur un plan ou un fichier dans la vue d'activité : les fichiers sont enregistrés dans l'index comme déjà présents sur le serveur, dans leur version actuelle, sans rien transférer, et ne sont plus proposés tant qu'ils ne changent pas. Un état propre `assumed`, distinct de `verified` dans les résumés, les rapports et les icônes |
 | **Amorcer l'index sans lister le serveur** | `SFTP: Mark Local Files as Uploaded` (aussi `Mark all as uploaded` dans l'avis d'index non construit) parcourt l'arborescence locale, affiche le nombre et, une fois confirmé, amorce l'index avec tout ce qui est en local ; ensuite seul ce qui change est proposé. L'alternative rapide à `Rebuild Sync Index` pour les sites de dizaines de milliers de fichiers en FTP |
 | **Exclusions d'envoi depuis l'interface** | Clic droit sur un dossier → `SFTP: Exclude from Upload` (et `SFTP: Include in Upload Again` sur un dossier exclu), `SFTP: Manage Upload Exclusions` pour revoir, ajouter ou retirer des entrées, et une liste avec `×` dans le gestionnaire de connexions. Tous écrivent la liste `uploadExclude` de `sftp.json` en respectant son format |
 | **Sécurité** | La ligne `config at …` du canal de sortie masquait le mot de passe de la racine mais pas celui de chaque profil ; les deux sont désormais masqués |
+
+## Nouveautés de la v1.27.0
+
+La v1.27.0 vient d'un projet réel de plus de 90 000 fichiers que l'extension a laissé avec 90 000 envois en attente et un hôte d'extensions — le processus que toutes les extensions partagent — à la traîne. Un plan de cette taille ne peut pas être revu et, tant qu'il existait, la vue d'activité, l'index de synchronisation et la connexion y travaillaient sans relâche. Désormais un plan a une limite, la vue pagine, l'index s'écrit calmement pendant une exécution et, à l'installation d'une nouvelle version, l'extension repart d'un stockage propre.
+
+| Nouveauté | Ce que cela apporte |
+|-----------|---------------------|
+| **Limite par plan (`externalChanges.maxPlanItems`)** | Une analyse, un tick de sondage ou une rafale du watcher qui trouve plus de fichiers modifiés que la limite (2000 par défaut ; `0` la supprime) n'est plus transformée en plan : un avertissement indique le nombre et propose `Mark all as uploaded` (l'arborescence locale devient la référence) et `Manage upload exclusions` ; la troisième issue est d'envoyer le projet une fois puis de réanalyser. Les analyses automatiques de cette connexion attendent une analyse manuelle, une reconstruction, un marquage comme envoyé ou un rechargement de `sftp.json` ; le collecteur rejette la rafale avant le moindre `stat` et le signale une fois par session |
+| **Vue d'activité paginée** | Un plan liste ses 200 premiers fichiers et une ligne `N more file(s)…` qui révèle la page suivante ; auparavant l'arbre matérialisait une ligne par élément à chaque rafraîchissement, plusieurs fois par fichier envoyé |
+| **Index écrit calmement** | Pendant l'exécution d'un plan, l'index de synchronisation est enregistré une fois par minute au lieu d'une fois par seconde (chaque envoi vérifié le marquait modifié), puis une fois de plus à la fin ; un enregistrement explicite n'est jamais retenu |
+| **Stockage propre par version** | La première fois qu'une nouvelle version s'active dans un espace de travail, l'index de synchronisation et le journal d'activité de la précédente sont supprimés avant d'être chargés (le canal de sortie l'indique) ; l'index repart vide et l'avis pour l'amorcer ou le reconstruire revient, comme à la première utilisation. Rien dans le projet n'est touché |
 
 ## Ce que nous attendons de cette version
 
@@ -164,7 +173,7 @@ La v1.26.0 répond à un problème concret : quand une analyse trouvait des mill
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.26.0.vsix
+code --install-extension sftp-1.27.0.vsix
 ```
 
 ## Documentation
@@ -410,7 +419,8 @@ _Remarque :_ toutes ces valeurs sont celles que l'extension utilise déjà par d
   "externalChanges": {
     "scanOnStartup": true,
     "scanOnResume": true,
-    "confirmThreshold": 20
+    "confirmThreshold": 20,
+    "maxPlanItems": 2000
   },
   "verifyUpload": "stat",
   "uploadRetries": 2

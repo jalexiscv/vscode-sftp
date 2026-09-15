@@ -19,7 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
-- [v1.26.0 新功能](#v1260-新功能)
+- [v1.27.0 新功能](#v1270-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、757 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、786 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -129,16 +129,25 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **不变的部分** | 下载、`Sync Remote -> Local`、远程资源管理器和对比仍然能看到这些路径；`Force Upload` 会绕过该列表，就像它绕过 `ignore` 一样。对被排除路径执行上传命令时会弹出通知说明，并且不会建立连接；`Upload Changed Files` 会把被搁置的文件单独列成一组 |
 | **修复** | 本地删除的路径若只在 `ignore` 的 `dir/` 模式中按目录匹配，将不再被镜像到服务器：被删除的路径现在会同时按文件和按目录进行测试 |
 
-## v1.26.0 新功能
+### [v1.26.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.26.0) — 视为已上传与界面中的排除
 
-v1.26.0 解决一个具体问题：当扫描发现成千上万个扩展从未自行上传过的文件——多年来手工或通过 `uploadOnSave` 镜像的站点——此前只能上传、搁置或跳过它们。现在可以把它们**视为已上传**，并且无需列出服务器就能从本地目录树播种索引。此外，`uploadExclude` 列表可以直接在界面中编辑。
-
-| 新功能 | 作用 |
-|--------|------|
+| 领域 | 变更 |
+|------|------|
 | **视为已上传（`Mark as uploaded`）** | 任何计划的确认对话框新增第四个按钮，活动视图中的计划或文件上也有 `Mark Plan as Uploaded` / `Mark as Uploaded`：文件以当前版本记入索引，视为已在服务器上，不传输任何内容，直到再次变更前不会被提议。独立的 `assumed` 状态，在摘要、报告和图标中与 `verified` 区分 |
 | **无需列出服务器即可播种索引** | `SFTP: Mark Local Files as Uploaded`（索引未构建提示中的 `Mark all as uploaded` 同样可用）遍历本地目录树，显示数量，确认后用本地现有的一切播种索引；此后只提议发生变更的文件。对于通过 FTP 管理数万个文件的站点，这是 `Rebuild Sync Index` 的快速替代方案 |
 | **在界面中管理上传排除** | 右键文件夹 → `SFTP: Exclude from Upload`（已排除的文件夹上则显示 `SFTP: Include in Upload Again`），`SFTP: Manage Upload Exclusions` 用于查看、添加或删除条目，连接管理器中也有带 `×` 的列表。它们都写入 `sftp.json` 的 `uploadExclude` 列表并保留其格式 |
 | **安全** | 输出通道中的 `config at …` 行只遮蔽了根级密码，未遮蔽每个 profile 的密码；现在两者都会被遮蔽 |
+
+## v1.27.0 新功能
+
+v1.27.0 源于一个真实项目：超过 90 000 个文件，扩展把它留在了 90 000 个待上传的状态，扩展宿主——所有扩展共享的那个进程——几乎停滞。这么大的计划无法逐个审阅，而只要它存在，活动视图、同步索引和连接就会不停地处理它。现在计划有了上限，视图分页显示，执行期间索引从容写入，安装新版本后扩展从干净的存储开始。
+
+| 新功能 | 作用 |
+|--------|------|
+| **每个计划的上限（`externalChanges.maxPlanItems`）** | 扫描、轮询或 watcher 突发事件发现的变更文件超过上限（默认 2000；`0` 表示不限）时不再生成计划：警告给出数量，并提供 `Mark all as uploaded`（以本地目录树为基准）和 `Manage upload exclusions`；第三条出路是上传一次项目再重新扫描。该连接的自动扫描会等待手动扫描、重建索引、视为已上传或重新加载 `sftp.json`；收集器在执行任何 `stat` 之前就丢弃突发事件，并且每个会话只提示一次 |
+| **分页的活动视图** | 计划先列出前 200 个文件，再以一行 `N more file(s)…` 展开下一页；此前每次刷新树都会为每个条目生成一行，每上传一个文件就刷新多次 |
+| **从容写入索引** | 计划运行期间，同步索引每分钟保存一次，而不是每秒一次（每个已验证的上传都会将其标记为脏），结束时再保存一次；显式保存从不被延迟 |
+| **每个版本的干净存储** | 新版本在某个工作区首次激活时，会在加载前丢弃上一版本的同步索引和活动日志（输出通道会记录）；索引从空开始，播种或重建索引的提示会再次出现，如同首次使用。项目内的任何内容都不会被触碰 |
 
 ## 我们对这个版本的期望
 
@@ -164,7 +173,7 @@ v1.26.0 解决一个具体问题：当扫描发现成千上万个扩展从未自
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.26.0.vsix
+code --install-extension sftp-1.27.0.vsix
 ```
 
 ## 文档
@@ -410,7 +419,8 @@ _注意：_ 除了 `tempFilePatterns`、`remoteTrash.path`（默认 `.sftp-trash
   "externalChanges": {
     "scanOnStartup": true,
     "scanOnResume": true,
-    "confirmThreshold": 20
+    "confirmThreshold": 20,
+    "maxPlanItems": 2000
   },
   "verifyUpload": "stat",
   "uploadRetries": 2
