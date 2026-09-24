@@ -4,6 +4,7 @@ import app from '../../app';
 import logger from '../../logger';
 import { simplifyPath, reportError } from '../../helper';
 import { UResource, FileService, TransferTask, TransferDirection } from '../../core';
+import { isConnectionLostError } from '../../core/connectionHealth';
 import { validateConfig } from '../config';
 import watcherService from '../fileWatcher';
 // used at call time only: fileHandlers imports this module back for
@@ -203,6 +204,15 @@ export function createFileService(config: any, workspace: string) {
       app.sftpBarItem.showMsg(`cancelled ${filename}`, filepath, 2000 * 2);
       if (activityId !== undefined) {
         update(activityId, { status: ActivityStatus.Cancelled });
+      }
+    } else if (error && isConnectionLostError(error)) {
+      // the connection is gone, and every task in flight fails with it: one
+      // line each in the log, the notice about the outage is given once by
+      // whoever owns the batch (plan runner or command)
+      logger.warn(`[connection] ${transferType} ${localFsPath} interrupted: ${error.message}`);
+      app.sftpBarItem.showMsg(`connection lost: ${filename}`, filepath, 2000 * 2);
+      if (activityId !== undefined) {
+        fail(activityId, error);
       }
     } else if (error) {
       // one dialog per failed file; the handler's aggregate arrives later

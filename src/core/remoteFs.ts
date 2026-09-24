@@ -17,6 +17,7 @@ import {
   FTPFileSystem,
 } from './fs';
 import localFs from './localFs';
+import { ConnectionGate, getConnectionGate } from './connectionHealth';
 
 function hashOption(opiton) {
   return Object.keys(opiton)
@@ -48,6 +49,8 @@ class KeepAliveRemoteFs {
 
   private fs!: RemoteFileSystem;
 
+  constructor(private readonly gate: ConnectionGate) {}
+
   async getFs(
     option: ConnectOption & {
       protocol: string;
@@ -62,6 +65,10 @@ class KeepAliveRemoteFs {
     if (this.pendingPromise) {
       return this.pendingPromise;
     }
+
+    // while the last attempts failed, callers are turned away at once instead
+    // of each opening a socket of its own against a server that is down
+    this.gate.assertMayAttempt();
 
     const connectOption = Object.assign({}, option);
     // tslint:disable variable-name
@@ -95,11 +102,15 @@ class KeepAliveRemoteFs {
       throw new Error(`unsupported protocol ${option.protocol}`);
     }
 
-    this.fs = new FsConstructor(upath, {
+    const fs = new FsConstructor(upath, {
       clientOption: connectOption,
       remoteTimeOffsetInHours: option.remoteTimeOffsetInHours,
     });
-    this.fs.onDisconnected(this.invalid.bind(this));
+    this.fs = fs;
+    // bound to this very client: ssh2 emits `error` and then `close` for one
+    // drop, and the late `close` of a dead client must not tear down the
+    // connection that replaced it
+    fs.onDisconnected((reason: string) => this.invalid(reason, fs));
 
     // saved-password support: inject a stored password when the config
     // brings no auth, and remember the one the user types to offer saving it
@@ -149,6 +160,7 @@ class KeepAliveRemoteFs {
       () => {
         app.sftpBarItem.reset();
         this.isValid = true;
+        this.gate.recordSuccess();
         if (typedPassword !== undefined) {
           // fire and forget: don't block the connection on the toast
           offerToSavePassword(secretKey, typedPassword, passwordLabel);
@@ -157,8 +169,12 @@ class KeepAliveRemoteFs {
         return this.fs;
       },
       err => {
-        this.fs.end();
-        this.invalid('error');
+        this.pendingPromise = null;
+        this.isValid = false;
+        fs.end();
+        // a network failure starts the hold; a wrong password or a cancelled
+        // prompt does not (the gate ignores those)
+        this.gate.recordFailure(err);
         throw err;
       }
     );
@@ -166,14 +182,38 @@ class KeepAliveRemoteFs {
     return this.pendingPromise;
   }
 
-  invalid(reason: string) {
+  /**
+   * Marks the connection as gone so the next `getFs()` reconnects. `fs` is
+   * the client that reported the drop: an event from a client that was
+   * already replaced is ignored, and so is a second event for the same drop.
+   */
+  invalid(reason: string, fs?: RemoteFileSystem) {
+    if (fs && fs !== this.fs) {
+      return;
+    }
+    if (!this.isValid && !this.pendingPromise) {
+      return;
+    }
+    const wasValid = this.isValid;
     this.pendingPromise = null;
-    this.fs.end();
     this.isValid = false;
+    this.fs.end();
+    if (!wasValid) {
+      return;
+    }
+    if (reason === 'idle') {
+      logger.info(`[connection] ${this.gate.label}: closed after being idle`);
+      return;
+    }
+    logger.warn(`[connection] ${this.gate.label}: connection lost (${reason})`);
+    this.gate.recordDrop(reason);
   }
 
   end() {
-    this.fs.end();
+    // never created when the first attempt was held by the gate
+    if (this.fs) {
+      this.fs.end();
+    }
   }
 }
 
@@ -196,9 +236,24 @@ export function createRemoteIfNoneExist(option): Promise<FileSystem> {
     return fs.getFs(option);
   }
 
-  const fsInstance = new KeepAliveRemoteFs();
+  const fsInstance = new KeepAliveRemoteFs(connectionGateOf(option));
   fsTable[identity] = fsInstance;
   return fsInstance.getFs(option);
+}
+
+/**
+ * The attempt policy of the connection `option` identifies (see
+ * {@link ConnectionGate}); the plan runner reads the hold from it to decide
+ * when to resume the uploads it put on hold.
+ */
+export function connectionGateOf(option): ConnectionGate {
+  const label = option && option.host ? String(option.host) : 'local';
+  return getConnectionGate(hashOption(option), label);
+}
+
+/** Whether two connect options resolve to the same shared connection. */
+export function isSameRemote(a, b): boolean {
+  return hashOption(a) === hashOption(b);
 }
 
 export function removeRemoteFs(option) {

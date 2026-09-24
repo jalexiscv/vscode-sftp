@@ -32,6 +32,34 @@ function ignoreFnFor(patterns: string[]) {
     ignore(path.join(BASE_DIR, ...relativePath.split('/')), isDirectory);
 }
 
+describe('version-control metadata is ignored by default', () => {
+  test('.git, .svn and .hg are ignored at any depth without any config', () => {
+    const ignores = ignoreFnFor([]);
+
+    expect(ignores('.git', true)).toBe(true);
+    expect(ignores('.git/index')).toBe(true);
+    expect(ignores('.git/FETCH_HEAD')).toBe(true);
+    expect(ignores('.git/logs/HEAD')).toBe(true);
+    expect(ignores('packages/lib/.git/index')).toBe(true);
+    expect(ignores('.svn/wc.db')).toBe(true);
+    expect(ignores('.hg/store/00changelog.i')).toBe(true);
+  });
+
+  test('a look-alike is not: .gitignore, .github, git.php', () => {
+    const ignores = ignoreFnFor([]);
+
+    expect(ignores('.gitignore')).toBe(false);
+    expect(ignores('.github/workflows/ci.yml')).toBe(false);
+    expect(ignores('src/git.php')).toBe(false);
+  });
+
+  test('a negation in the user list lets it through again', () => {
+    const ignores = ignoreFnFor(['!.git']);
+
+    expect(ignores('.git/index')).toBe(false);
+  });
+});
+
 describe('config.ignore and directories', () => {
   test('a trailing-slash pattern matches the directory only when flagged as one', () => {
     const ignores = ignoreFnFor(['node_modules/']);

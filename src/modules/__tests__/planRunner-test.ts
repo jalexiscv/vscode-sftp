@@ -19,6 +19,7 @@ jest.mock('../serviceManager', () => ({
 jest.mock('../../host', () => ({
   ...jest.requireActual('../../host'),
   getOpenTextDocuments: jest.fn(() => []),
+  showWarningMessage: jest.fn(() => Promise.resolve(undefined)),
 }));
 
 import * as fs from 'fs';
@@ -29,7 +30,8 @@ import app from '../../app';
 import FileService from '../../core/fileService';
 import RemoteFs from '../../../test/helper/localRemoteFs';
 import { refreshRemoteExplorer } from '../../fileHandlers/shared';
-import { getOpenTextDocuments } from '../../host';
+import { getOpenTextDocuments, showWarningMessage } from '../../host';
+import { __resetConnectionGatesForTest as resetConnectionGates } from '../../core/connectionHealth';
 import { getFileService } from '../serviceManager';
 import { initSyncIndex, __resetForTest as resetSyncIndex } from '../syncIndex';
 import { indexFor } from '../syncIndexFeeder';
@@ -47,6 +49,8 @@ import {
   isPlanRunning,
   onDidChangeRunning,
   whenIdle,
+  getHeldPlanIds,
+  resumeHeldPlans,
   __resetForTest as resetRunner,
 } from '../planRunner';
 
@@ -157,12 +161,15 @@ afterAll(() => {
 });
 
 const getOpenTextDocumentsMock = getOpenTextDocuments as jest.Mock;
+const showWarningMessageMock = showWarningMessage as jest.Mock;
 
 beforeEach(() => {
   vol.reset();
   fs.mkdirSync('/remote', { recursive: true } as any);
   resetPlans();
   resetRunner();
+  resetConnectionGates();
+  showWarningMessageMock.mockClear();
   resetSyncIndex();
   initSyncIndex({ storagePath: undefined });
   refreshMock.mockClear();
@@ -402,16 +409,106 @@ describe('runPlan', () => {
     expect(fs.existsSync('/remote/storage')).toBe(false);
   });
 
-  test('a connection failure fails every item of the service with the message', async () => {
+  test('a config failure fails every item of the service with the message', async () => {
     vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
     const service = createService(createRemoteFs());
-    (service as any).getRemoteFileSystem = () => Promise.reject(new Error('connect ECONNREFUSED'));
+    (service as any).getRemoteFileSystem = () => Promise.reject(new Error('Unknown Profile "x"'));
     const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt')]);
 
     const summary = await runPlan(plan.id);
 
     expect(summary).toMatchObject({ failed: 2 });
-    expect(itemOf(plan, 'a.txt').error).toBe('connect ECONNREFUSED');
+    expect(itemOf(plan, 'a.txt').error).toBe('Unknown Profile "x"');
+    expect(getHeldPlanIds()).toEqual([]);
+  });
+
+  describe('lost connection', () => {
+    test('a server that cannot be reached puts every item on hold, the plan stays open', async () => {
+      vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
+      const service = createService(createRemoteFs());
+      (service as any).getRemoteFileSystem = () =>
+        Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+      const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt')]);
+
+      const summary = await runPlan(plan.id);
+
+      expect(summary).toMatchObject({ pending: 2, failed: 0, verified: 0 });
+      expect(itemOf(plan, 'a.txt').status).toBe('pending');
+      expect(itemOf(plan, 'a.txt').error).toBe('on hold: connect ECONNREFUSED');
+      // open: the automatic scans will not plan these files again on top of it
+      expect(getPlan(plan.id)!.finishedAt).toBeUndefined();
+      expect(getHeldPlanIds()).toEqual([plan.id]);
+      expect(isPlanRunning(plan.id)).toBe(false);
+    });
+
+    test('a connection lost mid-batch holds the interrupted item and the queued ones; the sent ones stay verified', async () => {
+      vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b', '/local/c.txt': 'c' }, '/');
+      const remoteFs = createRemoteFs();
+      const put = remoteFs.put.bind(remoteFs);
+      let puts = 0;
+      override(remoteFs, 'put', (input: Readable, target: string, option: any) => {
+        puts++;
+        if (path.basename(target) === 'a.txt') {
+          return put(input, target, option);
+        }
+        return Promise.reject(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+      });
+      createService(remoteFs, { concurrency: 1, uploadRetries: 2 });
+      const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+
+      const summary = await runPlan(plan.id);
+
+      expect(summary).toMatchObject({ verified: 1, pending: 2, failed: 0 });
+      expect(itemOf(plan, 'a.txt').status).toBe('verified');
+      expect(itemOf(plan, 'b.txt').status).toBe('pending');
+      expect(itemOf(plan, 'b.txt').error).toBe('on hold: read ECONNRESET');
+      expect(itemOf(plan, 'b.txt').attempts).toBe(1);
+      // c.txt was still queued: dropped without a try, not failed
+      expect(itemOf(plan, 'c.txt').status).toBe('pending');
+      expect(puts).toBe(2);
+      expect(getHeldPlanIds()).toEqual([plan.id]);
+    });
+
+    test('resumeHeldPlans sends the held items once the server answers again', async () => {
+      vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
+      const remoteFs = createRemoteFs();
+      const service = createService(remoteFs);
+      const getRemoteFileSystem = service.getRemoteFileSystem;
+      (service as any).getRemoteFileSystem = () =>
+        Promise.reject(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }));
+      const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt')]);
+      await runPlan(plan.id);
+      expect(getHeldPlanIds()).toEqual([plan.id]);
+
+      (service as any).getRemoteFileSystem = getRemoteFileSystem;
+      await resumeHeldPlans();
+
+      expect(getHeldPlanIds()).toEqual([]);
+      expect(itemOf(plan, 'a.txt').status).toBe('verified');
+      expect(itemOf(plan, 'a.txt').error).toBeUndefined();
+      expect(itemOf(plan, 'b.txt').status).toBe('verified');
+      expect(getPlan(plan.id)!.finishedAt).toBeDefined();
+      expect(fs.readFileSync('/remote/b.txt', 'utf8')).toBe('b');
+    });
+
+    test('the outage is announced once per service, not once per file or per run', async () => {
+      vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b' }, '/');
+      const service = createService(createRemoteFs());
+      (service as any).getRemoteFileSystem = () =>
+        Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+      const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt')]);
+
+      await runPlan(plan.id);
+      await resumeHeldPlans();
+      const other = planOf([draft('/local/a.txt')]);
+      await runPlan(other.id);
+
+      expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+      expect(showWarningMessageMock.mock.calls[0][0]).toMatch(
+        /^SFTP: connection to example\.test lost \(connect ECONNREFUSED\)\. 2 upload\(s\) of staging are on hold/
+      );
+      expect(getHeldPlanIds().sort()).toEqual([plan.id, other.id].sort());
+    });
   });
 
   test('a cancelled task puts its item back to pending', async () => {

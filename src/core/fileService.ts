@@ -12,7 +12,13 @@ import Ignore from './ignore';
 import { resolveTempFilePatterns } from './tempFiles';
 import { FileSystem } from './fs';
 import Scheduler from './scheduler';
-import { createRemoteIfNoneExist, removeRemoteFs } from './remoteFs';
+import {
+  createRemoteIfNoneExist,
+  removeRemoteFs,
+  connectionGateOf,
+  isSameRemote,
+} from './remoteFs';
+import { ConnectionGate, isConnectionLostError } from './connectionHealth';
 import TransferTask, { VerifyUploadLevel } from './transferTask';
 import { TransferFailure } from './customError';
 import localFs from './localFs';
@@ -205,6 +211,13 @@ export interface TransferResult {
   failed: TransferFailure[];
   /** tasks aborted through cancelTransferTasks() */
   cancelled: TransferTask[];
+  /**
+   * Set when a task failed because the connection was lost: the tasks still
+   * queued at that moment were dropped without running (they appear in none
+   * of the lists), since every one of them would have failed the same way.
+   * The tasks already in flight still finish and are listed as usual.
+   */
+  connectionLost?: Error;
 }
 
 export interface TransferScheduler {
@@ -247,12 +260,23 @@ function trashIgnorePatterns(config: FileServiceConfig): string[] {
   return normalized ? ['/' + normalized] : [];
 }
 
+/**
+ * Version-control metadata directories, ignored by default in both
+ * directions. Nobody deploys `.git` to a web server, and its contents change
+ * every time the editor's git integration runs `status` or `fetch`
+ * (`.git/index`, `.git/FETCH_HEAD`, `.git/logs/…`): with a broad watcher
+ * those writes were planned as uploads of files nobody edited. A user who
+ * really wants them across can negate the pattern in `ignore` (`"!.git"`).
+ */
+export const VCS_METADATA_IGNORE_PATTERNS = ['.git', '.svn', '.hg'];
+
 function filesIgnoredFromConfig(config: FileServiceConfig): string[] {
   const cache = app.fsCache;
   // the config file holds credentials; never let a sync/upload ship it.
   // editor/OS/tool scratch files must never reach the remote either — see
   // core/tempFiles for the list and how to opt out of it.
   const ignore: string[] = [CONFIG_IGNORE_PATTERN]
+    .concat(VCS_METADATA_IGNORE_PATTERNS)
     .concat(trashIgnorePatterns(config))
     .concat(resolveTempFilePatterns(config))
     .concat(config.ignore && config.ignore.length ? config.ignore : []);
@@ -746,6 +770,13 @@ export default class FileService {
         result.cancelled.push(transferTask);
       } else if (err) {
         result.failed.push({ task: transferTask, error: err });
+        // the connection is gone: what is still queued would only fail the
+        // same way, one file at a time, so it is dropped here and the caller
+        // decides (a plan puts the items on hold, a command reports it once)
+        if (!result.connectionLost && isConnectionLostError(err)) {
+          result.connectionLost = err;
+          scheduler.empty();
+        }
       } else {
         result.succeeded.push(transferTask);
       }
@@ -803,6 +834,41 @@ export default class FileService {
 
   getRemoteFileSystem(config: ServiceConfig): Promise<FileSystem> {
     return createRemoteIfNoneExist(getHostInfo(config));
+  }
+
+  /** The attempt policy of the connection `config` resolves to. */
+  getConnectionGate(config: ServiceConfig): ConnectionGate {
+    return connectionGateOf(getHostInfo(config));
+  }
+
+  /**
+   * Closes the connection the service used under `previousProfile`, unless
+   * the active profile resolves to the same connection (same host, port and
+   * credentials: only the remote path differs). Called when the active
+   * profile changes, so the connection of the profile just left does not
+   * stay alive — with keepalives — for the rest of the session next to the
+   * new one.
+   */
+  closeRemoteConnectionOfProfile(previousProfile: string | null): void {
+    if (this.getAvailableProfiles().length === 0) {
+      return;
+    }
+    let previous: ServiceConfig;
+    try {
+      previous = this.getConfig(previousProfile);
+    } catch (_error) {
+      // an unknown profile has no connection to close
+      return;
+    }
+    try {
+      const current = this.getConfig();
+      if (isSameRemote(getHostInfo(previous), getHostInfo(current))) {
+        return;
+      }
+    } catch (_error) {
+      // no active profile yet: nothing shares the connection
+    }
+    removeRemoteFs(getHostInfo(previous));
   }
 
   getConfig(useProfile = app.state.profile): ServiceConfig {

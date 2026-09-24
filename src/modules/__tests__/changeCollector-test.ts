@@ -612,6 +612,55 @@ describe('default handler', () => {
     expect(reasons).toEqual([['a.ts', 'modified'], ['b.ts', 'new']]);
   });
 
+  test('a file that is the version the index verified is not planned: an event is not an edit', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'same', [p('src', 'b.ts')]: 'edited' });
+    const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });
+    const index = await indexFor(service);
+    const same = vol.statSync(p('src', 'a.ts'));
+    index.set('a.ts', { size: same.size, mtime: same.mtime.getTime(), verifiedAt: 1, status: 'verified' });
+    // mtime in the same second but another millisecond: still the same version
+    const edited = vol.statSync(p('src', 'b.ts'));
+    index.set('b.ts', { size: edited.size + 1, mtime: edited.mtime.getTime(), verifiedAt: 1, status: 'verified' });
+    setBatchHandler(null);
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
+    await flushNow();
+
+    const [plan] = plansOf();
+    expect(plan.items.map((i: any) => path.basename(i.localPath))).toEqual(['b.ts']);
+    expect(plan.items[0].reason).toBe('modified');
+  });
+
+  test('a file whose last upload failed is planned again even when its stat did not move', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'same' });
+    const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });
+    const index = await indexFor(service);
+    const same = vol.statSync(p('src', 'a.ts'));
+    index.set('a.ts', { size: same.size, mtime: same.mtime.getTime(), verifiedAt: 0, status: 'failed' });
+    setBatchHandler(null);
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(plansOf()).toHaveLength(1);
+  });
+
+  test('a batch made only of unchanged files makes no plan', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'same' });
+    const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });
+    const index = await indexFor(service);
+    const same = vol.statSync(p('src', 'a.ts'));
+    index.set('a.ts', { size: same.size, mtime: same.mtime.getTime(), verifiedAt: 1, status: 'verified' });
+    setBatchHandler(null);
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    await flushNow();
+
+    expect(plansOf()).toHaveLength(0);
+    expect(confirmAndRunPlanMock).not.toHaveBeenCalled();
+  });
+
   test('a directory in the batch is expanded into its files, without duplicates', async () => {
     vol.fromJSON({
       [p('src', 'dir', 'one.ts')]: '1',

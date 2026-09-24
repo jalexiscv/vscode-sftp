@@ -386,8 +386,26 @@ export interface DiffAgainstIndexResult {
 // Remote filesystems report mtime with one-second resolution, and the
 // transfer layer compares in seconds for that reason; comparing the local
 // side in seconds as well keeps "unchanged" consistent between the two.
-function mtimeInSeconds(ms: number): number {
+export function mtimeInSeconds(ms: number): number {
   return Math.floor(ms / 1000);
+}
+
+/**
+ * Whether a local file of `size` and `mtime` is the version its index entry
+ * describes, i.e. nothing to upload: a verified (or skipped) entry with the
+ * same size and the same mtime to the second. A `failed` entry is never
+ * unchanged. The scanner, the change collector and the plan runner all use
+ * this one rule, so a file is "unchanged" for one of them iff it is for all.
+ */
+export function isUnchangedAgainstIndex(
+  entry: { size: number; mtime: number; status?: string } | undefined,
+  size: number,
+  mtime: number
+): boolean {
+  if (!entry || entry.status === 'failed') {
+    return false;
+  }
+  return entry.size === size && mtimeInSeconds(entry.mtime) === mtimeInSeconds(mtime);
 }
 
 /**
@@ -418,11 +436,7 @@ export function diffAgainstIndex(input: DiffAgainstIndexInput): DiffAgainstIndex
     let reason: PlanReason | null;
     if (!entry) {
       reason = 'new';
-    } else if (
-      entry.status === 'failed' ||
-      entry.size !== record.size ||
-      mtimeInSeconds(entry.mtime) !== mtimeInSeconds(record.mtime)
-    ) {
+    } else if (!isUnchangedAgainstIndex(entry, record.size, record.mtime)) {
       reason = 'modified';
     } else {
       reason = null;

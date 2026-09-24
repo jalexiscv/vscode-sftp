@@ -114,15 +114,17 @@ class TruncatingFs extends RemoteFs {
   }
 }
 
-// fails the first N puts with a network error, then behaves
+// fails the first N puts with a transient server error (SFTP 4 FAILURE, the
+// generic "try again"), then behaves
 class FlakyFs extends RemoteFs {
   failures: number = 1;
   puts: number = 0;
+  error: any = Object.assign(new Error('Failure'), { code: 4 });
 
   put(input: Readable, fsPath: string, option?: any): Promise<void> {
     this.puts += 1;
     if (this.puts <= this.failures) {
-      return Promise.reject(Object.assign(new Error('connection reset by peer'), { code: 'ECONNRESET' }));
+      return Promise.reject(this.error);
     }
     return super.put(input, fsPath, option);
   }
@@ -343,7 +345,34 @@ describe('TransferTask', () => {
       expect(task.verification).toEqual({ level: 'stat', ok: true });
       expect(task.bytesTransferred).toBe(SIZE);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toMatch(/retry 1\/1 .* connection reset by peer/);
+      expect(warn.mock.calls[0][0]).toMatch(/retry 1\/1 .* Failure/);
+    });
+
+    test('a lost connection is not retried inside the task: the client is dead, the batch decides', async () => {
+      const remoteFs = createRemoteFs(FlakyFs);
+      remoteFs.failures = 10;
+      remoteFs.error = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+      const task = createUpload(remoteFs, { retries: 5 });
+
+      const error = await rejection(task.run());
+
+      expect(error.code).toBe('ECONNRESET');
+      expect(error.connectionLost).toBe(true);
+      expect(task.attempts).toBe(1);
+      expect(remoteFs.puts).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^\[transfer\] connection lost while .*a\.txt: read ECONNRESET/);
+    });
+
+    test('an FTP data-connection abort (426) is a transient reply, still retried', async () => {
+      const remoteFs = createRemoteFs(FlakyFs);
+      remoteFs.error = Object.assign(new Error('426 Connection closed; transfer aborted.'), { code: 426 });
+      const task = createUpload(remoteFs, { retries: 1 });
+
+      await task.run();
+
+      expect(task.attempts).toBe(2);
+      expect(fs.readFileSync('/remote/a.txt', 'utf8')).toBe(CONTENT);
     });
 
     test('a cancelled transfer is not retried', async () => {

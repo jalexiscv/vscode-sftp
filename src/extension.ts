@@ -131,9 +131,23 @@ export async function activate(context: vscode.ExtensionContext) {
   reflectPauseState();
   context.subscriptions.push(onDidChangePauseState(reflectPauseState));
   app.sftpBarItem.show();
+  let previousProfile = app.state.profile;
   app.state.subscribe(_ => {
     // persistir la selección para que sobreviva a reinicios de la ventana
     context.workspaceState.update(STATE_KEY_ACTIVE_PROFILE, app.state.profile);
+    // the connection of the profile just left would otherwise stay open, with
+    // keepalives, for the rest of the session next to the new one
+    const left = previousProfile;
+    previousProfile = app.state.profile;
+    if (left !== app.state.profile) {
+      getAllFileService().forEach(service => {
+        try {
+          service.closeRemoteConnectionOfProfile(left);
+        } catch (error) {
+          logger.debug(`[connection] closing the connection of profile "${left}" failed: ${error.message}`);
+        }
+      });
+    }
     const currentText = app.sftpBarItem.getText();
     // current is showing profile
     if (currentText.startsWith('SFTP')) {

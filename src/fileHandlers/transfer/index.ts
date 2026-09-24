@@ -47,7 +47,18 @@ function assertTransferSucceeded(result: TransferResult, action: TransferAction)
   }
 
   const total = result.succeeded.length + result.failed.length + result.cancelled.length;
-  throw markReported(new TransferFailedError(result.failed, total, action));
+  const error = new TransferFailedError(result.failed, total, action);
+  if (result.connectionLost) {
+    // the per-file hook stays quiet for a lost connection (every task in
+    // flight fails with it), so this aggregate is the one notice the user
+    // gets: it is not flagged as reported, and it says the rest was not tried
+    error.message =
+      `Connection lost while trying to ${action} (${result.connectionLost.message}): ` +
+      `${result.succeeded.length} done, ${result.failed.length} interrupted; ` +
+      'the remaining files were not attempted. Run the command again once the server is back.';
+    throw error;
+  }
+  throw markReported(error);
 }
 
 function createTransferHandle(direction: TransferDirection) {

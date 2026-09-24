@@ -21,7 +21,12 @@ import {
 import { indexFor } from './syncIndexFeeder';
 import { toRelPath } from './syncIndex';
 import { scanLocalTree } from './localScanner';
-import { createPlan, PlanSource, UploadPlanItemDraft } from './uploadPlan';
+import {
+  createPlan,
+  isUnchangedAgainstIndex,
+  PlanSource,
+  UploadPlanItemDraft,
+} from './uploadPlan';
 import { confirmAndRunPlan } from './planConfirmation';
 
 /**
@@ -387,6 +392,7 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
   const skip = uploadIgnoreOf(config);
   const items: UploadPlanItemDraft[] = [];
   const seen = new Set<string>();
+  let unchanged = 0;
 
   const addFile = (fsPath: string, size: number, mtime: number) => {
     const key = queueKey(fsPath);
@@ -395,10 +401,18 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
     }
     seen.add(key);
     const relPath = toRelPath(service.baseDir, fsPath);
+    const entry = index.get(relPath);
+    // an event is not an edit: a watcher fires for an attribute change, a
+    // second time for one write, or for a file a tool rewrote identically —
+    // the version the index verified needs no upload
+    if (isUnchangedAgainstIndex(entry, size, mtime)) {
+      unchanged++;
+      return;
+    }
     items.push({
       localPath: fsPath,
       remotePath: toRemotePath(fsPath, service.baseDir, config.remotePath),
-      reason: index.get(relPath) ? 'modified' : 'new',
+      reason: entry ? 'modified' : 'new',
       localSize: size,
       localMtime: mtime,
     });
@@ -433,6 +447,11 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
     addFile(item.fsPath, stat.size, stat.mtime.getTime());
   }
 
+  if (unchanged > 0) {
+    logger.debug(
+      `[change-collector] ${unchanged} file(s) unchanged since their verified upload, not planned`
+    );
+  }
   if (items.length === 0) {
     return;
   }
