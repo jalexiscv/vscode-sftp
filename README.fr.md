@@ -19,7 +19,7 @@ VSCode-SFTP vous permet d'ajouter, de modifier ou de supprimer des fichiers dans
 
 - [Pourquoi ce fork existe](#pourquoi-ce-fork-existe)
 - [Ce que nous avons mis à jour](#ce-que-nous-avons-mis-à-jour)
-- [Nouveautés de la v1.27.0](#nouveautés-de-la-v1270)
+- [Nouveautés de la v1.28.0](#nouveautés-de-la-v1280)
 - [Ce que nous attendons de cette version](#ce-que-nous-attendons-de-cette-version)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 786 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 859 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -138,16 +138,25 @@ Chaque correction a été vérifiée (build webpack propre, 786 tests, linter sa
 | **Exclusions d'envoi depuis l'interface** | Clic droit sur un dossier → `SFTP: Exclude from Upload` (et `SFTP: Include in Upload Again` sur un dossier exclu), `SFTP: Manage Upload Exclusions` pour revoir, ajouter ou retirer des entrées, et une liste avec `×` dans le gestionnaire de connexions. Tous écrivent la liste `uploadExclude` de `sftp.json` en respectant son format |
 | **Sécurité** | La ligne `config at …` du canal de sortie masquait le mot de passe de la racine mais pas celui de chaque profil ; les deux sont désormais masqués |
 
-## Nouveautés de la v1.27.0
+### [v1.27.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.27.0) — limites pour les grands projets et stockage propre par version
 
-La v1.27.0 vient d'un projet réel de plus de 90 000 fichiers que l'extension a laissé avec 90 000 envois en attente et un hôte d'extensions — le processus que toutes les extensions partagent — à la traîne. Un plan de cette taille ne peut pas être revu et, tant qu'il existait, la vue d'activité, l'index de synchronisation et la connexion y travaillaient sans relâche. Désormais un plan a une limite, la vue pagine, l'index s'écrit calmement pendant une exécution et, à l'installation d'une nouvelle version, l'extension repart d'un stockage propre.
-
-| Nouveauté | Ce que cela apporte |
-|-----------|---------------------|
+| Domaine | Changement |
+|---------|------------|
 | **Limite par plan (`externalChanges.maxPlanItems`)** | Une analyse, un tick de sondage ou une rafale du watcher qui trouve plus de fichiers modifiés que la limite (2000 par défaut ; `0` la supprime) n'est plus transformée en plan : un avertissement indique le nombre et propose `Mark all as uploaded` (l'arborescence locale devient la référence) et `Manage upload exclusions` ; la troisième issue est d'envoyer le projet une fois puis de réanalyser. Les analyses automatiques de cette connexion attendent une analyse manuelle, une reconstruction, un marquage comme envoyé ou un rechargement de `sftp.json` ; le collecteur rejette la rafale avant le moindre `stat` et le signale une fois par session |
 | **Vue d'activité paginée** | Un plan liste ses 200 premiers fichiers et une ligne `N more file(s)…` qui révèle la page suivante ; auparavant l'arbre matérialisait une ligne par élément à chaque rafraîchissement, plusieurs fois par fichier envoyé |
 | **Index écrit calmement** | Pendant l'exécution d'un plan, l'index de synchronisation est enregistré une fois par minute au lieu d'une fois par seconde (chaque envoi vérifié le marquait modifié), puis une fois de plus à la fin ; un enregistrement explicite n'est jamais retenu |
 | **Stockage propre par version** | La première fois qu'une nouvelle version s'active dans un espace de travail, l'index de synchronisation et le journal d'activité de la précédente sont supprimés avant d'être chargés (le canal de sortie l'indique) ; l'index repart vide et l'avis pour l'amorcer ou le reconstruire revient, comme à la première utilisation. Rien dans le projet n'est touché |
+
+## Nouveautés de la v1.28.0
+
+La v1.28.0 répond à une connexion instable. Un `ECONNRESET` au milieu d'un lot laissait chaque fichier en file réessayer contre le client déjà mort, ouvrait une boîte d'erreur par fichier, marquait chacun comme échoué dans l'index — et le scan suivant les reproposait comme « modifiés » sans que personne ne les ait touchés — et chaque nouvel enregistrement ou plan se reconnectait aussitôt, jusqu'à ce que le serveur FTP réponde `421 Too many connections`. La perte est désormais reconnue comme telle dans toutes les couches à la fois, les envois sont mis en attente et reprennent d'eux-mêmes, les reconnexions sont espacées, les connexions FTP inactives sont fermées et il y a moins de faux changements.
+
+| Nouveauté | Ce que cela apporte |
+|-----------|---------------------|
+| **Envois en attente, pas en échec** | À la perte de la connexion, la tâche interrompue et celles encore en file repassent à `pending` avec `on hold: <raison>`, le plan reste ouvert (les scans ne replanifient pas ces fichiers par-dessus), l'index n'est pas touché et il y a **un avertissement par serveur et par coupure** au lieu d'une boîte par fichier. Les commandes (`Upload Project`, `Sync…`) le signalent une fois, avec ce qui a été fait, interrompu et non tenté |
+| **Reconnexion à délai croissant** | Chaque connexion mémorise ses tentatives échouées et retient les nouvelles 1 s, 2 s, 4 s… jusqu'à une minute (une minute au moins après un `421`) ; entre-temps, qui la demande reçoit `connection is down; next attempt in N s` sans qu'aucune socket ne soit ouverte. Au retour de la connexion, les plans en attente reprennent d'eux-mêmes ; sinon, ils réessaient avec ce délai jusqu'à dix fois puis attendent dans la vue d'activité |
+| **Moins de connexions FTP** | Une connexion FTP sans commande depuis cinq minutes est fermée (le `NOOP` ne compte pas) et rouverte au prochain usage ; auparavant une par profil, par entrée de `sftp.json` et par fenêtre restait ouverte toute la session. Une commande qui meurt avec la socket le signale aussitôt, pas au prochain tick du keepalive ; changer de profil ferme la connexion du profil quitté ; un `close` tardif d'un client SSH mort n'abat plus la connexion qui l'a remplacé |
+| **Moins de faux changements** | `.git`, `.svn` et `.hg` sont ignorés par défaut à toute profondeur (l'intégration git de l'éditeur réécrit `.git/index` et `FETCH_HEAD` à chaque `status` ; `"!.git"` dans `ignore` en récupère un), et un événement du watcher ou un enregistrement sur un fichier dont la taille et le mtime (à la seconde) sont ceux vérifiés par l'index n'est plus planifié : un événement n'est pas une modification |
 
 ## Ce que nous attendons de cette version
 
@@ -173,7 +182,7 @@ La v1.27.0 vient d'un projet réel de plus de 90 000 fichiers que l'extension a 
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.27.0.vsix
+code --install-extension sftp-1.28.0.vsix
 ```
 
 ## Documentation

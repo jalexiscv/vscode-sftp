@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.27.0](#novedades-de-la-v1270)
+- [Novedades de la v1.28.0](#novedades-de-la-v1280)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 786 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 859 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -138,16 +138,25 @@ Cada corrección fue verificada (build de webpack limpio, 786 tests, linter sin 
 | **Exclusiones de subida desde la interfaz** | Clic derecho sobre una carpeta → `SFTP: Exclude from Upload` (y `SFTP: Include in Upload Again` sobre una ya excluida), `SFTP: Manage Upload Exclusions` para revisar, añadir o quitar entradas, y una lista con `×` en el administrador de conexiones. Todo escribe la lista `uploadExclude` de `sftp.json`, respetando su formato |
 | **Seguridad** | El log `config at …` del canal de salida enmascaraba la contraseña de la raíz pero no la de cada perfil; ahora enmascara ambas |
 
-## Novedades de la v1.27.0
+### [v1.27.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.27.0) — límites para proyectos grandes y almacenamiento limpio por versión
 
-La v1.27.0 nace de un proyecto real de más de 90 000 archivos que la extensión dejó con 90 000 pendientes de subida y el extension host —el proceso que comparten todas las extensiones— arrastrándose. Un plan de ese tamaño no se puede revisar y, mientras existía, la vista de actividad, el índice de sincronización y la conexión trabajaban sobre él sin descanso. Ahora un plan tiene un tope, la vista pagina, el índice se escribe con calma durante una ejecución y, al instalar una versión nueva, la extensión parte de un almacenamiento limpio.
-
-| Novedad | Qué aporta |
-|---------|------------|
+| Área | Cambio |
+|------|--------|
 | **Tope por plan (`externalChanges.maxPlanItems`)** | Un escaneo, un sondeo o una ráfaga del watcher que encuentra más archivos cambiados que el tope (2000 por defecto; `0` lo quita) ya no se convierte en un plan: un aviso indica el conteo y ofrece `Mark all as uploaded` (el árbol local pasa a ser la referencia) y `Manage upload exclusions`; la tercera salida es subir el proyecto una vez y volver a escanear. Los escaneos automáticos de esa conexión esperan a un escaneo manual, a un rebuild, a un dar por subido o a una recarga de `sftp.json`; el recolector descarta la ráfaga antes de hacer un solo `stat` y lo avisa una vez por sesión |
 | **Vista de actividad paginada** | Un plan lista sus primeros 200 archivos y una fila `N more file(s)…` que muestra la página siguiente; antes el árbol materializaba una fila por elemento en cada refresco, varias veces por archivo subido |
 | **Índice escrito con calma** | Mientras corre un plan, el índice de sincronización se guarda una vez por minuto en lugar de una vez por segundo (cada subida verificada lo marcaba sucio), y una vez más al terminar; un guardado explícito no se retiene |
 | **Almacenamiento limpio por versión** | La primera vez que una versión nueva se activa en un workspace, el índice de sincronización y el log de actividad de la versión anterior se descartan antes de cargarse (el canal de salida lo registra); el índice arranca vacío y vuelve el aviso para sembrarlo o reconstruirlo, como en el primer uso. Nada del proyecto se toca |
+
+## Novedades de la v1.28.0
+
+La v1.28.0 responde a una conexión inestable. Un `ECONNRESET` en mitad de un lote dejaba a cada archivo de la cola reintentando contra el cliente ya muerto, abría un diálogo de error por archivo, marcaba cada uno como fallido en el índice —y el siguiente escaneo los volvía a proponer como "cambiados" sin que nadie los hubiera tocado— y cada guardado o plan nuevo reconectaba de inmediato, hasta ganarse un `421 Too many connections` del servidor FTP. Ahora la caída se reconoce como tal en todas las capas a la vez, las subidas quedan en espera y se reanudan solas, las reconexiones se espacian, las conexiones FTP inactivas se cierran y hay menos falsos cambios.
+
+| Novedad | Qué aporta |
+|---------|------------|
+| **Subidas en espera, no fallidas** | Al perderse la conexión, la tarea interrumpida y las que quedaban en cola vuelven a `pending` con `on hold: <motivo>`, el plan sigue abierto (los escaneos no vuelven a planificar esos archivos encima), el índice no se toca y hay **un aviso por servidor y caída** en lugar de un diálogo por archivo. Los comandos (`Upload Project`, `Sync…`) lo informan una vez, con lo hecho, lo interrumpido y lo no intentado |
+| **Reconexión con espera creciente** | Cada conexión recuerda sus intentos fallidos y retiene los nuevos 1 s, 2 s, 4 s… hasta un minuto (un minuto como mínimo tras un `421`); mientras tanto quien la pida recibe `connection is down; next attempt in N s` sin abrir un socket. Al volver la conexión, los planes en espera se reanudan solos; si no vuelve, lo reintentan con esa espera hasta diez veces y luego aguardan en la vista de actividad |
+| **Menos conexiones FTP** | Una conexión FTP sin comandos durante cinco minutos se cierra (el `NOOP` no cuenta) y se reabre con el siguiente uso; antes se mantenía viva una por perfil, por entrada de `sftp.json` y por ventana durante toda la sesión. Un comando que muere con el socket lo avisa al instante, no en el siguiente tick del keepalive; al cambiar de perfil se cierra la conexión del anterior; un `close` tardío de un cliente SSH muerto ya no tumba la conexión que lo reemplazó |
+| **Menos falsos cambios** | `.git`, `.svn` y `.hg` se ignoran por defecto a cualquier profundidad (la integración git del editor reescribe `.git/index` y `FETCH_HEAD` en cada `status`; `"!.git"` en `ignore` lo recupera), y un evento del watcher o un guardado sobre un archivo cuyo tamaño y mtime (al segundo) son los que el índice verificó ya no se planifica: un evento no es una edición |
 
 ## Qué esperamos de esta versión
 
@@ -173,7 +182,7 @@ La v1.27.0 nace de un proyecto real de más de 90 000 archivos que la extensión
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.27.0.vsix
+code --install-extension sftp-1.28.0.vsix
 ```
 
 ## Documentación

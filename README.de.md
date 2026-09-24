@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.27.0](#neuerungen-in-v1270)
+- [Neuerungen in v1.28.0](#neuerungen-in-v1280)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 786 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 859 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -138,16 +138,25 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Upload-Ausschlüsse aus der Oberfläche** | Rechtsklick auf einen Ordner → `SFTP: Exclude from Upload` (und `SFTP: Include in Upload Again` auf einem ausgeschlossenen), `SFTP: Manage Upload Exclusions` zum Prüfen, Hinzufügen und Entfernen von Einträgen sowie eine Liste mit `×` im Verbindungsmanager. Alle schreiben die Liste `uploadExclude` in `sftp.json` und behalten deren Formatierung bei |
 | **Sicherheit** | Die Zeile `config at …` im Ausgabekanal maskierte das Passwort der Basis, nicht aber das jedes Profils; jetzt werden beide maskiert |
 
-## Neuerungen in v1.27.0
+### [v1.27.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.27.0) — Grenzen für große Projekte und sauberer Speicher pro Version
 
-v1.27.0 entstand aus einem realen Projekt mit über 90.000 Dateien, das die Erweiterung mit 90.000 ausstehenden Uploads und einem kriechenden Extension Host — dem Prozess, den alle Erweiterungen teilen — zurückließ. Ein Plan dieser Größe lässt sich nicht prüfen, und solange er bestand, arbeiteten Aktivitätsansicht, Sync-Index und Verbindung ohne Pause daran. Jetzt hat ein Plan eine Obergrenze, die Ansicht blättert, der Index wird während eines Laufs ruhig geschrieben, und nach der Installation einer neuen Version startet die Erweiterung mit leerem Speicher.
-
-| Neuerung | Was sie bringt |
-|----------|----------------|
+| Bereich | Änderung |
+|---------|----------|
 | **Obergrenze pro Plan (`externalChanges.maxPlanItems`)** | Ein Scan, ein Polling-Tick oder ein Watcher-Schub, der mehr geänderte Dateien als die Grenze findet (standardmäßig 2000; `0` hebt sie auf), wird nicht mehr zu einem Plan: Eine Warnung nennt die Anzahl und bietet `Mark all as uploaded` (der lokale Baum wird zur Referenz) und `Manage upload exclusions`; der dritte Ausweg ist, das Projekt einmal hochzuladen und erneut zu scannen. Die automatischen Scans dieser Verbindung warten auf einen manuellen Scan, ein Rebuild, ein Als-hochgeladen-Markieren oder ein Neuladen von `sftp.json`; der Collector verwirft den Schub vor dem ersten `stat` und meldet das einmal pro Sitzung |
 | **Seitenweise Aktivitätsansicht** | Ein Plan listet seine ersten 200 Dateien und eine Zeile `N more file(s)…`, die die nächste Seite zeigt; zuvor erzeugte der Baum bei jedem Refresh eine Zeile pro Element, mehrmals pro hochgeladener Datei |
 | **Index ruhig geschrieben** | Während ein Plan läuft, wird der Sync-Index einmal pro Minute statt einmal pro Sekunde gespeichert (jeder verifizierte Upload markierte ihn als geändert) und noch einmal am Ende; ein explizites Speichern wird nie zurückgehalten |
 | **Leerer Speicher pro Version** | Beim ersten Aktivieren einer neuen Version in einem Workspace werden Sync-Index und Aktivitätsprotokoll der vorherigen Version vor dem Laden verworfen (der Ausgabekanal protokolliert es); der Index startet leer und der Hinweis zum Säen oder Neuaufbau erscheint wieder wie beim ersten Gebrauch. Im Projekt selbst wird nichts angefasst |
+
+## Neuerungen in v1.28.0
+
+v1.28.0 antwortet auf eine instabile Verbindung. Ein `ECONNRESET` mitten in einem Stapel ließ jede wartende Datei gegen den toten Client erneut versuchen, öffnete pro Datei einen Fehlerdialog, markierte jede im Index als fehlgeschlagen — und der nächste Scan schlug sie wieder als „geändert“ vor, obwohl niemand sie angefasst hatte — und jedes neue Speichern oder jeder neue Plan verband sich sofort neu, bis der FTP-Server mit `421 Too many connections` antwortete. Der Abbruch wird jetzt in allen Schichten zugleich als solcher erkannt, Uploads werden zurückgestellt und setzen sich selbst fort, Wiederverbindungen werden gestreckt, untätige FTP-Verbindungen geschlossen, und es gibt weniger falsche Änderungen.
+
+| Neuerung | Was sie bringt |
+|----------|----------------|
+| **Uploads zurückgestellt, nicht fehlgeschlagen** | Geht die Verbindung verloren, kehren die unterbrochene Aufgabe und die noch wartenden zu `pending` mit `on hold: <Grund>` zurück, der Plan bleibt offen (die Scans planen diese Dateien nicht noch einmal darüber), der Index bleibt unberührt, und es gibt **eine Warnung pro Server und Ausfall** statt eines Dialogs pro Datei. Befehle (`Upload Project`, `Sync…`) melden es einmal, mit dem Erledigten, Unterbrochenen und Nichtversuchten |
+| **Wiederverbindung mit wachsender Wartezeit** | Jede Verbindung merkt sich ihre fehlgeschlagenen Versuche und hält neue 1 s, 2 s, 4 s… bis zu einer Minute zurück (mindestens eine Minute nach einem `421`); wer sie derweil anfordert, erhält `connection is down; next attempt in N s`, ohne dass ein Socket geöffnet wird. Kommt die Verbindung zurück, setzen sich die zurückgestellten Pläne von selbst fort; wenn nicht, versuchen sie es mit dieser Wartezeit bis zu zehnmal und warten dann in der Aktivitätsansicht |
+| **Weniger FTP-Verbindungen** | Eine FTP-Verbindung ohne Befehl seit fünf Minuten wird geschlossen (das `NOOP` zählt nicht) und bei der nächsten Nutzung neu geöffnet; zuvor blieb eine pro Profil, pro `sftp.json`-Eintrag und pro Fenster die ganze Sitzung lang offen. Ein Befehl, der mit dem Socket stirbt, meldet es sofort statt beim nächsten Keepalive-Tick; ein Profilwechsel schließt die Verbindung des vorigen Profils; ein spätes `close` eines toten SSH-Clients reißt die Ersatzverbindung nicht mehr ab |
+| **Weniger falsche Änderungen** | `.git`, `.svn` und `.hg` werden standardmäßig in jeder Tiefe ignoriert (die Git-Integration des Editors schreibt `.git/index` und `FETCH_HEAD` bei jedem `status` neu; `"!.git"` in `ignore` holt eines zurück), und ein Watcher-Ereignis oder ein Speichern für eine Datei, deren Größe und mtime (sekundengenau) die vom Index geprüften sind, wird nicht mehr geplant: ein Ereignis ist keine Bearbeitung |
 
 ## Was wir von dieser Version erwarten
 
@@ -173,7 +182,7 @@ v1.27.0 entstand aus einem realen Projekt mit über 90.000 Dateien, das die Erwe
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.27.0.vsix
+code --install-extension sftp-1.28.0.vsix
 ```
 
 ## Dokumentation
