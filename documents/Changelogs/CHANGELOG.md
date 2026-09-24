@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 61 | 2026-09-24 | Conexión resiliente: espera ante caídas, planes en espera, menos conexiones FTP y menos falsos cambios | [Ver detalle](2026-09-24_feat_conexion_resiliente.md) |
 | 60 | 2026-09-15 | Release 1.27.0: límites para proyectos grandes y almacenamiento limpio por versión | [Ver detalle](2026-09-15_release_1_27_0.md) |
 | 59 | 2026-09-15 | Límites para proyectos grandes y descarte del almacenamiento al cambiar de versión | [Ver detalle](2026-09-15_feat_limites_proyectos_grandes.md) |
 | 58 | 2026-09-13 | Release 1.26.0: dar por subido y exclusiones desde la interfaz | [Ver detalle](2026-09-13_release_1_26_0.md) |

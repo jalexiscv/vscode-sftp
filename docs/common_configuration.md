@@ -204,7 +204,8 @@ A failed check is retried like a network error (see [uploadRetries](#uploadretri
 
 ### uploadRetries
 How many times a transiently failed transfer — a network error, a timeout, a failed verification — is repeated before it is reported as failed. <br>
-Each retry waits a little longer than the previous one (500 ms × attempt), closes the stream of the failed attempt and reopens the source; a `[transfer] retry n/m` line is written to the output channel. Cancellations and permanent errors — permission denied, a source that no longer exists, FTP `5xx` replies other than quota — are never retried. The setting also applies to downloads. `0` disables retries.
+Each retry waits a little longer than the previous one (500 ms × attempt), closes the stream of the failed attempt and reopens the source; a `[transfer] retry n/m` line is written to the output channel. Cancellations and permanent errors — permission denied, a source that no longer exists, FTP `5xx` replies other than quota — are never retried. The setting also applies to downloads. `0` disables retries. <br>
+Since 1.28.0 an error that means the **connection itself is gone** (`ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EPIPE`, "Not connected", "Client is closed", FTP `421`, SFTP status 6/7…) is not retried inside the task either — a retry would run against the same dead client — and is not a failure of the file: the batch is put on hold and resumed when the connection is back, see [Connection loss and reconnection](#connection-loss-and-reconnection). A `426` data-connection abort over FTP is still a transient reply and is retried.
 
 | Key | Value | Default |
 | --- | --- | --- |
@@ -278,7 +279,8 @@ Update the destination only if a newer version is on the source filesystem.
 ### ignore
 Ignore can be used to ignore files and folders from sync, and even supports wildcards using `*`. <br>
 This is the same behavior as gitignore, all paths relative to context of the current configuration. <br>
-It applies to **both directions**: an ignored path is neither uploaded nor downloaded. To keep a path from being uploaded while still being able to download it, use [uploadExclude](#uploadexclude).
+It applies to **both directions**: an ignored path is neither uploaded nor downloaded. To keep a path from being uploaded while still being able to download it, use [uploadExclude](#uploadexclude). <br>
+A few things are ignored whatever the list says: the configuration file itself (`/.vscode/sftp.json`, it holds credentials), the scratch files of [ignoreTempFiles](#ignoretempfiles) and, since 1.28.0, the version-control metadata directories `.git`, `.svn` and `.hg` at any depth — nobody deploys them, and the editor's git integration rewrites `.git/index`, `.git/FETCH_HEAD` and `.git/logs/…` on every `status` or `fetch`, which a broad watcher used to plan as uploads of files nobody edited. A negated pattern in the list (`"!.git"`) lets one of them through again.
  
 | Key | Value | Default |
 | --- | --- | --- |
@@ -669,6 +671,22 @@ Set to true for using default `limit(222)`.
 }
 ```
 
+## Connection loss and reconnection
+
+What happens when the server stops answering in the middle of the work — a dropped Wi-Fi, a VPN that renegotiates, a server restart, an FTP host that answers `421 Too many connections`. Before 1.28.0 every queued file retried against the dead client, opened its own error dialog and was recorded as failed in the sync index (so the next scan planned all of them again), while every new save, plan or command reconnected at once — which, against a server that keeps the half-dead sessions around for minutes, is how the `421` was earned in the first place.
+
+**One classification.** An error that means the connection itself is gone — the network codes (`ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EPIPE`, `ENOTFOUND`, `EHOSTUNREACH`…), FTP `421`, the SFTP statuses `NO_CONNECTION` and `CONNECTION_LOST`, and what ssh2 and basic-ftp say when a client is closed — is told apart from an error about one file, everywhere at once. A protocol reply is judged by its number alone: an FTP `426` is a data-connection abort of one transfer, the control connection is fine and the file is simply retried.
+
+**The batch stops, nothing is failed.** The task that met the loss gives up at once instead of retrying against the dead client (`[transfer] connection lost while …` in the output channel), the scheduler drops what was still queued, and the tasks already in flight finish on their own. In an upload plan the interrupted item and every item that had not started go back to `pending` with `on hold: <reason>` as their error, the plan **stays open** — which also keeps the automatic scans from planning the same files again on top of it — and the sync index is left untouched: the file was not judged, so no `failed` mark is written. A command (`Upload Folder`, `Upload Project`, `Sync…`) reports it once, as `Connection lost while trying to upload (…): N done, M interrupted; the remaining files were not attempted`. There is no dialog per file; the per-file entries in the SFTP Activity view still say what happened to each one.
+
+**Attempts are held, not stacked.** Each connection (host, port, credentials) has a gate that remembers the failed attempts: after one, new attempts are held for 1 s, then 2 s, 4 s… up to a minute, and a minute at least after a `421`. While the hold lasts, whoever asks for the connection — a save, a plan, a command, the Remote Explorer — is answered at once with `[host]: connection is down (<reason>); next attempt in N s` and no socket is opened. A connection that was established and then dropped may be retried once right away (one reconnection is cheap and usually enough); only a failed attempt starts the hold. A wrong password or a cancelled prompt never starts one. The output channel logs `[connection] host: connection lost (reason)` once per drop.
+
+**Plans resume on their own.** A plan on hold is run again when its connection is used successfully by anyone (the gate reports the recovery), or, failing that, after the gate's current hold — never sooner than 5 s — up to ten times, roughly ten minutes at the gate's ceiling. After that it stays in the **Upload plans** group of the Activity view, pending, until the connection is used again or you run it by hand (`Upload plan`); a new save on the same server that gets through resumes it too. One warning per server and outage — `SFTP: connection to host lost (reason). N upload(s) of server are on hold and will resume when it is back.` — not one per file or per attempt.
+
+**Fewer connections over FTP.** An FTP control connection that has not run a command for five minutes is closed (the keepalive `NOOP` does not count as use) and reopened, at the cost of one login, by the next operation; before, one connection per profile, per `sftp.json` entry and per window was kept alive with `NOOP`s for the whole session, which on a shared host with a cap of 4–8 sessions per IP used the cap up before anything had failed. A command that dies with the socket now reports the drop at once instead of on the next keepalive tick, so the tasks behind it are held rather than failed one by one. Switching the active profile closes the connection of the profile just left unless the new one resolves to the same server and credentials.
+
+**Fewer false "changes".** A watcher or save event on a file whose size and mtime (to the second) are the ones the index verified is not planned — an event is not an edit: Windows fires one for an attribute change, some tools rewrite a file identically, a `git status` touches the repository metadata — and `.git`, `.svn` and `.hg` are ignored by default (see [ignore](#ignore)). A `touch`, a checkout or a copy that changes the mtime is still a change: the extension compares size and mtime, not content.
+
 ## External changes and upload verification
 
 Since 1.24.0 a local change no longer goes "event → immediate upload". It goes through a small pipeline with state, so that what you changed locally is known to be on the server — and when it isn't, you are told and can fix it with a click.
@@ -688,6 +706,8 @@ save / watcher / scan / poll / command ─▶ change collector ─▶ upload pla
 **Confirmation.** `modified` files below [externalChanges.confirmThreshold](#externalchangesconfirmthreshold) are uploaded right away; a plan that contains `new` files, exceeds the threshold or was caused by git asks first with a modal dialog (`Review plan` — the default —, `Upload N file(s)`, `Skip`). Skipped files are remembered in the index and not proposed again until they change.
 
 **Run.** A plan is executed with one scheduler per server. Each file is checked again before it is sent (gone → `skipped`; changed → the item is refreshed) and after (rewritten during the upload → `stale`, sent once more). In automatic plans, files open in the editor with unsaved changes are skipped (`unsaved changes in the editor`) rather than saved and uploaded. Cancelled items — including those `SFTP: Cancel All Transfers` stops before they start — go back to `pending`. A plan built under one profile is never run against another.
+
+**Lost connection.** A run interrupted by a lost connection is not a run with failures: the interrupted item and those still queued go back to `pending` (`on hold: …`), the plan stays open, the index is not touched, and the plan resumes on its own when the connection is back — see [Connection loss and reconnection](#connection-loss-and-reconnection).
 
 **Verification.** Every transfer counts the bytes sent; [verifyUpload](#verifyupload) decides what is asked of the server afterwards — the size by default, optionally a digest — and [uploadRetries](#uploadretries) how many times a transient failure is retried before it is reported.
 
