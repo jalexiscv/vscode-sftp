@@ -30,7 +30,16 @@ jobs:
       - name: Package extension
         run: npx --yes @vscode/vsce package
 
+      # A release may already exist for the tag (created by hand, with curated
+      # notes and the locally built vsix): then only the asset is refreshed,
+      # so the run is idempotent instead of failing on "already exists"
       - name: Create GitHub Release with the vsix attached
-        run: gh release create "$GITHUB_REF_NAME" *.vsix --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists: uploading the vsix"
+            gh release upload "$GITHUB_REF_NAME" *.vsix --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" *.vsix --title "$GITHUB_REF_NAME" --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
