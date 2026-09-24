@@ -1,6 +1,7 @@
 jest.mock('fs');
 
 import { vol } from 'memfs';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
@@ -249,6 +250,26 @@ describe('TransferTask', () => {
       expect(statSize).toHaveBeenCalledTimes(1);
       expect(statSize).toHaveBeenCalledWith('/remote/a.txt');
       expect(warn).not.toHaveBeenCalled();
+      // the digest of the bytes that went by, for the sync index
+      expect(task.contentFingerprint).toBe(
+        crypto.createHash('sha1').update(CONTENT).digest('hex')
+      );
+    });
+
+    test('the content fingerprint is unset before the run and after an incomplete stream', async () => {
+      const remoteFs = createRemoteFs();
+      const task = createUpload(remoteFs);
+      expect(task.contentFingerprint).toBeUndefined();
+
+      // a source that ends early: fewer bytes than the stat promised
+      const get = jest.spyOn(localFs, 'get').mockImplementation(() =>
+        Promise.resolve(Readable.from([Buffer.from(CONTENT.slice(0, 3))]) as any)
+      );
+      const error = await rejection(task.run());
+      get.mockRestore();
+
+      expect(error).toBeInstanceOf(TransferVerificationError);
+      expect(task.contentFingerprint).toBeUndefined();
     });
 
     test('with useTempFile the final path is what gets verified and no .new is left', async () => {
@@ -662,6 +683,10 @@ describe('TransferTask', () => {
       await task.run();
 
       expect(fs.readFileSync('/local/a.txt', 'utf8')).toBe(CONTENT);
+      // what landed on disk, digested on the way
+      expect(task.contentFingerprint).toBe(
+        crypto.createHash('sha1').update(CONTENT).digest('hex')
+      );
       expect(remoteFs.lstats).toEqual([]);
       expect(statSize).not.toHaveBeenCalled();
       expect(task.expectedSize).toBe(SIZE);

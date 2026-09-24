@@ -1,7 +1,8 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import logger from '../logger';
-import { SyncIndex, toRelPath } from './syncIndex';
+import { canFingerprint, fingerprintFile } from '../core/fingerprint';
+import { IndexEntry, SyncIndex, toRelPath } from './syncIndex';
 import { LocalFileRecord } from './localScanner';
 
 /**
@@ -28,8 +29,9 @@ import { LocalFileRecord } from './localScanner';
  * - {@link summarize} / {@link formatSummary} / {@link formatReport} turn a
  *   plan into numbers, into one line and into a Markdown report.
  * - {@link removePlan} / {@link clearPlans} forget one plan or all of them.
- * - {@link diffAgainstIndex} is the pure comparison that turns a local scan
- *   into plan items.
+ * - {@link classifyAgainstIndex} decides whether one local file is new,
+ *   modified or unchanged against the index, reading it when only that can
+ *   tell; {@link diffAgainstIndex} applies it to a whole local scan.
  */
 
 export type PlanSource = 'watcher' | 'scan' | 'command' | 'git' | 'poll';
@@ -373,15 +375,56 @@ export interface DiffAgainstIndexInput {
   index: SyncIndex;
   /** the caller resolves the remote path (UResource / config.remotePath) */
   toRemotePath: (localFsPath: string) => string;
+  /** `externalChanges.compareContent`; true when omitted */
+  compareContent?: boolean;
+  /** polled between the files read for their content; cooperative */
+  isCancelled?: () => boolean;
+  /** called after every file read for its content, with how many were so far */
+  onProgress?: (compared: number) => void;
 }
 
 export interface DiffAgainstIndexResult {
   items: Array<Omit<UploadPlanItem, 'status' | 'attempts'>>;
-  /** files whose size and mtime match their verified entry */
+  /** files that are the version their entry describes (the rewritten ones included) */
   unchanged: number;
+  /**
+   * of the unchanged, those whose mtime moved with the same size and whose
+   * content turned out to be the one the index knows: rewritten, not edited
+   */
+  rewritten: number;
   /** index entries (relative paths) with no local file; informational only */
   missingLocally: string[];
+  /** the cancellation fired while files were being read; the result is partial */
+  cancelled: boolean;
 }
+
+/** What one local file is, against its index entry. */
+export type ChangeVerdict = 'new' | 'modified' | 'unchanged';
+
+export interface ClassifyInput {
+  index: SyncIndex;
+  /** the entry's key: path relative to the service base dir */
+  relPath: string;
+  fsPath: string;
+  size: number;
+  /** mtime in ms */
+  mtime: number;
+  /** `externalChanges.compareContent`; true when omitted */
+  compareContent?: boolean;
+}
+
+export interface ClassifyResult {
+  verdict: ChangeVerdict;
+  /**
+   * true when the file had to be read: its size matched and its mtime moved,
+   * so only the content could tell. An `unchanged` verdict with this flag is
+   * a file rewritten with the same bytes; a `modified` one really changed.
+   */
+  byContent: boolean;
+}
+
+// files read at once by diffAgainstIndex; see core/fingerprint
+const COMPARE_CONCURRENCY = 4;
 
 // Remote filesystems report mtime with one-second resolution, and the
 // transfer layer compares in seconds for that reason; comparing the local
@@ -392,10 +435,12 @@ export function mtimeInSeconds(ms: number): number {
 
 /**
  * Whether a local file of `size` and `mtime` is the version its index entry
- * describes, i.e. nothing to upload: a verified (or skipped) entry with the
- * same size and the same mtime to the second. A `failed` entry is never
- * unchanged. The scanner, the change collector and the plan runner all use
- * this one rule, so a file is "unchanged" for one of them iff it is for all.
+ * describes by its stat alone, i.e. nothing to upload: a verified (or
+ * skipped) entry with the same size and the same mtime to the second. A
+ * `failed` entry is never unchanged. This is the cheap half of the rule; a
+ * file that fails it with the same size may still be unchanged by content,
+ * which {@link classifyAgainstIndex} settles by reading it. The plan runner
+ * uses this stat-only rule to notice a file rewritten during its upload.
  */
 export function isUnchangedAgainstIndex(
   entry: { size: number; mtime: number; status?: string } | undefined,
@@ -408,49 +453,180 @@ export function isUnchangedAgainstIndex(
   return entry.size === size && mtimeInSeconds(entry.mtime) === mtimeInSeconds(mtime);
 }
 
+// the stat-only verdict, or 'suspect' when only the content can tell: the
+// same size under another mtime, with a fingerprint to compare against
+function classifyByStat(
+  entry: IndexEntry | undefined,
+  size: number,
+  mtime: number,
+  compareContent: boolean
+): ChangeVerdict | 'suspect' {
+  if (!entry) {
+    return 'new';
+  }
+  if (isUnchangedAgainstIndex(entry, size, mtime)) {
+    return 'unchanged';
+  }
+  if (
+    entry.status === 'failed' ||
+    entry.size !== size ||
+    !compareContent ||
+    !entry.fingerprint ||
+    !canFingerprint(size)
+  ) {
+    return 'modified';
+  }
+  return 'suspect';
+}
+
+// reads the suspect and settles it: the same bytes under a new mtime are
+// not an edit, and the entry moves along with the mtime so the next scan
+// needs no read; other bytes are a change
+async function classifySuspect(
+  index: SyncIndex,
+  relPath: string,
+  entry: IndexEntry,
+  fsPath: string,
+  mtime: number
+): Promise<ChangeVerdict> {
+  let fingerprint: string;
+  try {
+    fingerprint = await fingerprintFile(fsPath);
+  } catch (error) {
+    // gone or unreadable between the stat and the read: the old rule applies,
+    // and the upload (or its absence) will say more
+    logger.debug(`[plan] ${fsPath} could not be compared by content: ${error.message}`);
+    return 'modified';
+  }
+  if (fingerprint !== entry.fingerprint) {
+    return 'modified';
+  }
+  // the entry may have been rewritten meanwhile (a verified upload landed):
+  // refresh only what is still the same version
+  const current = index.get(relPath);
+  if (current && current.fingerprint === entry.fingerprint && current.status === entry.status) {
+    index.set(relPath, { ...current, mtime });
+  }
+  return 'unchanged';
+}
+
 /**
- * Turns a local scan into plan items by comparing it with the sync index.
+ * What one local file is against the index of its service:
  *
  * - not in the index → `new`
- * - in the index with a different size or mtime (in seconds) → `modified`
- * - in the index as `failed` → `modified` as well: the entry records an
- *   attempt, not a verified state, so the file is due again whatever its stat
- * - same size and mtime → counted as unchanged, not included; this holds for
- *   `skipped` entries too — the user declined that very version, it is only
- *   due again once the file changes
- * - in the index but not on disk → listed in `missingLocally`; deletions are
- *   mirrored by another module, this only reports them
+ * - in the index as `failed` → `modified`: the entry records an attempt, not
+ *   a verified state, so the file is due again whatever its stat
+ * - a verified (or skipped) entry with the same size and mtime (to the
+ *   second) → `unchanged`
+ * - another size → `modified`, without reading anything
+ * - the same size under another mtime → the file is read and its fingerprint
+ *   compared with the entry's (when the entry has one, `compareContent` is on
+ *   and the file is not above the size cap): the same bytes are `unchanged`
+ *   — a checkout, a copy, a `touch`, a formatter that changed nothing — and
+ *   the entry's mtime is moved to the new one so the next scan needs no read;
+ *   other bytes are `modified`. Without a fingerprint to compare against, the
+ *   file is `modified` as it always was.
  *
- * Pure: it reads the index and never mutates it.
+ * The scanner, the change collector and the plan runner all use this one
+ * rule, so a file is "unchanged" for one of them iff it is for all.
  */
-export function diffAgainstIndex(input: DiffAgainstIndexInput): DiffAgainstIndexResult {
-  const items: DiffAgainstIndexResult['items'] = [];
-  const seen = new Set<string>();
-  let unchanged = 0;
+export async function classifyAgainstIndex(input: ClassifyInput): Promise<ClassifyResult> {
+  const entry = input.index.get(input.relPath);
+  const compareContent = input.compareContent !== false;
+  const byStat = classifyByStat(entry, input.size, input.mtime, compareContent);
+  if (byStat !== 'suspect') {
+    return { verdict: byStat, byContent: false };
+  }
+  const verdict = await classifySuspect(
+    input.index,
+    input.relPath,
+    entry!,
+    input.fsPath,
+    input.mtime
+  );
+  return { verdict, byContent: true };
+}
 
-  input.scanned.forEach(record => {
+/**
+ * Turns a local scan into plan items by comparing it with the sync index,
+ * file by file with the rule of {@link classifyAgainstIndex}: `new` and
+ * `modified` files become items (in the order they were scanned), unchanged
+ * ones are counted — those told apart by their content also as `rewritten` —
+ * and index entries with no local file are listed in `missingLocally`
+ * (deletions are mirrored by another module, this only reports them).
+ *
+ * The stat comparison is immediate; the files only the content can settle
+ * are read a few at a time, with progress and cooperative cancellation. The
+ * index is never given new entries here, but an entry whose file was
+ * rewritten identically has its mtime refreshed.
+ */
+export async function diffAgainstIndex(input: DiffAgainstIndexInput): Promise<DiffAgainstIndexResult> {
+  const compareContent = input.compareContent !== false;
+  const isCancelled = input.isCancelled || (() => false);
+  const seen = new Set<string>();
+  const verdicts: ChangeVerdict[] = [];
+  const suspects: Array<{ position: number; relPath: string; entry: IndexEntry }> = [];
+  let rewritten = 0;
+
+  input.scanned.forEach((record, position) => {
     const relPath = toRelPath(input.baseDir, record.fsPath);
     seen.add(foldRel(relPath));
-
     const entry = input.index.get(relPath);
-    let reason: PlanReason | null;
-    if (!entry) {
-      reason = 'new';
-    } else if (!isUnchangedAgainstIndex(entry, record.size, record.mtime)) {
-      reason = 'modified';
+    const byStat = classifyByStat(entry, record.size, record.mtime, compareContent);
+    if (byStat === 'suspect') {
+      // settled below; 'modified' is what it is if the read never happens
+      verdicts[position] = 'modified';
+      suspects.push({ position, relPath, entry: entry! });
     } else {
-      reason = null;
+      verdicts[position] = byStat;
     }
+  });
 
-    if (reason === null) {
+  let next = 0;
+  let compared = 0;
+  let cancelled = false;
+  const lanes = Array.from(
+    { length: Math.max(1, Math.min(COMPARE_CONCURRENCY, suspects.length)) },
+    async () => {
+      while (next < suspects.length) {
+        if (isCancelled()) {
+          cancelled = true;
+          return;
+        }
+        const suspect = suspects[next++];
+        const record = input.scanned[suspect.position];
+        const verdict = await classifySuspect(
+          input.index,
+          suspect.relPath,
+          suspect.entry,
+          record.fsPath,
+          record.mtime
+        );
+        verdicts[suspect.position] = verdict;
+        if (verdict === 'unchanged') {
+          rewritten++;
+        }
+        compared++;
+        if (input.onProgress) {
+          input.onProgress(compared);
+        }
+      }
+    }
+  );
+  await Promise.all(lanes);
+
+  const items: DiffAgainstIndexResult['items'] = [];
+  let unchanged = 0;
+  input.scanned.forEach((record, position) => {
+    const verdict = verdicts[position];
+    if (verdict === 'unchanged') {
       unchanged++;
       return;
     }
-
     items.push({
       localPath: record.fsPath,
       remotePath: input.toRemotePath(record.fsPath),
-      reason,
+      reason: verdict,
       localSize: record.size,
       localMtime: record.mtime,
     });
@@ -461,7 +637,7 @@ export function diffAgainstIndex(input: DiffAgainstIndexInput): DiffAgainstIndex
     .map(([relPath]) => relPath)
     .filter(relPath => !seen.has(foldRel(relPath)));
 
-  return { items, unchanged, missingLocally };
+  return { items, unchanged, rewritten, missingLocally, cancelled };
 }
 
 function foldRel(relPath: string): string {

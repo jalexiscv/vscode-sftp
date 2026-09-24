@@ -7,6 +7,11 @@ import {
   resolvePollInterval,
   uploadIgnoreOf,
 } from '../core/fileService';
+import {
+  fingerprintFiles,
+  FingerprintCandidate,
+  FingerprintFilesResult,
+} from '../core/fingerprint';
 import { toRemotePath } from '../helper';
 import {
   executeCommand,
@@ -120,6 +125,8 @@ export interface ScanOptions {
 export interface RebuildProgress {
   localFiles: number;
   remoteFiles: number;
+  /** of the files matched by size, those read for their content fingerprint so far */
+  fingerprinted: number;
 }
 
 export interface RebuildSummary {
@@ -131,6 +138,8 @@ export interface RebuildSummary {
   mtimeDiffer: number;
   onlyLocal: number;
   onlyRemote: number;
+  /** of the indexed files, those whose content fingerprint was recorded */
+  fingerprinted: number;
   cancelled: boolean;
 }
 
@@ -150,7 +159,8 @@ export interface MarkUploadedSummary {
 
 export interface MarkUploadedOptions {
   isCancelled?: () => boolean;
-  onProgress?: (scannedFiles: number) => void;
+  /** `fingerprinted` counts the files read for their content once the tree is listed */
+  onProgress?: (scannedFiles: number, fingerprinted?: number) => void;
   /**
    * Asked once the local tree is counted and before anything is written;
    * resolving false leaves the index as it was. Without it the write goes
@@ -409,13 +419,22 @@ async function doScan(
       return { status: 'cancelled', plan: null, filesScanned: scan.files.length };
     }
 
-    diff = diffAgainstIndex({
+    diff = await diffAgainstIndex({
       baseDir: service.baseDir,
       scanned: scan.files,
       index,
       // the same mapping every file command uses for a local uri
       toRemotePath: localPath => toRemotePath(localPath, service.baseDir, config.remotePath),
+      compareContent: resolveExternalChangesConfig(config).compareContent,
+      isCancelled,
+      onProgress: compared => status(`${compared} file(s) compared by content`),
     });
+
+    if (diff.cancelled) {
+      logger.info(`[scan] ${name}: cancelled while comparing files by content`);
+      app.sftpBarItem.showMsg(`scan of ${name} cancelled`, 2000);
+      return { status: 'cancelled', plan: null, filesScanned: scan.files.length };
+    }
   } catch (error) {
     // the bar must not read "scanning…" for the rest of the session
     app.sftpBarItem.showMsg(`scan of ${name} failed`, 2000);
@@ -437,6 +456,9 @@ async function doScan(
     overflowed.delete(service.baseDir);
     logger.info(
       `[scan] ${name}: up to date (${scan.files.length} files, ${scan.durationMs} ms` +
+        (diff.rewritten > 0
+          ? `, ${diff.rewritten} file(s) rewritten with the same content, not planned`
+          : '') +
         (diff.missingLocally.length > 0
           ? `, ${diff.missingLocally.length} indexed file(s) no longer exist locally`
           : '') +
@@ -457,7 +479,9 @@ async function doScan(
 
   logger.info(
     `[scan] ${name}: ${items.length} file(s) changed since their last verified upload ` +
-      `(${diff.unchanged} unchanged, ${scan.durationMs} ms, trigger ${trigger})`
+      `(${diff.unchanged} unchanged` +
+      (diff.rewritten > 0 ? `, ${diff.rewritten} of them rewritten with the same content` : '') +
+      `, ${scan.durationMs} ms, trigger ${trigger})`
   );
 
   // A plan of tens of thousands of items saturates the view, the status bar,
@@ -707,6 +731,22 @@ function sameMtime(localMs: number, remoteMs: number): boolean {
 }
 
 /**
+ * Fingerprints the files an index is being seeded with, unless
+ * `externalChanges.compareContent` is off — then nothing is read and the
+ * entries carry no fingerprint, so the scans fall back to size and mtime.
+ */
+function fingerprintBaseline(
+  files: FingerprintCandidate[],
+  config: ServiceConfig,
+  options: { isCancelled: () => boolean; onProgress: (fingerprinted: number) => void }
+): Promise<FingerprintFilesResult> {
+  if (!resolveExternalChangesConfig(config).compareContent) {
+    return Promise.resolve({ fingerprints: new Map<string, string>(), cancelled: false });
+  }
+  return fingerprintFiles(files, options);
+}
+
+/**
  * Seeds the index from what is already on the server: every file present on
  * both sides with the same size is recorded as verified, with the local mtime
  * as the baseline the next scans compare against. The remote mtime is not a
@@ -730,9 +770,10 @@ export async function rebuildSyncIndex(
 
   let remoteFiles = 0;
   let localFiles = 0;
+  let fingerprinted = 0;
   const report = () => {
     if (options.onProgress) {
-      options.onProgress({ localFiles, remoteFiles });
+      options.onProgress({ localFiles, remoteFiles, fingerprinted });
     }
   };
 
@@ -764,6 +805,7 @@ export async function rebuildSyncIndex(
     mtimeDiffer: 0,
     onlyLocal: 0,
     onlyRemote: 0,
+    fingerprinted: 0,
     cancelled: true,
   };
   if (remoteCancelled) {
@@ -787,6 +829,7 @@ export async function rebuildSyncIndex(
   const mtimeReliable = config.protocol !== 'ftp';
   const now = Date.now();
   const entries: Array<[string, IndexEntry]> = [];
+  const matched: Array<{ fsPath: string; size: number }> = [];
   let differ = 0;
   let mtimeDiffer = 0;
   let onlyLocal = 0;
@@ -808,6 +851,7 @@ export async function rebuildSyncIndex(
     if (mtimeReliable && !sameMtime(file.mtime, remoteEntry.mtime)) {
       mtimeDiffer++;
     }
+    matched.push({ fsPath: file.fsPath, size: file.size });
     entries.push([
       relPath,
       {
@@ -819,6 +863,25 @@ export async function rebuildSyncIndex(
         status: 'verified',
       },
     ]);
+  });
+
+  // the local content of every matched file is the baseline the scans
+  // compare against when its mtime moves: read once now, or never
+  const fingerprints = await fingerprintBaseline(matched, config, {
+    isCancelled,
+    onProgress: count => {
+      fingerprinted = count;
+      report();
+    },
+  });
+  if (fingerprints.cancelled) {
+    return cancelledSummary;
+  }
+  entries.forEach(([, entry], position) => {
+    const fingerprint = fingerprints.fingerprints.get(matched[position].fsPath);
+    if (fingerprint) {
+      entry.fingerprint = fingerprint;
+    }
   });
 
   index.clear();
@@ -833,11 +896,13 @@ export async function rebuildSyncIndex(
     mtimeDiffer,
     onlyLocal,
     onlyRemote: remote.size,
+    fingerprinted: fingerprints.fingerprints.size,
     cancelled: false,
   };
   logger.info(
     `[rebuild-index] ${name}: ${summary.indexed} indexed ` +
-      `(${summary.mtimeDiffer} with another mtime on the server), ` +
+      `(${summary.mtimeDiffer} with another mtime on the server, ` +
+      `${summary.fingerprinted} fingerprinted), ` +
       `${summary.differ} differ in size, ${summary.onlyLocal} only local, ` +
       `${summary.onlyRemote} only remote; index marked as built`
   );
@@ -880,7 +945,9 @@ export async function rebuildSyncIndexInteractive(service: FileService): Promise
         isCancelled: () => token.isCancellationRequested,
         onProgress: p =>
           progress.report({
-            message: `${p.remoteFiles} remote, ${p.localFiles} local file(s) listed`,
+            message:
+              `${p.remoteFiles} remote, ${p.localFiles} local file(s) listed` +
+              (p.fingerprinted > 0 ? `, ${p.fingerprinted} fingerprinted` : ''),
           }),
       })
   );
@@ -955,16 +1022,36 @@ export async function markLocalTreeAsUploaded(
     return cancelled;
   }
 
+  // read after the confirmation, so a declined dialog costs no reads: the
+  // content as it is now is what the scans will compare against
+  const fingerprints = await fingerprintBaseline(local.files, config, {
+    isCancelled,
+    onProgress: count => {
+      if (options.onProgress) {
+        options.onProgress(local.files.length, count);
+      }
+    },
+  });
+  if (fingerprints.cancelled) {
+    logger.info(`[mark-uploaded] ${name}: cancelled while fingerprinting; index left as it was`);
+    return cancelled;
+  }
+
   const now = Date.now();
   index.clear();
   local.files.forEach(file => {
-    index.set(toRelPath(service.baseDir, file.fsPath), {
+    const entry: IndexEntry = {
       size: file.size,
       mtime: file.mtime,
       verifiedAt: now,
       status: 'verified',
       assumed: true,
-    });
+    };
+    const fingerprint = fingerprints.fingerprints.get(file.fsPath);
+    if (fingerprint) {
+      entry.fingerprint = fingerprint;
+    }
+    index.set(toRelPath(service.baseDir, file.fsPath), entry);
   });
   index.markSeeded(now);
   await index.save();
@@ -975,8 +1062,8 @@ export async function markLocalTreeAsUploaded(
   const settledPlanItems = settleOpenPlanItems(service.name);
   logger.info(
     `[mark-uploaded] ${name}: ${local.files.length} local file(s) recorded as uploaded on the ` +
-      `user's word (${local.durationMs} ms), ${settledPlanItems} open plan item(s) settled; ` +
-      'index marked as built'
+      `user's word (${local.durationMs} ms, ${fingerprints.fingerprints.size} fingerprinted), ` +
+      `${settledPlanItems} open plan item(s) settled; index marked as built`
   );
   return { marked: local.files.length, settledPlanItems, cancelled: false };
 }
@@ -1017,7 +1104,12 @@ export async function markLocalTreeAsUploadedInteractive(
     (progress, token) =>
       markLocalTreeAsUploaded(service, {
         isCancelled: () => token.isCancellationRequested,
-        onProgress: files => progress.report({ message: `${files} local file(s) listed` }),
+        onProgress: (files, fingerprinted) =>
+          progress.report({
+            message:
+              `${files} local file(s) listed` +
+              (fingerprinted ? `, ${fingerprinted} fingerprinted` : ''),
+          }),
         confirm: async files => {
           const confirmLabel = `Mark ${files.toLocaleString()} file(s) as uploaded`;
           const choice = await showChoiceMessage(

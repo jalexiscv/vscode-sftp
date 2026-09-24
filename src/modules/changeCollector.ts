@@ -22,8 +22,8 @@ import { indexFor } from './syncIndexFeeder';
 import { toRelPath } from './syncIndex';
 import { scanLocalTree } from './localScanner';
 import {
+  classifyAgainstIndex,
   createPlan,
-  isUnchangedAgainstIndex,
   PlanSource,
   UploadPlanItemDraft,
 } from './uploadPlan';
@@ -390,29 +390,42 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
 
   const index = await indexFor(service, config);
   const skip = uploadIgnoreOf(config);
+  const compareContent = resolveExternalChangesConfig(config).compareContent;
   const items: UploadPlanItemDraft[] = [];
   const seen = new Set<string>();
   let unchanged = 0;
+  let rewritten = 0;
 
-  const addFile = (fsPath: string, size: number, mtime: number) => {
+  const addFile = async (fsPath: string, size: number, mtime: number) => {
     const key = queueKey(fsPath);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
     const relPath = toRelPath(service.baseDir, fsPath);
-    const entry = index.get(relPath);
     // an event is not an edit: a watcher fires for an attribute change, a
     // second time for one write, or for a file a tool rewrote identically —
-    // the version the index verified needs no upload
-    if (isUnchangedAgainstIndex(entry, size, mtime)) {
+    // the version the index verified needs no upload, and when only the
+    // content can tell (same size, another mtime) the file is read for it
+    const { verdict, byContent } = await classifyAgainstIndex({
+      index,
+      relPath,
+      fsPath,
+      size,
+      mtime,
+      compareContent,
+    });
+    if (verdict === 'unchanged') {
       unchanged++;
+      if (byContent) {
+        rewritten++;
+      }
       return;
     }
     items.push({
       localPath: fsPath,
       remotePath: toRemotePath(fsPath, service.baseDir, config.remotePath),
-      reason: entry ? 'modified' : 'new',
+      reason: verdict,
       localSize: size,
       localMtime: mtime,
     });
@@ -437,19 +450,22 @@ async function planBatch(batch: ChangeBatch): Promise<void> {
         continue;
       }
       const scan = await scanLocalTree(item.fsPath, { ignore: skip });
-      scan.files.forEach(file => addFile(file.fsPath, file.size, file.mtime));
+      for (const file of scan.files) {
+        await addFile(file.fsPath, file.size, file.mtime);
+      }
       continue;
     }
 
     if (!stat.isFile() && !stat.isSymbolicLink()) {
       continue;
     }
-    addFile(item.fsPath, stat.size, stat.mtime.getTime());
+    await addFile(item.fsPath, stat.size, stat.mtime.getTime());
   }
 
   if (unchanged > 0) {
     logger.debug(
-      `[change-collector] ${unchanged} file(s) unchanged since their verified upload, not planned`
+      `[change-collector] ${unchanged} file(s) unchanged since their verified upload, not planned` +
+        (rewritten > 0 ? ` (${rewritten} rewritten with the same content)` : '')
     );
   }
   if (items.length === 0) {

@@ -98,6 +98,40 @@ describe('syncIndexFeeder', () => {
     expect(entry.verifiedAt).toBeGreaterThan(0);
   });
 
+  test('a verified upload records the fingerprint of the bytes that were sent; a download too', async () => {
+    await handleOutcome({
+      service,
+      task: task({ contentFingerprint: 'a'.repeat(40) }),
+      error: null,
+      profile: null,
+    });
+    expect((await indexOfService()).get('src/a.ts')!.fingerprint).toBe('a'.repeat(40));
+
+    vol.fromJSON({ [p('src', 'd.ts')]: 'downloaded' });
+    await handleOutcome({
+      service,
+      task: task({
+        localFsPath: p('src', 'd.ts'),
+        transferType: TransferDirection.REMOTE_TO_LOCAL,
+        verification: undefined,
+        contentFingerprint: 'd'.repeat(40),
+      }),
+      error: null,
+      profile: null,
+    });
+    expect((await indexOfService()).get('src/d.ts')!.fingerprint).toBe('d'.repeat(40));
+
+    // a task that did not stream the whole file (a caller outside the
+    // transfer layer) leaves the entry without one
+    await handleOutcome({
+      service,
+      task: task({ localFsPath: p('src', 'b.ts'), contentFingerprint: undefined }),
+      error: null,
+      profile: null,
+    });
+    expect((await indexOfService()).get('src/b.ts')!.fingerprint).toBeUndefined();
+  });
+
   test('expectedSize wins over the collected size; sourceSize is the fallback', async () => {
     await handleOutcome({
       service,
@@ -382,6 +416,31 @@ describe('syncIndexFeeder', () => {
       expect(index.size).toBe(2);
     });
 
+    test('fingerprints the declined files that can be read, unless compareContent is off', async () => {
+      vol.fromJSON({ [p('src', 'a.ts')]: 'declined version' });
+      const stat = vol.statSync(p('src', 'a.ts'));
+      const declined = {
+        localPath: p('src', 'a.ts'),
+        localSize: stat.size,
+        localMtime: stat.mtime.getTime(),
+      };
+      const sha1 = require('crypto').createHash('sha1').update('declined version').digest('hex');
+
+      await rememberSkipped(service, [
+        declined,
+        { localPath: p('src', 'gone.ts'), localSize: 3, localMtime: 1 },
+      ]);
+      const index = await indexOfService();
+      expect(index.get('src/a.ts')).toMatchObject({ status: 'skipped', fingerprint: sha1 });
+      expect(index.get('src/gone.ts')!.fingerprint).toBeUndefined();
+
+      await rememberSkipped(service, [declined], {
+        ...config,
+        externalChanges: { compareContent: false },
+      } as any);
+      expect(index.get('src/a.ts')!.fingerprint).toBeUndefined();
+    });
+
     test('does nothing for an empty list and never throws on a broken config', async () => {
       const index = await indexOfService();
       await rememberSkipped(service, []);
@@ -401,6 +460,25 @@ describe('syncIndexFeeder', () => {
   });
 
   describe('rememberAssumedUploaded', () => {
+    test('fingerprints the declared files that can be read', async () => {
+      vol.fromJSON({ [p('src', 'a.ts')]: 'on the server already' });
+      const stat = vol.statSync(p('src', 'a.ts'));
+      const sha1 = require('crypto')
+        .createHash('sha1')
+        .update('on the server already')
+        .digest('hex');
+
+      const written = await rememberAssumedUploaded(service, [
+        { localPath: p('src', 'a.ts'), localSize: stat.size, localMtime: stat.mtime.getTime() },
+        { localPath: p('src', 'gone.ts'), localSize: 3, localMtime: 1 },
+      ]);
+
+      expect(written).toBe(2);
+      const index = await indexOfService();
+      expect(index.get('src/a.ts')).toMatchObject({ status: 'verified', assumed: true, fingerprint: sha1 });
+      expect(index.get('src/gone.ts')!.fingerprint).toBeUndefined();
+    });
+
     test('writes a verified entry flagged as assumed, with the size and mtime given', async () => {
       const index = await indexOfService();
       index.set('src/a.ts', { size: 1, mtime: 1, verifiedAt: 0, status: 'failed', error: 'EACCES' });

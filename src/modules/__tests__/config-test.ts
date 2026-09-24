@@ -60,6 +60,7 @@ describe('config: externalChanges / watcher.pollInterval', () => {
       scanOnResume: true,
       confirmThreshold: 20,
       maxPlanItems: 2000,
+      compareContent: true,
     });
     // the watcher block stays absent by default, so polling is off
     expect(config.watcher).toBeUndefined();
@@ -74,11 +75,13 @@ describe('config: externalChanges / watcher.pollInterval', () => {
           scanOnResume: true,
           confirmThreshold: 0,
           maxPlanItems: 0,
+          compareContent: false,
         },
       })
     ).toBeNull();
     expect(validate({ externalChanges: { confirmThreshold: 5 } })).toBeNull();
     expect(validate({ externalChanges: { maxPlanItems: 50000 } })).toBeNull();
+    expect(validate({ externalChanges: { compareContent: true } })).toBeNull();
   });
 
   test.each([
@@ -90,6 +93,8 @@ describe('config: externalChanges / watcher.pollInterval', () => {
     [{ maxPlanItems: -1 }],
     [{ maxPlanItems: 2.5 }],
     [{ maxPlanItems: '2000' }],
+    [{ compareContent: 'yes' }],
+    [{ compareContent: 1 }],
   ])('rejects externalChanges %p', block => {
     const error = validate({ externalChanges: block });
 

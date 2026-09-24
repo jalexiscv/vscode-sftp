@@ -7,6 +7,7 @@ import { Task } from './scheduler';
 import logger from '../logger';
 import { isNotFoundError } from '../helper';
 import { isConnectionLostError, markConnectionLost } from './connectionHealth';
+import { createFingerprinter, Fingerprinter } from './fingerprint';
 
 let hasWarnedModifedTimePermission = false;
 // remote file systems already told once that they cannot hash (one per connection)
@@ -190,16 +191,25 @@ export class TransferVerificationError extends CustomError {
 /**
  * Counts the bytes flowing from the source stream into the target file
  * system, so the task can compare what was handed over against the source
- * size. A Transform (not a 'data' listener) keeps the source paused until the
- * target starts reading and preserves backpressure.
+ * size, and digests them on the way, so the sync index can record a
+ * fingerprint of exactly the content that was transferred without reading
+ * the file a second time. A Transform (not a 'data' listener) keeps the
+ * source paused until the target starts reading and preserves backpressure.
  */
 class ByteCounter extends Transform {
   bytes: number = 0;
+  private readonly _fingerprinter: Fingerprinter = createFingerprinter();
 
   _transform(chunk: Buffer, _encoding: string, callback: TransformCallback) {
     this.bytes += chunk.length;
+    this._fingerprinter.update(chunk);
     this.push(chunk);
     callback();
+  }
+
+  /** The digest of every byte counted so far; valid once, after the stream ended. */
+  fingerprint(): string {
+    return this._fingerprinter.digest();
   }
 }
 
@@ -242,6 +252,7 @@ export default class TransferTask implements Task {
   private _bytesTransferred: number = 0;
   private _expectedSize: number | undefined;
   private _verification: TransferVerification | undefined;
+  private _contentFingerprint: string | undefined;
 
   constructor(
     src: FileHandle,
@@ -299,6 +310,16 @@ export default class TransferTask implements Task {
   /** Outcome of the post-transfer checks of the last attempt; unset for symlinks. */
   get verification(): TransferVerification | undefined {
     return this._verification;
+  }
+
+  /**
+   * Fingerprint (see core/fingerprint) of the bytes the last attempt streamed
+   * into the target, once they were counted complete: for an upload, the
+   * content the server holds; for a download, the content now on disk. Unset
+   * for symlinks and for an attempt that did not stream the whole file.
+   */
+  get contentFingerprint(): string | undefined {
+    return this._contentFingerprint;
   }
 
   /** mtime of the source as it was collected ({@link TransferOption.mtime}), in ms. */
@@ -370,6 +391,7 @@ export default class TransferTask implements Task {
     this._bytesTransferred = 0;
     this._verification = undefined;
     this._sourceError = undefined;
+    this._contentFingerprint = undefined;
 
     const src = this._srcFsPath;
     const target = this._targetFsPath;
@@ -479,6 +501,9 @@ export default class TransferTask implements Task {
           `bytes mismatch (sent ${input.bytes}, expected ${expectedSize})`
         );
       }
+      // the whole file went by: its digest is the fingerprint of what the
+      // target now holds
+      this._contentFingerprint = input.fingerprint();
 
       let mtimeApplied = false;
       if (atime && mtime) {

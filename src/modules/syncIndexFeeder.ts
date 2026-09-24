@@ -4,6 +4,8 @@ import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
 import { FileService, ServiceConfig, TransferDirection, FileType } from '../core';
 import { isConnectionLostError } from '../core/connectionHealth';
+import { resolveExternalChangesConfig } from '../core/fileService';
+import { fingerprintFiles } from '../core/fingerprint';
 import { SyncIndex, IndexEntry, getSyncIndex, indexKeyFor, toRelPath } from './syncIndex';
 import { onDidFinishTransfer, TransferOutcome } from './transferEvents';
 
@@ -111,6 +113,11 @@ async function recordUpload(outcome: TransferOutcome, index: SyncIndex, relPath:
     // a stat verification passed only because the remote size equalled this one
     entry.remoteSize = size;
   }
+  // the digest of the bytes that were sent: what a later scan compares the
+  // file with when its mtime moves without its size
+  if (task.contentFingerprint) {
+    entry.fingerprint = task.contentFingerprint;
+  }
   index.set(relPath, entry);
 }
 
@@ -122,12 +129,16 @@ async function recordDownload(outcome: TransferOutcome, index: SyncIndex, relPat
   // after a download local and remote hold the same file; remembering it as
   // verified is what keeps the next scan from uploading it straight back
   const stat = await fsPromises.lstat(outcome.task.localFsPath);
-  index.set(relPath, {
+  const entry: IndexEntry = {
     size: stat.size,
     mtime: stat.mtime.getTime(),
     verifiedAt: Date.now(),
     status: 'verified',
-  });
+  };
+  if (outcome.task.contentFingerprint) {
+    entry.fingerprint = outcome.task.contentFingerprint;
+  }
+  index.set(relPath, entry);
 }
 
 async function handleOutcome(outcome: TransferOutcome): Promise<void> {
@@ -242,17 +253,23 @@ export async function rememberSkipped(
   }
   try {
     const index = await indexFor(service, config);
+    const fingerprints = await fingerprintDeclared(service, files, config);
     files.forEach(file => {
       const relPath = toRelPath(service.baseDir, file.localPath);
       if (!isInsideBase(relPath)) {
         return;
       }
-      index.set(relPath, {
+      const entry: IndexEntry = {
         size: file.localSize,
         mtime: file.localMtime,
         verifiedAt: 0,
         status: 'skipped',
-      });
+      };
+      const fingerprint = fingerprints.get(file.localPath);
+      if (fingerprint) {
+        entry.fingerprint = fingerprint;
+      }
+      index.set(relPath, entry);
     });
     logger.info(
       `[sync-index] ${service.name || service.baseDir}: ${files.length} skipped file(s) remembered`
@@ -260,6 +277,27 @@ export async function rememberSkipped(
   } catch (error) {
     logger.debug(`[sync-index] cannot remember skipped files: ${error.message}`);
   }
+}
+
+/**
+ * Fingerprints the versions the user is declaring (skipped, or on the
+ * server already), so a later rewrite with the same bytes is still that
+ * version; nothing is read when `externalChanges.compareContent` is off.
+ * A file that cannot be read simply gets no fingerprint.
+ */
+async function fingerprintDeclared(
+  service: FileService,
+  files: SkippedLocalFile[],
+  config?: ServiceConfig
+): Promise<Map<string, string>> {
+  const resolved = config || service.getConfig();
+  if (!resolveExternalChangesConfig(resolved).compareContent) {
+    return new Map<string, string>();
+  }
+  const result = await fingerprintFiles(
+    files.map(file => ({ fsPath: file.localPath, size: file.localSize }))
+  );
+  return result.fingerprints;
 }
 
 /**
@@ -280,6 +318,7 @@ export async function rememberAssumedUploaded(
   }
   try {
     const index = await indexFor(service, config);
+    const fingerprints = await fingerprintDeclared(service, files, config);
     const now = Date.now();
     let written = 0;
     files.forEach(file => {
@@ -287,13 +326,18 @@ export async function rememberAssumedUploaded(
       if (!isInsideBase(relPath)) {
         return;
       }
-      index.set(relPath, {
+      const entry: IndexEntry = {
         size: file.localSize,
         mtime: file.localMtime,
         verifiedAt: now,
         status: 'verified',
         assumed: true,
-      });
+      };
+      const fingerprint = fingerprints.get(file.localPath);
+      if (fingerprint) {
+        entry.fingerprint = fingerprint;
+      }
+      index.set(relPath, entry);
       written++;
     });
     logger.info(

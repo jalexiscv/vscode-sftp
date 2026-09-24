@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import app from '../app';
 import { COMMAND_ACTIVITY_FOCUS, COMMAND_PLAN_PREVIEW } from '../constants';
 import { FileService, ServiceConfig, UResource, uploadIgnoreOf } from '../core';
+import { resolveExternalChangesConfig } from '../core/fileService';
 import { isSubpathOf, reportError, simplifyPath } from '../helper';
 import {
   executeCommand,
@@ -180,24 +181,6 @@ export default checkCommand({
       })
     );
 
-    const scan = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `SFTP: scanning ${simplifyPath(scopeDir) || scopeDir}`,
-        cancellable: true,
-      },
-      (progress, token) =>
-        scanLocalTree(scopeDir, {
-          ignore: uploadIgnoreOf(config),
-          isCancelled: () => token.isCancellationRequested,
-          onProgress: (files, dirs) => progress.report({ message: `${files} files in ${dirs} folders` }),
-        })
-    );
-    if (scan.cancelled) {
-      showInformationMessage('SFTP: preview cancelled.');
-      return;
-    }
-
     // the same resolution the file handlers use, so the plan's remote paths
     // are exactly where an upload would put the files
     const toRemotePath = (localFsPath: string) =>
@@ -208,10 +191,46 @@ export default checkCommand({
         remote: { host: config.host, port: config.port },
       }).remoteFsPath;
 
-    const diff = diffAgainstIndex({ baseDir: service.baseDir, scanned: scan.files, index, toRemotePath });
+    const compared = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `SFTP: scanning ${simplifyPath(scopeDir) || scopeDir}`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        const isCancelled = () => token.isCancellationRequested;
+        const scanned = await scanLocalTree(scopeDir, {
+          ignore: uploadIgnoreOf(config),
+          isCancelled,
+          onProgress: (files, dirs) => progress.report({ message: `${files} files in ${dirs} folders` }),
+        });
+        if (scanned.cancelled) {
+          return null;
+        }
+        // a file whose mtime moved without its size is read and compared
+        // with the fingerprint the index holds, like a scan does
+        const diffed = await diffAgainstIndex({
+          baseDir: service.baseDir,
+          scanned: scanned.files,
+          index,
+          toRemotePath,
+          compareContent: resolveExternalChangesConfig(config).compareContent,
+          isCancelled,
+          onProgress: count => progress.report({ message: `${count} file(s) compared by content` }),
+        });
+        return diffed.cancelled ? null : { scan: scanned, diff: diffed };
+      }
+    );
+    if (!compared) {
+      showInformationMessage('SFTP: preview cancelled.');
+      return;
+    }
+    const { scan, diff } = compared;
     logger.info(
       `[plan-preview] ${service.name || service.baseDir}: ${scan.files.length} file(s) scanned, ` +
-        `${diff.items.length} to upload, ${diff.unchanged} unchanged, ${scan.durationMs} ms`
+        `${diff.items.length} to upload, ${diff.unchanged} unchanged` +
+        (diff.rewritten > 0 ? ` (${diff.rewritten} rewritten with the same content)` : '') +
+        `, ${scan.durationMs} ms`
     );
 
     if (diff.items.length === 0) {
