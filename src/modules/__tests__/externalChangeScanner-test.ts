@@ -28,6 +28,7 @@ jest.mock('../../host', () => ({
   ),
 }));
 
+import * as crypto from 'crypto';
 import * as path from 'path';
 import { vol } from 'memfs';
 import app from '../../app';
@@ -103,6 +104,7 @@ function fakeContext(state: { [key: string]: any } = {}) {
 
 const baseDir = path.resolve(path.sep, 'ws');
 const p = (...segments: string[]) => path.join(baseDir, ...segments);
+const sha1 = (content: string) => crypto.createHash('sha1').update(content).digest('hex');
 
 function createRemoteFs() {
   // posix paths for the remote side, as a real server would report them
@@ -826,10 +828,18 @@ describe('rebuildSyncIndex', () => {
       mtimeDiffer: 0,
       onlyLocal: 1,
       onlyRemote: 1,
+      fingerprinted: 2,
       cancelled: false,
     });
     const index = await indexFor(service);
-    expect(index.get('same.txt')).toMatchObject({ size: 4, mtime: t, remoteSize: 4, status: 'verified' });
+    expect(index.get('same.txt')).toMatchObject({
+      size: 4,
+      mtime: t,
+      remoteSize: 4,
+      status: 'verified',
+      // the local content is the baseline a later touch is compared against
+      fingerprint: sha1('same'),
+    });
     expect(index.get('dir/deep.txt')).toBeDefined();
     expect(index.get('differ.txt')).toBeUndefined();
     expect(index.get('only-local.txt')).toBeUndefined();
@@ -897,7 +907,50 @@ describe('rebuildSyncIndex', () => {
 
     await rebuildSyncIndex(fakeService(), { onProgress: report => progress.push({ ...report }) });
 
-    expect(progress[progress.length - 1]).toEqual({ localFiles: 2, remoteFiles: 1 });
+    expect(progress[progress.length - 1]).toEqual({ localFiles: 2, remoteFiles: 1, fingerprinted: 1 });
+  });
+
+  test('compareContent off records no fingerprint, so a touch counts as a change', async () => {
+    vol.fromJSON({ [p('a.txt')]: 'abc', '/remote/a.txt': 'abc' });
+    const t = 1700000000000;
+    setMtime(p('a.txt'), t);
+    const service = fakeService({ externalChanges: { compareContent: false } });
+
+    const summary = await rebuildSyncIndex(service);
+
+    expect(summary).toMatchObject({ indexed: 1, fingerprinted: 0 });
+    const index = await indexFor(service);
+    expect(index.get('a.txt')!.fingerprint).toBeUndefined();
+    setMtime(p('a.txt'), t + 60000);
+    expect((await runScan(service, 'startup')).status).toBe('planned');
+  });
+
+  test('a file touched after a rebuild is compared by content, not planned, and its entry follows', async () => {
+    vol.fromJSON({ [p('a.txt')]: 'abc', [p('b.txt')]: 'xyz', '/remote/a.txt': 'abc', '/remote/b.txt': 'xyz' });
+    const t = 1700000000000;
+    setMtime(p('a.txt'), t);
+    setMtime(p('b.txt'), t);
+    const service = fakeService();
+    await rebuildSyncIndex(service);
+    const index = await indexFor(service);
+
+    // a checkout or a copy: the same bytes, another mtime
+    setMtime(p('a.txt'), t + 60000);
+    // an edit that keeps the size
+    vol.writeFileSync(p('b.txt'), 'xyw');
+    setMtime(p('b.txt'), t + 60000);
+
+    const outcome = await runScan(service, 'startup');
+
+    expect(outcome.status).toBe('planned');
+    expect(outcome.plan!.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+      ['b.txt', 'modified'],
+    ]);
+    expect(index.get('a.txt')).toMatchObject({ mtime: t + 60000, fingerprint: sha1('abc') });
+    // the next scan does not even read it (manual: the plan above is still pending review)
+    setMtime(p('b.txt'), t);
+    index.set('b.txt', { size: 3, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('xyw') });
+    expect((await runScan(service, 'manual')).status).toBe('up-to-date');
   });
 
   test('a directory that fails to list is skipped, not fatal', async () => {
@@ -999,8 +1052,11 @@ describe('markLocalTreeAsUploaded', () => {
       verifiedAt: expect.any(Number),
       status: 'verified',
       assumed: true,
+      fingerprint: sha1('a'),
     });
-    expect(index.get('dir/b.ts')).toMatchObject({ size: 2, status: 'verified', assumed: true });
+    expect(index.get('dir/b.ts')).toMatchObject({ size: 2, status: 'verified', assumed: true, fingerprint: sha1('bb') });
+    // once listed, the reads are reported too
+    expect(progress[progress.length - 1]).toBe(2);
     expect(index.get('.git/HEAD')).toBeUndefined();
     expect(progress.length).toBeGreaterThan(0);
     expect(formatMarkUploadedSummary(summary)).toBe(

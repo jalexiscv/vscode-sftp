@@ -102,6 +102,7 @@ const configScheme = {
     scanOnResume: Joi.boolean(),
     confirmThreshold: Joi.number().integer().min(0),
     maxPlanItems: Joi.number().integer().min(0),
+    compareContent: Joi.boolean(),
   },
 };
 
@@ -170,13 +171,15 @@ const defaultConfig = {
   },
 
   // edits made while VS Code was closed are picked up by a scan at activation
-  // and on resume; a batch above the threshold asks before uploading, and one
-  // above maxPlanItems is reported instead of planned
+  // and on resume; a batch above the threshold asks before uploading, one
+  // above maxPlanItems is reported instead of planned, and a file whose mtime
+  // moved without its size is compared by content before it counts as changed
   externalChanges: {
     scanOnStartup: true,
     scanOnResume: true,
     confirmThreshold: 20,
     maxPlanItems: 2000,
+    compareContent: true,
   },
 };
 

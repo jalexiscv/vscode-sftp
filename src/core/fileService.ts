@@ -96,6 +96,13 @@ export interface ExternalChangesConfig {
    * the extension host; 0 removes the limit
    */
   maxPlanItems: number;
+  /**
+   * a file whose size matches its index entry but whose mtime moved is read
+   * and compared with the fingerprint the entry carries before it is called
+   * modified (a checkout, a copy, a formatter that changed nothing); off,
+   * size and mtime decide alone and no file is read
+   */
+  compareContent: boolean;
 }
 
 export interface RemoteTrashConfig {
@@ -585,6 +592,7 @@ const DEFAULT_EXTERNAL_CHANGES: ExternalChangesConfig = {
   scanOnResume: true,
   confirmThreshold: 20,
   maxPlanItems: 2000,
+  compareContent: true,
 };
 
 /**
@@ -619,6 +627,10 @@ export function resolveExternalChangesConfig(config: {
       typeof external!.maxPlanItems === 'number' && external!.maxPlanItems >= 0
         ? Math.floor(external!.maxPlanItems)
         : DEFAULT_EXTERNAL_CHANGES.maxPlanItems,
+    compareContent:
+      external!.compareContent !== undefined
+        ? Boolean(external!.compareContent)
+        : DEFAULT_EXTERNAL_CHANGES.compareContent,
   };
 }
 

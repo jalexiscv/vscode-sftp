@@ -11,9 +11,10 @@ import fsPromises from '../helper/fsPromises';
  * It is what lets the extension answer "what still needs uploading?" without
  * listing the server, and notice edits made while VS Code was closed: a scan of
  * the local tree compared against this index yields the files whose size or
- * mtime moved since their last verified upload. The index therefore reflects
- * what was *verified*, not what was attempted — callers update it from the
- * after-transfer hook, once the upload checked out.
+ * mtime moved since their last verified upload — and, when only the mtime
+ * moved, whose content differs from the fingerprint the entry carries. The
+ * index therefore reflects what was *verified*, not what was attempted —
+ * callers update it from the after-transfer hook, once the upload checked out.
  *
  * One index per destination: the key ({@link indexKeyFor}) folds the service
  * base dir, host, port, remote path and profile, so two profiles of the same
@@ -62,6 +63,17 @@ export interface IndexEntry {
    * this version, nothing was transferred or compared.
    */
   assumed?: boolean;
+  /**
+   * Fingerprint (core/fingerprint: sha1 hex) of the local content of this
+   * version, when it is known: the bytes an upload sent or a download wrote,
+   * or the file as it was when it was seeded, skipped or assumed uploaded.
+   * With it, a file whose size matches and whose mtime moved is compared by
+   * content before it is called modified — a checkout, a copy or a formatter
+   * that changed nothing is not an edit. Without it (an entry written before
+   * fingerprints existed, a file above the size cap, an unreadable file) size
+   * and mtime decide alone, as they always did.
+   */
+  fingerprint?: string;
 }
 
 interface IndexFile {

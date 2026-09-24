@@ -632,6 +632,29 @@ describe('default handler', () => {
     expect(plan.items[0].reason).toBe('modified');
   });
 
+  test('a file rewritten with the same content under another mtime is not planned; a real edit of the same size is', async () => {
+    vol.fromJSON({ [p('src', 'a.ts')]: 'same bytes', [p('src', 'b.ts')]: 'new  bytes' });
+    const t = 1700000000000;
+    vol.utimesSync(p('src', 'a.ts'), new Date(t + 60000), new Date(t + 60000));
+    vol.utimesSync(p('src', 'b.ts'), new Date(t + 60000), new Date(t + 60000));
+    const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });
+    const index = await indexFor(service);
+    const sha1 = require('crypto').createHash('sha1').update('same bytes').digest('hex');
+    index.set('a.ts', { size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1 });
+    index.set('b.ts', { size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1 });
+    setBatchHandler(null);
+
+    enqueueChange(uri(p('src', 'a.ts')), 'watcher');
+    enqueueChange(uri(p('src', 'b.ts')), 'watcher');
+    await flushNow();
+
+    const [plan] = plansOf();
+    expect(plan.items.map((i: any) => path.basename(i.localPath))).toEqual(['b.ts']);
+    expect(plan.items[0].reason).toBe('modified');
+    // the entry of the rewritten file follows its new mtime
+    expect(index.get('a.ts')).toMatchObject({ mtime: t + 60000, fingerprint: sha1 });
+  });
+
   test('a file whose last upload failed is planned again even when its stat did not move', async () => {
     vol.fromJSON({ [p('src', 'a.ts')]: 'same' });
     const service = getFileServiceMock({ fsPath: p('src', 'a.ts') });

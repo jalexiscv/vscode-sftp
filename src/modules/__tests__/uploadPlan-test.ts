@@ -1,5 +1,11 @@
+jest.mock('fs');
+
+import * as crypto from 'crypto';
 import * as path from 'path';
+import { vol } from 'memfs';
+import * as fingerprint from '../../core/fingerprint';
 import {
+  classifyAgainstIndex,
   createPlan,
   getPlans,
   getPlan,
@@ -372,8 +378,13 @@ describe('uploadPlan', () => {
 
   describe('diffAgainstIndex', () => {
     beforeEach(() => {
+      vol.reset();
       resetSyncIndex();
       initSyncIndex({ storagePath: undefined });
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
     });
 
     const record = (name: string, size: number, mtime: number): LocalFileRecord => ({
@@ -385,6 +396,16 @@ describe('uploadPlan', () => {
     const toRemotePath = (fsPath: string) =>
       '/var/www/html/' + path.relative(baseDir, fsPath).split(path.sep).join('/');
 
+    const sha1 = (content: string) => crypto.createHash('sha1').update(content).digest('hex');
+
+    // a file on the (memfs) disk with the given content and mtime, and its scan record
+    function onDisk(name: string, content: string, mtime: number): LocalFileRecord {
+      vol.mkdirSync(path.dirname(local(name)), { recursive: true } as any);
+      vol.writeFileSync(local(name), content);
+      vol.utimesSync(local(name), new Date(mtime), new Date(mtime));
+      return record(name, Buffer.byteLength(content), mtime);
+    }
+
     test('classifies new, modified and unchanged, and reports missing files', async () => {
       const index = await getSyncIndex('k');
       index.set('same.php', { size: 10, mtime: 1700000000000, verifiedAt: 1, status: 'verified' });
@@ -392,7 +413,7 @@ describe('uploadPlan', () => {
       index.set('newer.php', { size: 10, mtime: 1700000000000, verifiedAt: 1, status: 'verified' });
       index.set('gone/old.php', { size: 10, mtime: 1700000000000, verifiedAt: 1, status: 'verified' });
 
-      const result = diffAgainstIndex({
+      const result = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -405,6 +426,8 @@ describe('uploadPlan', () => {
       });
 
       expect(result.unchanged).toBe(1);
+      expect(result.rewritten).toBe(0);
+      expect(result.cancelled).toBe(false);
       expect(result.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
         ['bigger.php', 'modified'],
         ['newer.php', 'modified'],
@@ -424,7 +447,7 @@ describe('uploadPlan', () => {
       const index = await getSyncIndex('k');
       index.set('a.php', { size: 10, mtime: 1700000000123, verifiedAt: 1, status: 'verified' });
 
-      const sameSecond = diffAgainstIndex({
+      const sameSecond = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -433,7 +456,7 @@ describe('uploadPlan', () => {
       expect(sameSecond.items).toEqual([]);
       expect(sameSecond.unchanged).toBe(1);
 
-      const nextSecond = diffAgainstIndex({
+      const nextSecond = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -446,7 +469,7 @@ describe('uploadPlan', () => {
       const index = await getSyncIndex('k');
       index.set('a.php', { size: 10, mtime: 1700000000000, verifiedAt: 1, status: 'failed' });
 
-      const result = diffAgainstIndex({
+      const result = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -459,7 +482,7 @@ describe('uploadPlan', () => {
       const index = await getSyncIndex('k');
       index.set('a.php', { size: 10, mtime: 1700000000000, verifiedAt: 0, status: 'skipped' });
 
-      const same = diffAgainstIndex({
+      const same = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -468,7 +491,7 @@ describe('uploadPlan', () => {
       expect(same.items).toEqual([]);
       expect(same.unchanged).toBe(1);
 
-      const changed = diffAgainstIndex({
+      const changed = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -477,20 +500,162 @@ describe('uploadPlan', () => {
       expect(changed.items.map(i => i.reason)).toEqual(['modified']);
     });
 
-    test('does not mutate the index', async () => {
+    test('never adds entries to the index', async () => {
       const index = await getSyncIndex('k');
       index.set('gone.php', { size: 1, mtime: 1, verifiedAt: 1, status: 'verified' });
 
-      diffAgainstIndex({ baseDir, index, toRemotePath, scanned: [record('fresh.php', 1, 1)] });
+      await diffAgainstIndex({ baseDir, index, toRemotePath, scanned: [record('fresh.php', 1, 1)] });
       expect(index.size).toBe(1);
       expect(index.get('fresh.php')).toBeUndefined();
+    });
+
+    test('the same content under another mtime is unchanged (rewritten), and the entry follows the mtime', async () => {
+      const t = 1700000000000;
+      const index = await getSyncIndex('k');
+      const touched = onDisk('touched.php', 'same bytes', t + 60000);
+      const edited = onDisk('edited.php', 'new  bytes', t + 60000);
+      index.set('touched.php', {
+        size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('same bytes'),
+      });
+      index.set('edited.php', {
+        size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('same bytes'),
+      });
+      const progress: number[] = [];
+
+      const result = await diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [touched, edited],
+        onProgress: compared => progress.push(compared),
+      });
+
+      expect(result.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+        ['edited.php', 'modified'],
+      ]);
+      expect(result.unchanged).toBe(1);
+      expect(result.rewritten).toBe(1);
+      expect(progress).toEqual([1, 2]);
+      // the next scan will not have to read it again
+      expect(index.get('touched.php')).toMatchObject({ mtime: t + 60000, fingerprint: sha1('same bytes') });
+      // a modified file's entry is left for the upload to rewrite
+      expect(index.get('edited.php')).toMatchObject({ mtime: t });
+      expect(index.size).toBe(2);
+    });
+
+    test('a skipped version keeps its status when its file is rewritten identically', async () => {
+      const t = 1700000000000;
+      const index = await getSyncIndex('k');
+      const touched = onDisk('declined.php', 'declined', t + 5000);
+      index.set('declined.php', {
+        size: 8, mtime: t, verifiedAt: 0, status: 'skipped', fingerprint: sha1('declined'),
+      });
+
+      const result = await diffAgainstIndex({ baseDir, index, toRemotePath, scanned: [touched] });
+
+      expect(result.items).toEqual([]);
+      expect(index.get('declined.php')).toMatchObject({ status: 'skipped', mtime: t + 5000 });
+    });
+
+    test('without a fingerprint to compare against, or with compareContent off, the mtime alone decides', async () => {
+      const t = 1700000000000;
+      const index = await getSyncIndex('k');
+      const legacy = onDisk('legacy.php', 'same bytes', t + 60000);
+      const withPrint = onDisk('printed.php', 'same bytes', t + 60000);
+      index.set('legacy.php', { size: 10, mtime: t, verifiedAt: 1, status: 'verified' });
+      index.set('printed.php', {
+        size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('same bytes'),
+      });
+      const read = jest.spyOn(fingerprint, 'fingerprintFile');
+
+      const legacyOnly = await diffAgainstIndex({ baseDir, index, toRemotePath, scanned: [legacy] });
+      expect(legacyOnly.items.map(i => i.reason)).toEqual(['modified']);
+      expect(legacyOnly.rewritten).toBe(0);
+
+      const off = await diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [withPrint],
+        compareContent: false,
+      });
+      expect(off.items.map(i => i.reason)).toEqual(['modified']);
+      expect(read).not.toHaveBeenCalled();
+      // nothing was read, so nothing moved
+      expect(index.get('printed.php')).toMatchObject({ mtime: t });
+    });
+
+    test('a failed entry and a different size are modified without a read', async () => {
+      const t = 1700000000000;
+      const index = await getSyncIndex('k');
+      index.set('failed.php', {
+        size: 10, mtime: t, verifiedAt: 0, status: 'failed', fingerprint: sha1('same bytes'),
+      });
+      index.set('grown.php', {
+        size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('same bytes'),
+      });
+      const read = jest.spyOn(fingerprint, 'fingerprintFile');
+
+      const result = await diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [record('failed.php', 10, t + 60000), record('grown.php', 11, t + 60000)],
+      });
+
+      expect(result.items.map(i => i.reason)).toEqual(['modified', 'modified']);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    test('a file above the size cap is not read; an unreadable one is modified', async () => {
+      const t = 1700000000000;
+      const huge = fingerprint.MAX_FINGERPRINT_SIZE + 1;
+      const index = await getSyncIndex('k');
+      index.set('huge.bin', { size: huge, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: 'x' });
+      index.set('gone.php', { size: 4, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('gone') });
+      const read = jest.spyOn(fingerprint, 'fingerprintFile');
+
+      const result = await diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [record('huge.bin', huge, t + 60000), record('gone.php', 4, t + 60000)],
+      });
+
+      expect(result.items.map(i => [path.basename(i.localPath), i.reason])).toEqual([
+        ['huge.bin', 'modified'],
+        ['gone.php', 'modified'],
+      ]);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledWith(local('gone.php'));
+    });
+
+    test('a cancellation stops the reads; what was not settled stays modified', async () => {
+      const t = 1700000000000;
+      const index = await getSyncIndex('k');
+      const touched = onDisk('touched.php', 'same bytes', t + 60000);
+      index.set('touched.php', {
+        size: 10, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('same bytes'),
+      });
+
+      const result = await diffAgainstIndex({
+        baseDir,
+        index,
+        toRemotePath,
+        scanned: [touched, record('fresh.php', 1, t)],
+        isCancelled: () => true,
+      });
+
+      expect(result.cancelled).toBe(true);
+      expect(result.items.map(i => i.reason)).toEqual(['modified', 'new']);
+      expect(index.get('touched.php')).toMatchObject({ mtime: t });
     });
 
     test('nested paths are matched by their "/" relative form', async () => {
       const index = await getSyncIndex('k');
       index.set('src/deep/a.php', { size: 10, mtime: 1700000000000, verifiedAt: 1, status: 'verified' });
 
-      const result = diffAgainstIndex({
+      const result = await diffAgainstIndex({
         baseDir,
         index,
         toRemotePath,
@@ -498,6 +663,86 @@ describe('uploadPlan', () => {
       });
       expect(result.unchanged).toBe(1);
       expect(result.missingLocally).toEqual([]);
+    });
+  });
+
+  describe('classifyAgainstIndex', () => {
+    beforeEach(() => {
+      vol.reset();
+      resetSyncIndex();
+      initSyncIndex({ storagePath: undefined });
+    });
+
+    const sha1 = (content: string) => crypto.createHash('sha1').update(content).digest('hex');
+    const t = 1700000000000;
+
+    function onDisk(name: string, content: string, mtime: number) {
+      vol.mkdirSync(baseDir, { recursive: true } as any);
+      vol.writeFileSync(local(name), content);
+      vol.utimesSync(local(name), new Date(mtime), new Date(mtime));
+      return { fsPath: local(name), size: Buffer.byteLength(content), mtime };
+    }
+
+    test('new, unchanged and modified by stat alone', async () => {
+      const index = await getSyncIndex('k');
+      index.set('a.php', { size: 3, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('abc') });
+
+      expect(
+        await classifyAgainstIndex({ index, relPath: 'fresh.php', fsPath: local('fresh.php'), size: 1, mtime: t })
+      ).toEqual({ verdict: 'new', byContent: false });
+      expect(
+        await classifyAgainstIndex({ index, relPath: 'a.php', fsPath: local('a.php'), size: 3, mtime: t + 999 })
+      ).toEqual({ verdict: 'unchanged', byContent: false });
+      expect(
+        await classifyAgainstIndex({ index, relPath: 'a.php', fsPath: local('a.php'), size: 4, mtime: t })
+      ).toEqual({ verdict: 'modified', byContent: false });
+    });
+
+    test('the same size under another mtime is settled by the content', async () => {
+      const index = await getSyncIndex('k');
+      const touched = onDisk('a.php', 'abc', t + 60000);
+      index.set('a.php', { size: 3, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('abc') });
+
+      expect(await classifyAgainstIndex({ index, relPath: 'a.php', ...touched })).toEqual({
+        verdict: 'unchanged',
+        byContent: true,
+      });
+      expect(index.get('a.php')!.mtime).toBe(t + 60000);
+
+      const edited = onDisk('a.php', 'abd', t + 120000);
+      expect(await classifyAgainstIndex({ index, relPath: 'a.php', ...edited })).toEqual({
+        verdict: 'modified',
+        byContent: true,
+      });
+      expect(index.get('a.php')!.mtime).toBe(t + 60000);
+    });
+
+    test('compareContent off keeps the old rule', async () => {
+      const index = await getSyncIndex('k');
+      const touched = onDisk('a.php', 'abc', t + 60000);
+      index.set('a.php', { size: 3, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('abc') });
+
+      expect(
+        await classifyAgainstIndex({ index, relPath: 'a.php', ...touched, compareContent: false })
+      ).toEqual({ verdict: 'modified', byContent: false });
+    });
+
+    test('an entry replaced while the file was being read is not refreshed', async () => {
+      const index = await getSyncIndex('k');
+      const touched = onDisk('a.php', 'abc', t + 60000);
+      index.set('a.php', { size: 3, mtime: t, verifiedAt: 1, status: 'verified', fingerprint: sha1('abc') });
+      // a verified upload of another version lands mid-read
+      const replaced = { size: 3, mtime: t + 90000, verifiedAt: 2, status: 'verified' as const, fingerprint: sha1('xyz') };
+      jest.spyOn(fingerprint, 'fingerprintFile').mockImplementation(async () => {
+        index.set('a.php', replaced);
+        return sha1('abc');
+      });
+
+      const result = await classifyAgainstIndex({ index, relPath: 'a.php', ...touched });
+
+      expect(result).toEqual({ verdict: 'unchanged', byContent: true });
+      expect(index.get('a.php')).toEqual(replaced);
+      jest.restoreAllMocks();
     });
   });
 });
