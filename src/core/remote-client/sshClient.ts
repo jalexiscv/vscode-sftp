@@ -332,7 +332,17 @@ export default class SSHClient extends RemoteClient {
       client
         .on('ready', resolve)
         .on('error', err => {
-          reject(new Error(`[${option.host}]: ${err.message}`));
+          // the host goes into the message; the code (ECONNRESET, ETIMEDOUT,
+          // ENOTFOUND…) and ssh2's level travel with it so the layers above
+          // can still tell a dead network from a wrong password
+          const wrapped: any = new Error(`[${option.host}]: ${err.message}`);
+          if (err && err.code !== undefined) {
+            wrapped.code = err.code;
+          }
+          if (err && err.level !== undefined) {
+            wrapped.level = err.level;
+          }
+          reject(wrapped);
         })
         .connect({
           keepaliveInterval: 1000 * 30, // 30 secs, original

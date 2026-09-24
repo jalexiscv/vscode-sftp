@@ -6,6 +6,7 @@ import { HashAlgorithm } from './fs/fileSystem';
 import { Task } from './scheduler';
 import logger from '../logger';
 import { isNotFoundError } from '../helper';
+import { isConnectionLostError, markConnectionLost } from './connectionHealth';
 
 let hasWarnedModifedTimePermission = false;
 // remote file systems already told once that they cannot hash (one per connection)
@@ -323,6 +324,13 @@ export default class TransferTask implements Task {
         this._releaseStreams();
         if (this._cancelled || FileSystem.isAbortedError(error) || attempt > retries) {
           throw error;
+        }
+        // the connection is gone, not the file: a retry would run against the
+        // same dead client (the reconnection happens on the next getFs), so
+        // the task gives up at once and the caller puts the batch on hold
+        if (isConnectionLostError(error)) {
+          logger.warn(`[transfer] connection lost while ${this.transferType} ${this.localFsPath}: ${describeError(error)}`);
+          throw markConnectionLost(error);
         }
         if (!isRetryableTransferError(error, this._phaseOf(error))) {
           logger.warn(`[transfer] not retrying ${this.localFsPath}: ${describeError(error)}`);

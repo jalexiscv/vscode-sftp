@@ -31,7 +31,9 @@ If you don't have the permission to do this, set [limitOpenFilesOnRemote](https:
 
 ## Error: Connection closed
 
-The problem could be that the SFTP extension keeps closing the connection for those who use more legacy/old systems.
+If the message shows up in the middle of a batch of uploads — together with `on hold` items in the Activity view — it is a dropped connection, not an algorithm problem: see [The connection dropped and my uploads say "on hold"](#the-connection-dropped-and-my-uploads-say-on-hold-what-happens-now).
+
+If it happens right when connecting, the problem could be that the SFTP extension keeps closing the connection for those who use more legacy/old systems.
 You'll have to Explicitly override the default transport layer algorithms used for the connection to remove the new `"diffie-hellman-group-exchange-sha256"` algorithm that cause the problem from the `kex` section. Just add this in your `sftp.json` configuration file, which should make it work.
 ```json
 {
@@ -147,6 +149,14 @@ If the index was never built (the notice `the sync index for … is not built ye
 Since 1.27.0 a scan or a watcher burst that finds more changed files than `externalChanges.maxPlanItems` (2000 by default) is not turned into an upload plan: a plan of 90 000 pending items cannot be reviewed and only made the Activity view, the status bar, the sync index and the whole extension host crawl. The warning offers the two usual ways out: `Mark all as uploaded` when the local tree is what the server already holds, and `Manage upload exclusions` when whole folders (`vendor`, `node_modules`, `storage`, build output) should never go up. The third one is to upload the project once (`SFTP: Upload Project`) and scan again. Until then, the automatic scans of that connection stay off; a manual `SFTP: Scan for External Changes`, an index rebuild, a mark-as-uploaded or a reload of `sftp.json` runs them again. If you really want a plan that big, raise the limit or set it to `0` in `sftp.json`.
 
 Note that since 1.27.0 the sync index and the activity log are discarded the first time a new version activates in a workspace, so after an upgrade the index starts empty and the notice `the sync index for … is empty` comes back: seed it with `SFTP: Mark Local Files as Uploaded` or rebuild it, as on first use.
+
+## The connection dropped and my uploads say "on hold". What happens now?
+
+Since 1.28.0 a lost connection (`ECONNRESET`, `ETIMEDOUT`, "Not connected", "Client is closed", FTP `421`…) is not treated as a failure of the files. The upload that was interrupted and the ones still queued go back to `pending` with `on hold: <reason>` in the **Upload plans** group of the SFTP Activity view, the sync index is not touched, and you get one warning per server (`SFTP: connection to host lost … N upload(s) … are on hold and will resume when it is back`) rather than one dialog per file. New connection attempts are held for a growing delay (1 s, 2 s, 4 s… up to a minute) so a server that is down is not hammered; a plan on hold resumes on its own as soon as the connection is used again successfully, or after that delay, up to ten times. If the server stays down longer than that, the plan waits in the view: run it with `Upload plan` (or just save a file again) once the server is back. The output channel shows `[connection] host: connection lost (reason)` and `[plan …] N file(s) on hold`.
+
+## The FTP server answers "421 Too many connections". Why, and what can I do?
+
+Shared FTP hosts cap the sessions per IP (often 4 to 8). Every VS Code window, every `sftp.json` entry and every profile that points at that host holds one control connection, and a session that died with an `ECONNRESET` is still counted by the server until its own timeout expires (minutes). Since 1.28.0 the extension closes an FTP connection that has been idle for five minutes, closes the connection of a profile you switch away from, waits at least a minute after a `421` before trying again, and does not reconnect once per queued file after a drop — which together is what kept the cap full. If you still hit it, check how many entries and profiles of your `sftp.json` (and how many windows) point at the same host, and close the FTP clients you have open outside VS Code.
 
 ## How can I upload files as root?
 

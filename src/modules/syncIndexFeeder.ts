@@ -3,6 +3,7 @@ import app from '../app';
 import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
 import { FileService, ServiceConfig, TransferDirection, FileType } from '../core';
+import { isConnectionLostError } from '../core/connectionHealth';
 import { SyncIndex, IndexEntry, getSyncIndex, indexKeyFor, toRelPath } from './syncIndex';
 import { onDidFinishTransfer, TransferOutcome } from './transferEvents';
 
@@ -66,6 +67,14 @@ function isInsideBase(relPath: string): boolean {
 async function recordUpload(outcome: TransferOutcome, index: SyncIndex, relPath: string) {
   const { task, error } = outcome;
   const verification = task.verification;
+
+  // the connection went away, the file was not judged: its plan item is on
+  // hold and will be sent when the server is back, so the entry stays as it
+  // was — a `failed` mark here would make the next scan plan the same file
+  // again on top of the held plan
+  if (error && isConnectionLostError(error)) {
+    return;
+  }
 
   if (error || (verification && !verification.ok)) {
     const previous = index.get(relPath);

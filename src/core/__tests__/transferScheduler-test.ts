@@ -79,6 +79,42 @@ describe('createTransferScheduler().run()', () => {
     expect(result.failed.length).toBe(1);
   });
 
+  test('a lost connection drops what is still queued; the tasks in flight finish and are listed', async () => {
+    const scheduler = createService().createTransferScheduler(1);
+    const lost = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const ran: string[] = [];
+    const attempt = (name: string, error?: Error) =>
+      fakeTask(
+        () => {
+          ran.push(name);
+          return error ? Promise.reject(error) : Promise.resolve();
+        },
+        { localFsPath: `/base/${name}` }
+      );
+
+    scheduler.add(attempt('a.txt'));
+    scheduler.add(attempt('b.txt', lost));
+    scheduler.add(attempt('c.txt'));
+    scheduler.add(attempt('d.txt'));
+    const result = await scheduler.run();
+
+    expect(ran).toEqual(['a.txt', 'b.txt']);
+    expect(result.succeeded.map(t => t.localFsPath)).toEqual(['/base/a.txt']);
+    expect(result.failed.map(f => f.task.localFsPath)).toEqual(['/base/b.txt']);
+    expect(result.connectionLost).toBe(lost);
+  });
+
+  test('a failure on a live connection does not stop the batch', async () => {
+    const scheduler = createService().createTransferScheduler(1);
+    const ran: string[] = [];
+    scheduler.add(fakeTask(() => (ran.push('a'), Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })))));
+    scheduler.add(fakeTask(() => (ran.push('b'), Promise.resolve())));
+    const result = await scheduler.run();
+
+    expect(ran).toEqual(['a', 'b']);
+    expect(result.connectionLost).toBeUndefined();
+  });
+
   test('the afterTransfer hook still sees each task with its error', async () => {
     const service = createService();
     const seen: Array<[Error | null, TransferTask]> = [];

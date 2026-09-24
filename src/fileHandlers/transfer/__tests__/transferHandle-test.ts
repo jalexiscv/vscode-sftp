@@ -166,6 +166,23 @@ describe('transfer handlers', () => {
     const error = await rejectionOf(downloadFile(contextFor(service, '/local/x.txt', '/remote/x.txt')));
 
     expect(error).toBeInstanceOf(TransferFailedError);
-    expect(error.message).toBe('1 of 1 file(s) failed to download: x.txt (ECONNRESET)');
+    // a lost connection is the one aggregate that is not pre-reported per
+    // file, so it must carry the direction and the reason itself
+    expect(error.message).toMatch(/^Connection lost while trying to download \(read ECONNRESET\): 0 done, 1 interrupted/);
+    expect(error.failures).toHaveLength(1);
+  });
+
+  test('a failure on a live connection is summarised per file, in its own direction', async () => {
+    vol.fromJSON({ '/remote/x.txt': 'x' }, '/');
+    const remoteFs = createRemoteFs();
+    override(remoteFs, 'get', () =>
+      Promise.reject(Object.assign(new Error('Permission denied'), { code: 'EACCES' }))
+    );
+    const service = createService(remoteFs);
+
+    const error = await rejectionOf(downloadFile(contextFor(service, '/local/x.txt', '/remote/x.txt')));
+
+    expect(error).toBeInstanceOf(TransferFailedError);
+    expect(error.message).toBe('1 of 1 file(s) failed to download: x.txt (EACCES)');
   });
 });

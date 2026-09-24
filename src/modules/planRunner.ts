@@ -5,7 +5,12 @@ import app from '../app';
 import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
 import { FileService, ServiceConfig, UResource, TransferDirection, FileSystem } from '../core';
-import { getOpenTextDocuments } from '../host';
+import {
+  ConnectionGate,
+  isConnectionLostError,
+  onConnectionRecovered,
+} from '../core/connectionHealth';
+import { getOpenTextDocuments, showWarningMessage } from '../host';
 import { transfer } from '../fileHandlers/transfer/transfer';
 import { handleCtxFromUri } from '../fileHandlers';
 import { refreshRemoteExplorer } from '../fileHandlers/shared';
@@ -20,6 +25,7 @@ import {
   getPlan,
   updateItem,
   summarize,
+  isUnchangedAgainstIndex,
 } from './uploadPlan';
 
 /**
@@ -48,6 +54,14 @@ import {
  * - a plan built under another profile is not run against the active one (its
  *   items fail with a clear message) — the index would otherwise record the
  *   upload under the wrong destination;
+ * - a **lost connection** is not a failure of the files: the item whose
+ *   upload it interrupted and every item still queued go back to `pending`
+ *   (with the reason in `error`), the plan stays open — which also keeps the
+ *   automatic scans from planning the same files again on top of it — and it
+ *   is resumed on its own when the connection is back (the connection gate
+ *   reports the recovery) or, failing that, on a timer that follows the
+ *   gate's hold, up to {@link MAX_AUTOMATIC_RESUMES} times; then it waits
+ *   for the user. One warning per service and outage, not one per file;
  * - `Cancel All Transfers` puts every item whose task did not finish — not
  *   only the ones that were running — back to `pending`, so the plan closes
  *   cleanly and can be run again;
@@ -85,8 +99,32 @@ const COLLECT_CONCURRENCY = 4;
 // must find its item whatever casing either side reports
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
+// a plan on hold after a lost connection is resumed on its own this many
+// times (each following the connection gate's hold, so about ten minutes at
+// the gate's ceiling); after that it stays pending until the user runs it,
+// saves again, or the connection recovers on its own through another use
+export const MAX_AUTOMATIC_RESUMES = 10;
+// a resume never comes sooner than this after the loss, whatever the gate says
+const MIN_RESUME_DELAY_MS = 5 * 1000;
+
+interface HeldPlan {
+  planId: string;
+  serviceName: string;
+  host: string;
+  gate: ConnectionGate | null;
+  itemPaths?: string[];
+  /** automatic resumes so far */
+  resumes: number;
+  timer?: NodeJS.Timer;
+}
+
 const running = new Map<string, Promise<PlanSummary>>();
 const runningListeners: Array<() => void> = [];
+const held = new Map<string, HeldPlan>();
+// services already warned about the current outage; cleared when a plan of
+// theirs gets through again
+const outageNotified = new Set<string>();
+let recoverySubscription: (() => void) | null = null;
 
 function pathKey(fsPath: string): string {
   const normalized = path.normalize(fsPath);
@@ -148,8 +186,14 @@ async function statLocal(fsPath: string): Promise<LocalStat | null> {
   }
 }
 
+// the same rule the scanner and the collector apply (size, mtime to the
+// second): a file is "changed" for the runner iff it is for them
 function differs(item: UploadPlanItem, stat: LocalStat): boolean {
-  return item.localSize !== stat.size || item.localMtime !== stat.mtime;
+  return !isUnchangedAgainstIndex(
+    { size: item.localSize, mtime: item.localMtime },
+    stat.size,
+    stat.mtime
+  );
 }
 
 /**
@@ -256,12 +300,33 @@ function failAll(plan: UploadPlan, items: UploadPlanItem[], message: string) {
   items.forEach(item => updateItem(plan.id, item.localPath, { status: 'failed', error: message }));
 }
 
+// the connection went, not the files: they are due again, and the reason is
+// kept on the item so the view says why they wait
+function holdAll(plan: UploadPlan, items: UploadPlanItem[], error: any) {
+  const message = `on hold: ${error && error.message ? error.message : String(error)}`;
+  items.forEach(item => {
+    if (item.status === 'uploading' || item.status === 'pending' || item.status === 'stale') {
+      updateItem(plan.id, item.localPath, { status: 'pending', error: message });
+    }
+  });
+}
+
+interface GroupResult {
+  verified: UploadPlanItem[];
+  /** the connection was lost during this group; its items are on hold */
+  connectionLost?: Error;
+  /** where the hold can be read from, when the connection is known */
+  gate?: ConnectionGate;
+  host?: string;
+}
+
 /**
  * Uploads the items of one service through a single scheduler and writes the
  * result of every task back to its item. Resolves with the items that ended
- * `verified`.
+ * `verified`, and with the connection loss that interrupted the group if
+ * there was one.
  */
-async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPlanItem[]> {
+async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<GroupResult> {
   const { items } = group;
   let fileService: FileService;
   let config: ServiceConfig;
@@ -273,7 +338,7 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     config = ctx.config;
   } catch (error) {
     failAll(plan, items, error.message);
-    return [];
+    return { verified: [] };
   }
 
   if (fileService.getAvailableProfiles().length > 0 && plan.profile !== app.state.profile) {
@@ -282,15 +347,27 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
       items,
       `plan was built for profile "${plan.profile || ''}" but "${app.state.profile || ''}" is active`
     );
-    return [];
+    return { verified: [] };
   }
+
+  let gate: ConnectionGate | undefined;
+  try {
+    gate = fileService.getConnectionGate(config);
+  } catch (_error) {
+    gate = undefined;
+  }
+  const host = String(config.host || '');
 
   let remoteFs: FileSystem;
   try {
     remoteFs = await fileService.getRemoteFileSystem(config);
   } catch (error) {
+    if (isConnectionLostError(error)) {
+      holdAll(plan, items, error);
+      return { verified: [], connectionLost: error, gate, host };
+    }
     failAll(plan, items, error.message);
-    return [];
+    return { verified: [] };
   }
 
   const localFs = fileService.getLocalFileSystem();
@@ -337,7 +414,15 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     return ensured;
   };
 
+  // the first loss of the connection while the tasks are collected (an
+  // ensureDir, a stat of the target); the items behind it are not sent
+  let lostWhileCollecting: Error | undefined;
+
   await mapWithConcurrency(items, COLLECT_CONCURRENCY, async item => {
+    if (lostWhileCollecting) {
+      holdAll(plan, [item], lostWhileCollecting);
+      return;
+    }
     try {
       // the collector and the scanner filter these out, but the config may
       // have changed since the plan was built; the item must say why it was
@@ -385,11 +470,23 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
         updateItem(plan.id, item.localPath, { status: 'skipped', error: 'ignored by config' });
       }
     } catch (error) {
+      if (isConnectionLostError(error)) {
+        lostWhileCollecting = lostWhileCollecting || error;
+        holdAll(plan, [item], error);
+        return;
+      }
       updateItem(plan.id, item.localPath, { status: 'failed', error: error.message });
     }
   });
 
+  if (lostWhileCollecting) {
+    // whatever was collected would fail the same way; it goes back to pending
+    // with the rest (see the "uploading" sweep below)
+    scheduler.stop();
+  }
+
   const result = await scheduler.run();
+  const connectionLost: Error | undefined = lostWhileCollecting || result.connectionLost;
   const verified: UploadPlanItem[] = [];
   // items whose task reported an outcome; whatever is still "uploading"
   // afterwards had no task run at all (see below)
@@ -411,6 +508,15 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     const item = itemsByTaskPath.get(pathKey(task.localFsPath));
     if (item) {
       settled.add(item);
+      if (isConnectionLostError(error)) {
+        // interrupted, not refused: due again once the connection is back
+        updateItem(plan.id, item.localPath, {
+          status: 'pending',
+          attempts: task.attempts,
+          error: `on hold: ${error.message || String(error)}`,
+        });
+        return;
+      }
       updateItem(plan.id, item.localPath, {
         status: 'failed',
         attempts: task.attempts,
@@ -427,12 +533,19 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     }
   });
   // `Cancel All Transfers` empties the queue without a task.done per queued
-  // task (and a scheduler already stopped ignores add()): those items would
-  // otherwise stay "uploading" for ever, the plan never closing and never
-  // runnable again. They never started, so they are simply due again.
+  // task (and a scheduler already stopped ignores add()), and so does a lost
+  // connection: those items would otherwise stay "uploading" for ever, the
+  // plan never closing and never runnable again. They never started, so
+  // they are simply due again.
   items.forEach(item => {
     if (item.status === 'uploading' && !settled.has(item)) {
-      updateItem(plan.id, item.localPath, { status: 'pending' });
+      updateItem(
+        plan.id,
+        item.localPath,
+        connectionLost
+          ? { status: 'pending', error: `on hold: ${connectionLost.message}` }
+          : { status: 'pending' }
+      );
     }
   });
 
@@ -446,27 +559,37 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<UploadPl
     }
   }
 
-  return verified;
+  return { verified, connectionLost, gate, host };
+}
+
+interface ItemsResult {
+  verified: UploadPlanItem[];
+  /** the first connection loss met, when a group was interrupted by one */
+  lost?: GroupResult;
 }
 
 /** One pass over `items`: pre-flight, then one scheduler per service. */
-async function runItems(plan: UploadPlan, items: UploadPlanItem[]): Promise<UploadPlanItem[]> {
+async function runItems(plan: UploadPlan, items: UploadPlanItem[]): Promise<ItemsResult> {
   const ready = await prepareItems(plan, items);
   if (ready.length === 0) {
-    return [];
+    return { verified: [] };
   }
 
   const { groups, orphans } = groupByService(ready);
   failAll(plan, orphans, 'no configuration covers this path');
 
   const verified: UploadPlanItem[] = [];
+  let lost: GroupResult | undefined;
   // services one after another: two schedulers on one connection would only
   // compete for it, and the status bar reads better
   for (const group of groups) {
     const done = await runGroup(plan, group);
-    verified.push(...done);
+    verified.push(...done.verified);
+    if (done.connectionLost && !lost) {
+      lost = done;
+    }
   }
-  return verified;
+  return { verified, lost };
 }
 
 /**
@@ -524,15 +647,18 @@ async function execute(plan: UploadPlan, options: RunPlanOptions): Promise<PlanS
   // every verified file marks the index dirty; without this a long run had
   // the whole index serialised once a second for its entire duration
   const releaseIndexSaves = holdSyncIndexSaves();
+  let lost: GroupResult | undefined;
   try {
-    const verified = await runItems(plan, selected);
-    const stale = await markStale(plan, verified);
-    if (stale.length > 0) {
+    const first = await runItems(plan, selected);
+    lost = first.lost;
+    const stale = await markStale(plan, first.verified);
+    if (stale.length > 0 && !lost) {
       logger.info(`[plan ${plan.id}] ${stale.length} file(s) changed during upload; uploading again`);
-      const verifiedAgain = await runItems(plan, stale);
+      const again = await runItems(plan, stale);
+      lost = again.lost;
       // changed a second time: left stale for a later run rather than chasing
       // a file that is being rewritten continuously
-      await markStale(plan, verifiedAgain);
+      await markStale(plan, again.verified);
     }
   } catch (error) {
     // a bug, not an item failure; the items still in flight are closed so the
@@ -552,10 +678,146 @@ async function execute(plan: UploadPlan, options: RunPlanOptions): Promise<PlanS
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   logger.info(
     `[plan ${plan.id}] ${summary.verified} verified, ${summary.failed} failed, ` +
-      `${summary.skipped} skipped, ${summary.stale} stale ` +
-      `(${formatBytes(summary.bytes)}, ${seconds} s)`
+      `${summary.skipped} skipped, ${summary.stale} stale` +
+      (lost ? `, ${summary.pending + summary.stale} on hold` : '') +
+      ` (${formatBytes(summary.bytes)}, ${seconds} s)`
   );
+
+  if (lost) {
+    holdPlan(plan, lost, options);
+  } else {
+    releaseHold(plan.id);
+    outageNotified.delete(plan.serviceName);
+  }
   return summary;
+}
+
+function releaseHold(planId: string) {
+  const entry = held.get(planId);
+  if (!entry) {
+    return;
+  }
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  held.delete(planId);
+}
+
+/**
+ * Registers a plan interrupted by a lost connection: its items are pending
+ * again, and it will be resumed when the gate reports the connection back
+ * or, failing that, after the gate's current hold (never sooner than
+ * {@link MIN_RESUME_DELAY_MS}), at most {@link MAX_AUTOMATIC_RESUMES} times.
+ */
+function holdPlan(plan: UploadPlan, lost: GroupResult, options: RunPlanOptions) {
+  const waiting = plan.items.filter(item => item.status === 'pending' || item.status === 'stale');
+  if (waiting.length === 0) {
+    releaseHold(plan.id);
+    return;
+  }
+
+  const previous = held.get(plan.id);
+  if (previous && previous.timer) {
+    clearTimeout(previous.timer);
+  }
+  const entry: HeldPlan = {
+    planId: plan.id,
+    serviceName: plan.serviceName,
+    host: lost.host || '',
+    gate: lost.gate || null,
+    itemPaths: options.itemPaths,
+    resumes: previous ? previous.resumes : 0,
+  };
+  held.set(plan.id, entry);
+  ensureRecoverySubscription();
+
+  const reason = lost.connectionLost ? lost.connectionLost.message : 'connection lost';
+  logger.warn(`[plan ${plan.id}] ${waiting.length} file(s) on hold: ${reason}`);
+  notifyOutage(entry, waiting.length, reason);
+
+  if (entry.resumes >= MAX_AUTOMATIC_RESUMES) {
+    logger.warn(
+      `[plan ${plan.id}] not resumed automatically any more after ${entry.resumes} attempts; ` +
+        'it stays in Upload plans until the connection is used again or the plan is run by hand'
+    );
+    return;
+  }
+
+  const delay = Math.max(MIN_RESUME_DELAY_MS, entry.gate ? entry.gate.retryAfter() : 0);
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined;
+    entry.resumes += 1;
+    logger.info(`[plan ${plan.id}] resuming (${entry.resumes}/${MAX_AUTOMATIC_RESUMES})`);
+    resumeHeld(entry);
+  }, delay);
+  if (typeof entry.timer.unref === 'function') {
+    entry.timer.unref();
+  }
+}
+
+function notifyOutage(entry: HeldPlan, count: number, reason: string) {
+  if (outageNotified.has(entry.serviceName)) {
+    return;
+  }
+  outageNotified.add(entry.serviceName);
+  const where = entry.host ? ` to ${entry.host}` : '';
+  showWarningMessage(
+    `SFTP: connection${where} lost (${reason}). ${count} upload(s) of ${entry.serviceName} ` +
+      'are on hold and will resume when it is back.'
+  );
+}
+
+function resumeHeld(entry: HeldPlan) {
+  if (!getPlan(entry.planId)) {
+    releaseHold(entry.planId);
+    return;
+  }
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = undefined;
+  }
+  runPlan(entry.planId, { itemPaths: entry.itemPaths }).catch(error =>
+    logger.error(error, `plan ${entry.planId} resume`)
+  );
+}
+
+function ensureRecoverySubscription() {
+  if (recoverySubscription) {
+    return;
+  }
+  recoverySubscription = onConnectionRecovered(gate => {
+    Array.from(held.values())
+      // a plan waits for its own connection; another host coming back says
+      // nothing about it
+      .filter(entry => entry.gate === null || entry.gate === gate)
+      .forEach(entry => {
+        logger.info(`[plan ${entry.planId}] connection to ${gate.label} is back; resuming`);
+        resumeHeld(entry);
+      });
+  });
+}
+
+/** Plans interrupted by a lost connection and waiting for it to come back. */
+export function getHeldPlanIds(): string[] {
+  return Array.from(held.keys());
+}
+
+/**
+ * Resumes every held plan now (or those of `planIds`), whatever the hold
+ * says: a manual scan or a "run plan" from the view is the user asking.
+ */
+export function resumeHeldPlans(planIds?: string[]): Promise<void> {
+  const entries = Array.from(held.values()).filter(
+    entry => !planIds || planIds.indexOf(entry.planId) !== -1
+  );
+  return Promise.all(
+    entries.map(entry =>
+      runPlan(entry.planId, { itemPaths: entry.itemPaths }).then(
+        () => undefined,
+        error => logger.error(error, `plan ${entry.planId} resume`)
+      )
+    )
+  ).then(() => undefined);
 }
 
 /**
@@ -682,4 +944,15 @@ export async function whenIdle(): Promise<void> {
 export function __resetForTest() {
   running.clear();
   runningListeners.length = 0;
+  held.forEach(entry => {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+  });
+  held.clear();
+  outageNotified.clear();
+  if (recoverySubscription) {
+    recoverySubscription();
+    recoverySubscription = null;
+  }
 }

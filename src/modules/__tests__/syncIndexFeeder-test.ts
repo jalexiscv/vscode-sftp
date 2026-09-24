@@ -197,6 +197,29 @@ describe('syncIndexFeeder', () => {
     expect(entry.mtime).toBe(stat.mtime.getTime());
   });
 
+  test('an upload interrupted by a lost connection leaves the entry as it was: the plan holds the file', async () => {
+    await handleOutcome({ service, task: task(), error: null, profile: null });
+
+    await handleOutcome({
+      service,
+      task: task({ verification: undefined }),
+      error: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+      profile: null,
+    });
+    const entry = (await indexOfService()).get('src/a.ts')!;
+    expect(entry.status).toBe('verified');
+    expect(entry.error).toBeUndefined();
+
+    // a file never uploaded: no entry is created for it either
+    await handleOutcome({
+      service,
+      task: task({ localFsPath: p('src', 'new.ts'), verification: undefined }),
+      error: new Error('[example.test]: connection is down (connect ECONNREFUSED); next attempt in 4 s'),
+      profile: null,
+    });
+    expect((await indexOfService()).get('src/new.ts')).toBeUndefined();
+  });
+
   test('a failed download, a cancelled task and a symlink leave the index alone', async () => {
     await handleOutcome({
       service,
