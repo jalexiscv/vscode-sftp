@@ -19,7 +19,7 @@ VSCode-SFTP lets you add, edit, or delete files in a local directory and sync th
 
 - [Why this fork exists](#why-this-fork-exists)
 - [What we updated](#what-we-updated)
-- [What's new in v1.27.0](#whats-new-in-v1270)
+- [What's new in v1.28.0](#whats-new-in-v1280)
 - [What we expect from this release](#what-we-expect-from-this-release)
 - [Installation](#installation)
 - [Documentation](#documentation)
@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 786 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 859 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -138,16 +138,25 @@ Every fix was verified (clean webpack build, 786 tests, linter with no errors) b
 | **Upload exclusions from the interface** | Right-click a folder → `SFTP: Exclude from Upload` (and `SFTP: Include in Upload Again` on an excluded one), `SFTP: Manage Upload Exclusions` to review, add or remove entries, and a list with `×` in the connection manager. All of them write the `uploadExclude` list of `sftp.json`, keeping its formatting |
 | **Security** | The `config at …` line of the output channel masked the root password but not each profile's; both are masked now |
 
-## What's new in v1.27.0
+### [v1.27.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.27.0) — limits for large projects and clean storage per version
 
-v1.27.0 comes from a real project of more than 90,000 files that the extension left with 90,000 uploads pending and the extension host — the process every extension shares — crawling. A plan that size cannot be reviewed, and while it existed the activity view, the sync index and the connection worked on it without pause. A plan now has a limit, the view paginates, the index is written calmly during a run and, when a new version is installed, the extension starts from a clean storage.
-
-| Feature | What it gives you |
-|---------|-------------------|
+| Area | Change |
+|------|--------|
 | **A limit per plan (`externalChanges.maxPlanItems`)** | A scan, a polling tick or a watcher burst that finds more changed files than the limit (2000 by default; `0` removes it) is no longer turned into a plan: a warning states the count and offers `Mark all as uploaded` (the local tree becomes the baseline) and `Manage upload exclusions`; the third way out is to upload the project once and scan again. The automatic scans of that connection wait for a manual scan, a rebuild, a mark-as-uploaded or a reload of `sftp.json`; the collector drops the burst before a single `stat` and says so once per session |
 | **Paginated activity view** | A plan lists its first 200 files and a `N more file(s)…` row that reveals the next page; the tree used to materialise one row per item on every refresh, several times per uploaded file |
 | **Index written calmly** | While a plan runs, the sync index is saved once a minute instead of once a second (every verified upload marked it dirty), and once more when the run ends; an explicit save is never held |
 | **Clean storage per version** | The first time a new version activates in a workspace, the sync index and the activity log of the previous one are discarded before they are loaded (the output channel records it); the index starts empty and the notice to seed or rebuild it comes back, as on first use. Nothing inside the project is touched |
+
+## What's new in v1.28.0
+
+v1.28.0 answers an unstable connection. An `ECONNRESET` in the middle of a batch left every queued file retrying against the dead client, opened one error dialog per file, marked each of them as failed in the index — and the next scan proposed them again as "changed" although nobody had touched them — and every new save or plan reconnected at once, until the FTP server answered `421 Too many connections`. The loss is now recognised as such in every layer at the same time, uploads are put on hold and resume on their own, reconnections are spaced out, idle FTP connections are closed and there are fewer false changes.
+
+| Feature | What it gives you |
+|---------|-------------------|
+| **Uploads on hold, not failed** | When the connection is lost, the interrupted task and the ones still queued go back to `pending` with `on hold: <reason>`, the plan stays open (the scans do not plan those files again on top of it), the index is not touched and there is **one warning per server and outage** instead of a dialog per file. Commands (`Upload Project`, `Sync…`) report it once, with what was done, interrupted and not attempted |
+| **Reconnection with a growing delay** | Each connection remembers its failed attempts and holds new ones for 1 s, 2 s, 4 s… up to a minute (a minute at least after a `421`); meanwhile whoever asks for it gets `connection is down; next attempt in N s` without a socket being opened. When the connection is back, the plans on hold resume on their own; if it is not, they retry with that delay up to ten times and then wait in the Activity view |
+| **Fewer FTP connections** | An FTP connection with no command for five minutes is closed (the `NOOP` does not count) and reopened by the next use; before, one per profile, per `sftp.json` entry and per window was kept alive for the whole session. A command that dies with the socket reports it at once, not on the next keepalive tick; switching profiles closes the previous profile's connection; a late `close` of a dead SSH client no longer tears down the connection that replaced it |
+| **Fewer false changes** | `.git`, `.svn` and `.hg` are ignored by default at any depth (the editor's git integration rewrites `.git/index` and `FETCH_HEAD` on every `status`; `"!.git"` in `ignore` brings one back), and a watcher event or a save on a file whose size and mtime (to the second) are the ones the index verified is no longer planned: an event is not an edit |
 
 ## What we expect from this release
 
@@ -173,7 +182,7 @@ v1.27.0 comes from a real project of more than 90,000 files that the extension l
 Or from the command line:
 
 ```
-code --install-extension sftp-1.27.0.vsix
+code --install-extension sftp-1.28.0.vsix
 ```
 
 ## Documentation
