@@ -19,7 +19,7 @@ Mit VSCode-SFTP kannst du Dateien in einem lokalen Verzeichnis hinzufügen, bear
 
 - [Warum es diesen Fork gibt](#warum-es-diesen-fork-gibt)
 - [Was wir aktualisiert haben](#was-wir-aktualisiert-haben)
-- [Neuerungen in v1.28.0](#neuerungen-in-v1280)
+- [Neuerungen in v1.29.0](#neuerungen-in-v1290)
 - [Was wir von dieser Version erwarten](#was-wir-von-dieser-version-erwarten)
 - [Installation](#installation)
 - [Dokumentation](#dokumentation)
@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 859 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 887 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -147,16 +147,25 @@ Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Bui
 | **Index ruhig geschrieben** | Während ein Plan läuft, wird der Sync-Index einmal pro Minute statt einmal pro Sekunde gespeichert (jeder verifizierte Upload markierte ihn als geändert) und noch einmal am Ende; ein explizites Speichern wird nie zurückgehalten |
 | **Leerer Speicher pro Version** | Beim ersten Aktivieren einer neuen Version in einem Workspace werden Sync-Index und Aktivitätsprotokoll der vorherigen Version vor dem Laden verworfen (der Ausgabekanal protokolliert es); der Index startet leer und der Hinweis zum Säen oder Neuaufbau erscheint wieder wie beim ersten Gebrauch. Im Projekt selbst wird nichts angefasst |
 
-## Neuerungen in v1.28.0
+### [v1.28.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.28.0) — widerstandsfähige Verbindung
 
-v1.28.0 antwortet auf eine instabile Verbindung. Ein `ECONNRESET` mitten in einem Stapel ließ jede wartende Datei gegen den toten Client erneut versuchen, öffnete pro Datei einen Fehlerdialog, markierte jede im Index als fehlgeschlagen — und der nächste Scan schlug sie wieder als „geändert“ vor, obwohl niemand sie angefasst hatte — und jedes neue Speichern oder jeder neue Plan verband sich sofort neu, bis der FTP-Server mit `421 Too many connections` antwortete. Der Abbruch wird jetzt in allen Schichten zugleich als solcher erkannt, Uploads werden zurückgestellt und setzen sich selbst fort, Wiederverbindungen werden gestreckt, untätige FTP-Verbindungen geschlossen, und es gibt weniger falsche Änderungen.
-
-| Neuerung | Was sie bringt |
-|----------|----------------|
+| Bereich | Änderung |
+|---------|----------|
 | **Uploads zurückgestellt, nicht fehlgeschlagen** | Geht die Verbindung verloren, kehren die unterbrochene Aufgabe und die noch wartenden zu `pending` mit `on hold: <Grund>` zurück, der Plan bleibt offen (die Scans planen diese Dateien nicht noch einmal darüber), der Index bleibt unberührt, und es gibt **eine Warnung pro Server und Ausfall** statt eines Dialogs pro Datei. Befehle (`Upload Project`, `Sync…`) melden es einmal, mit dem Erledigten, Unterbrochenen und Nichtversuchten |
 | **Wiederverbindung mit wachsender Wartezeit** | Jede Verbindung merkt sich ihre fehlgeschlagenen Versuche und hält neue 1 s, 2 s, 4 s… bis zu einer Minute zurück (mindestens eine Minute nach einem `421`); wer sie derweil anfordert, erhält `connection is down; next attempt in N s`, ohne dass ein Socket geöffnet wird. Kommt die Verbindung zurück, setzen sich die zurückgestellten Pläne von selbst fort; wenn nicht, versuchen sie es mit dieser Wartezeit bis zu zehnmal und warten dann in der Aktivitätsansicht |
 | **Weniger FTP-Verbindungen** | Eine FTP-Verbindung ohne Befehl seit fünf Minuten wird geschlossen (das `NOOP` zählt nicht) und bei der nächsten Nutzung neu geöffnet; zuvor blieb eine pro Profil, pro `sftp.json`-Eintrag und pro Fenster die ganze Sitzung lang offen. Ein Befehl, der mit dem Socket stirbt, meldet es sofort statt beim nächsten Keepalive-Tick; ein Profilwechsel schließt die Verbindung des vorigen Profils; ein spätes `close` eines toten SSH-Clients reißt die Ersatzverbindung nicht mehr ab |
 | **Weniger falsche Änderungen** | `.git`, `.svn` und `.hg` werden standardmäßig in jeder Tiefe ignoriert (die Git-Integration des Editors schreibt `.git/index` und `FETCH_HEAD` bei jedem `status` neu; `"!.git"` in `ignore` holt eines zurück), und ein Watcher-Ereignis oder ein Speichern für eine Datei, deren Größe und mtime (sekundengenau) die vom Index geprüften sind, wird nicht mehr geplant: ein Ereignis ist keine Bearbeitung |
+
+## Neuerungen in v1.29.0
+
+v1.29.0 antwortet auf ein konkretes Symptom: Die Erweiterung schlug weiterhin Dateien als „geändert“ vor, deren Inhalt sich nicht geändert hatte. Ursache war die Regel des Index — Größe und mtime auf die Sekunde —, und die mtime bewegt sich aus vielen Gründen, die keine Bearbeitung sind: ein `git checkout`, `stash` oder `pull`, der den Inhalt identisch lässt, eine Kopie oder eine Wiederherstellung aus einem Backup, ein Formatierer oder ein Build-Schritt, der denselben Text neu schreibt, ein `touch`. Der Index speichert jetzt einen Fingerabdruck des Inhalts, und eine Datei gilt nur dann als geändert, wenn sich ihre Bytes geändert haben.
+
+| Neuerung | Was sie bringt |
+|----------|----------------|
+| **Inhalts-Fingerabdruck** | Jeder verifizierte Upload speichert im Index den SHA-1 der gesendeten Bytes, berechnet auf dem Datenstrom selbst (nichts wird zweimal gelesen); Downloads ebenso. Ein Scan, ein Watcher-Ereignis, ein Polling oder eine Vorschau, die eine Datei mit gleicher Größe und anderer mtime findet, liest sie einmal, vergleicht den Fingerabdruck und lässt sie bei Übereinstimmung in Ruhe, wobei der Eintrag auf die neue mtime gesetzt wird, damit sie nicht erneut gelesen wird; nur andere Bytes machen sie `modified`. Eine andere Größe ist weiterhin ohne Lesen eine Änderung; Dateien über 64 MB behalten die Regel aus Größe und mtime |
+| **Seeding mit Fingerabdruck** | `SFTP: Rebuild Sync Index` und `SFTP: Mark Local Files as Uploaded` lesen die Dateien, die sie erfassen (`N fingerprinted` im Fortschritt, abbrechbar), und `Mark as uploaded` sowie `Skip` in einem Plan tun dasselbe mit ihren: Von da an ist ein `touch` oder ein identischer Checkout keine Änderung mehr. Der Ausgabekanal zählt das Erkannte (`N file(s) rewritten with the same content, not planned`) |
+| **`externalChanges.compareContent`** | Neuer Schlüssel, standardmäßig `true`. Ausgeschaltet wird keine Datei gelesen und kein Fingerabdruck gespeichert; die Erweiterung verhält sich genau wie 1.28.0 |
+| **Bestehende Indizes** | Früher geschriebene Einträge haben keinen Fingerabdruck und folgen der alten Regel, bis ein Upload, ein Rebuild oder ein „als hochgeladen markieren“ einen einträgt. Um ein bereits synchronisiertes Projekt auf einmal abzudecken, `SFTP: Mark Local Files as Uploaded` (oder `Rebuild Sync Index`) einmal pro Server ausführen |
 
 ## Was wir von dieser Version erwarten
 
@@ -182,7 +191,7 @@ v1.28.0 antwortet auf eine instabile Verbindung. Ein `ECONNRESET` mitten in eine
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.28.0.vsix
+code --install-extension sftp-1.29.0.vsix
 ```
 
 ## Dokumentation

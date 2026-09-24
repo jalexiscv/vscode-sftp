@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.28.0](#novedades-de-la-v1280)
+- [Novedades de la v1.29.0](#novedades-de-la-v1290)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 859 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 887 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -147,16 +147,25 @@ Cada corrección fue verificada (build de webpack limpio, 859 tests, linter sin 
 | **Índice escrito con calma** | Mientras corre un plan, el índice de sincronización se guarda una vez por minuto en lugar de una vez por segundo (cada subida verificada lo marcaba sucio), y una vez más al terminar; un guardado explícito no se retiene |
 | **Almacenamiento limpio por versión** | La primera vez que una versión nueva se activa en un workspace, el índice de sincronización y el log de actividad de la versión anterior se descartan antes de cargarse (el canal de salida lo registra); el índice arranca vacío y vuelve el aviso para sembrarlo o reconstruirlo, como en el primer uso. Nada del proyecto se toca |
 
-## Novedades de la v1.28.0
+### [v1.28.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.28.0) — conexión resiliente
 
-La v1.28.0 responde a una conexión inestable. Un `ECONNRESET` en mitad de un lote dejaba a cada archivo de la cola reintentando contra el cliente ya muerto, abría un diálogo de error por archivo, marcaba cada uno como fallido en el índice —y el siguiente escaneo los volvía a proponer como "cambiados" sin que nadie los hubiera tocado— y cada guardado o plan nuevo reconectaba de inmediato, hasta ganarse un `421 Too many connections` del servidor FTP. Ahora la caída se reconoce como tal en todas las capas a la vez, las subidas quedan en espera y se reanudan solas, las reconexiones se espacian, las conexiones FTP inactivas se cierran y hay menos falsos cambios.
-
-| Novedad | Qué aporta |
-|---------|------------|
+| Área | Cambio |
+|------|--------|
 | **Subidas en espera, no fallidas** | Al perderse la conexión, la tarea interrumpida y las que quedaban en cola vuelven a `pending` con `on hold: <motivo>`, el plan sigue abierto (los escaneos no vuelven a planificar esos archivos encima), el índice no se toca y hay **un aviso por servidor y caída** en lugar de un diálogo por archivo. Los comandos (`Upload Project`, `Sync…`) lo informan una vez, con lo hecho, lo interrumpido y lo no intentado |
 | **Reconexión con espera creciente** | Cada conexión recuerda sus intentos fallidos y retiene los nuevos 1 s, 2 s, 4 s… hasta un minuto (un minuto como mínimo tras un `421`); mientras tanto quien la pida recibe `connection is down; next attempt in N s` sin abrir un socket. Al volver la conexión, los planes en espera se reanudan solos; si no vuelve, lo reintentan con esa espera hasta diez veces y luego aguardan en la vista de actividad |
 | **Menos conexiones FTP** | Una conexión FTP sin comandos durante cinco minutos se cierra (el `NOOP` no cuenta) y se reabre con el siguiente uso; antes se mantenía viva una por perfil, por entrada de `sftp.json` y por ventana durante toda la sesión. Un comando que muere con el socket lo avisa al instante, no en el siguiente tick del keepalive; al cambiar de perfil se cierra la conexión del anterior; un `close` tardío de un cliente SSH muerto ya no tumba la conexión que lo reemplazó |
 | **Menos falsos cambios** | `.git`, `.svn` y `.hg` se ignoran por defecto a cualquier profundidad (la integración git del editor reescribe `.git/index` y `FETCH_HEAD` en cada `status`; `"!.git"` en `ignore` lo recupera), y un evento del watcher o un guardado sobre un archivo cuyo tamaño y mtime (al segundo) son los que el índice verificó ya no se planifica: un evento no es una edición |
+
+## Novedades de la v1.29.0
+
+La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo como "modificados" archivos cuyo contenido no había cambiado. La causa era la regla del índice —tamaño y mtime al segundo—, y el mtime se mueve por muchos motivos que no son una edición: un `git checkout`, `stash` o `pull` que deja el contenido idéntico, una copia o una restauración de copia de seguridad, un formateador o un paso de build que reescribe el mismo texto, un `touch`. Ahora el índice guarda una huella del contenido y un archivo solo cuenta como modificado si cambiaron sus bytes.
+
+| Novedad | Qué aporta |
+|---------|------------|
+| **Huella de contenido** | Cada subida verificada guarda en el índice el SHA-1 de los bytes que envió, calculado sobre el propio flujo (nada se lee dos veces); las descargas también. Un escaneo, un evento del watcher, un sondeo o una vista previa que encuentra un archivo con el mismo tamaño y otro mtime lo lee una vez, compara la huella y, si coincide, lo deja en paz y mueve la entrada al mtime nuevo para no volver a leerlo; solo bytes distintos lo hacen `modified`. Un tamaño distinto sigue siendo cambio sin lectura; los archivos de más de 64 MB conservan la regla de tamaño y mtime |
+| **Siembra con huella** | `SFTP: Rebuild Sync Index` y `SFTP: Mark Local Files as Uploaded` leen los archivos que registran (progreso `N fingerprinted`, cancelable), y `Mark as uploaded` y `Skip` en un plan hacen lo mismo con los suyos: a partir de ahí un `touch` o un checkout idéntico ya no es un cambio. El canal de salida cuenta lo reconocido (`N file(s) rewritten with the same content, not planned`) |
+| **`externalChanges.compareContent`** | Clave nueva, `true` por defecto. Apagada, no se lee ningún archivo ni se anota huella alguna y la extensión se comporta exactamente como la 1.28.0 |
+| **Índices existentes** | Las entradas anteriores no tienen huella y siguen la regla vieja hasta que una subida, un rebuild o un dar por subido se la anoten. Para cubrir de golpe un proyecto ya sincronizado, ejecuta una vez `SFTP: Mark Local Files as Uploaded` (o `Rebuild Sync Index`) por servidor |
 
 ## Qué esperamos de esta versión
 
@@ -182,7 +191,7 @@ La v1.28.0 responde a una conexión inestable. Un `ECONNRESET` en mitad de un lo
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.28.0.vsix
+code --install-extension sftp-1.29.0.vsix
 ```
 
 ## Documentación

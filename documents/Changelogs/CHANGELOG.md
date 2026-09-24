@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 64 | 2026-09-24 | Release 1.29.0: huella de contenido | [Ver detalle](2026-09-24_release_1_29_0.md) |
 | 63 | 2026-09-24 | Huella de contenido: un archivo solo cuenta como modificado si cambiaron sus bytes | [Ver detalle](2026-09-24_feat_huella_de_contenido.md) |
 | 62 | 2026-09-24 | Release 1.28.0: conexión resiliente | [Ver detalle](2026-09-24_release_1_28_0.md) |
 | 61 | 2026-09-24 | Conexión resiliente: espera ante caídas, planes en espera, menos conexiones FTP y menos falsos cambios | [Ver detalle](2026-09-24_feat_conexion_resiliente.md) |
