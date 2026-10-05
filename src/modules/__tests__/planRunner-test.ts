@@ -51,6 +51,7 @@ import {
   whenIdle,
   getHeldPlanIds,
   resumeHeldPlans,
+  MAX_ITEM_INTERRUPTIONS,
   __resetForTest as resetRunner,
 } from '../planRunner';
 
@@ -508,6 +509,93 @@ describe('runPlan', () => {
         /^SFTP: connection to example\.test lost \(connect ECONNREFUSED\)\. 2 upload\(s\) of staging are on hold/
       );
       expect(getHeldPlanIds().sort()).toEqual([plan.id, other.id].sort());
+    });
+
+    describe('an item the connection dies on every time', () => {
+      // b.txt is a file the server answers by dropping the session
+      function dropSessionOnB(remoteFs: TestFs) {
+        const put = remoteFs.put.bind(remoteFs);
+        const puts: string[] = [];
+        override(remoteFs, 'put', (input: Readable, target: string, option: any) => {
+          puts.push(path.basename(target));
+          if (path.basename(target) === 'b.txt') {
+            return Promise.reject(new Error('Client is closed because of a TLS alert'));
+          }
+          return put(input, target, option);
+        });
+        return puts;
+      }
+
+      test('fails after MAX_ITEM_INTERRUPTIONS interruptions; until then it is held like the rest', async () => {
+        vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b', '/local/c.txt': 'c' }, '/');
+        const remoteFs = createRemoteFs();
+        dropSessionOnB(remoteFs);
+        createService(remoteFs, { concurrency: 1 });
+        const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+
+        await runPlan(plan.id);
+        await resumeHeldPlans();
+        expect(MAX_ITEM_INTERRUPTIONS).toBe(3);
+        expect(itemOf(plan, 'b.txt').status).toBe('pending');
+        expect(itemOf(plan, 'b.txt').error).toBe('on hold: Client is closed because of a TLS alert');
+
+        await resumeHeldPlans();
+
+        expect(itemOf(plan, 'a.txt').status).toBe('verified');
+        expect(itemOf(plan, 'b.txt').status).toBe('failed');
+        expect(itemOf(plan, 'b.txt').error).toBe(
+          'connection lost 3 times while uploading this file: Client is closed because of a TLS alert'
+        );
+        // c.txt was only behind it: still on hold, and the plan with it
+        expect(itemOf(plan, 'c.txt').status).toBe('pending');
+        expect(getHeldPlanIds()).toEqual([plan.id]);
+      });
+
+      test('the automatic resume leaves the failed item alone and sends what was behind it', async () => {
+        vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b', '/local/c.txt': 'c' }, '/');
+        const remoteFs = createRemoteFs();
+        const puts = dropSessionOnB(remoteFs);
+        const service = createService(remoteFs, { concurrency: 1 });
+        const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+        await runPlan(plan.id);
+        await resumeHeldPlans();
+        await resumeHeldPlans();
+        expect(itemOf(plan, 'b.txt').status).toBe('failed');
+        expect(puts).toEqual(['a.txt', 'b.txt', 'b.txt', 'b.txt']);
+
+        // the connection comes back: what the gate reports to the held plans
+        const gate = service.getConnectionGate((service as any).getConfig());
+        gate.recordDrop('test');
+        gate.recordSuccess();
+        await whenIdle();
+
+        expect(puts).toEqual(['a.txt', 'b.txt', 'b.txt', 'b.txt', 'c.txt']);
+        expect(itemOf(plan, 'c.txt').status).toBe('verified');
+        expect(itemOf(plan, 'b.txt').status).toBe('failed');
+        expect(getHeldPlanIds()).toEqual([]);
+        expect(getPlan(plan.id)!.finishedAt).toBeDefined();
+      });
+
+      test('a run that gets through forgets the interruptions before it', async () => {
+        vol.fromJSON({ '/local/a.txt': 'a', '/local/b.txt': 'b', '/local/c.txt': 'c' }, '/');
+        const remoteFs = createRemoteFs();
+        dropSessionOnB(remoteFs);
+        createService(remoteFs, { concurrency: 1 });
+        const plan = planOf([draft('/local/a.txt'), draft('/local/b.txt'), draft('/local/c.txt')]);
+        await runPlan(plan.id);
+        await resumeHeldPlans();
+        expect(itemOf(plan, 'b.txt').status).toBe('pending');
+
+        // the connection works: c.txt alone goes through
+        await runPlan(plan.id, { itemPaths: ['/local/c.txt'] });
+        expect(itemOf(plan, 'c.txt').status).toBe('verified');
+        expect(getHeldPlanIds()).toEqual([]);
+
+        // two more interruptions are two again, not four
+        await runPlan(plan.id);
+        await resumeHeldPlans();
+        expect(itemOf(plan, 'b.txt').status).toBe('pending');
+      });
     });
   });
 

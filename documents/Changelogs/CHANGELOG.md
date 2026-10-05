@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 65 | 2026-10-05 | Archivos vacíos por FTPS y plan atascado en el archivo que tumba la conexión | [Ver detalle](2026-10-05_fix_ftps_archivo_vacio.md) |
 | 64 | 2026-09-24 | Release 1.29.0: huella de contenido | [Ver detalle](2026-09-24_release_1_29_0.md) |
 | 63 | 2026-09-24 | Huella de contenido: un archivo solo cuenta como modificado si cambiaron sus bytes | [Ver detalle](2026-09-24_feat_huella_de_contenido.md) |
 | 62 | 2026-09-24 | Release 1.28.0: conexión resiliente | [Ver detalle](2026-09-24_release_1_28_0.md) |

@@ -1,5 +1,7 @@
+import { EventEmitter } from 'events';
+import { PassThrough, Readable } from 'stream';
 import { FileType as BasicFtpFileType } from 'basic-ftp';
-import FTPFileSystem, { parseFtpDigest } from '../ftpFileSystem';
+import FTPFileSystem, { endAfterSecureConnect, parseFtpDigest } from '../ftpFileSystem';
 import upath from '../../upath';
 
 /**
@@ -19,6 +21,7 @@ function createFs() {
     list: jest.fn(),
     features: jest.fn(),
     send: jest.fn(),
+    uploadFrom: jest.fn(),
   };
   // FTPFileSystem only needs the single-concurrency executor and the
   // basic-ftp client from its FTPClient
@@ -297,5 +300,162 @@ describe('parseFtpDigest', () => {
     [`250 ${MD5_HEX}`, 'sha256', undefined],
   ])('%j as %s -> %s', (message, algorithm, expected) => {
     expect(parseFtpDigest(message, algorithm as any)).toBe(expected);
+  });
+});
+
+/**
+ * The end of an upload source is held until the data socket is secure: an
+ * empty file otherwise shuts the socket down in the middle of its TLS
+ * handshake, which Pure-FTPd answers by closing the session.
+ */
+describe('endAfterSecureConnect', () => {
+  function sourceOf(...chunks: string[]) {
+    const source = new PassThrough();
+    chunks.forEach(chunk => source.write(chunk));
+    source.end();
+    return source;
+  }
+
+  // a TLS socket in the middle of its handshake, as far as the gate looks
+  function handshakingSocket() {
+    return Object.assign(new EventEmitter(), { secureConnecting: true, destroyed: false });
+  }
+
+  function collect(stream: Readable) {
+    const state = { data: '', ended: false, error: undefined as Error | undefined };
+    stream.on('data', chunk => (state.data += chunk));
+    stream.on('end', () => (state.ended = true));
+    stream.on('error', error => (state.error = error));
+    return state;
+  }
+
+  const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+
+  test('an empty source does not end while the data socket is handshaking', async () => {
+    const socket = handshakingSocket();
+    const state = collect(endAfterSecureConnect(sourceOf(), () => socket));
+
+    await tick();
+    expect(state.ended).toBe(false);
+
+    socket.secureConnecting = false;
+    socket.emit('secureConnect');
+    await tick();
+    expect(state.ended).toBe(true);
+    expect(state.data).toBe('');
+    expect(socket.listenerCount('secureConnect')).toBe(0);
+    expect(socket.listenerCount('close')).toBe(0);
+  });
+
+  test('the content goes through untouched and its end waits for the handshake too', async () => {
+    const socket = handshakingSocket();
+    const state = collect(endAfterSecureConnect(sourceOf('hola ', 'mundo'), () => socket));
+
+    await tick();
+    expect(state.data).toBe('hola mundo');
+    expect(state.ended).toBe(false);
+
+    socket.emit('secureConnect');
+    await tick();
+    expect(state.ended).toBe(true);
+  });
+
+  test.each([
+    ['a secure socket', () => Object.assign(new EventEmitter(), { secureConnecting: false })],
+    ['a plain socket', () => new EventEmitter()],
+    ['no data socket', () => undefined],
+  ])('ends at once with %s', async (_name, socket) => {
+    const state = collect(endAfterSecureConnect(sourceOf('abc'), socket));
+
+    await tick();
+    expect(state.data).toBe('abc');
+    expect(state.ended).toBe(true);
+  });
+
+  test('a data socket that closes during the handshake releases the end', async () => {
+    const socket = handshakingSocket();
+    const state = collect(endAfterSecureConnect(sourceOf(), () => socket));
+
+    await tick();
+    socket.emit('close');
+    await tick();
+    expect(state.ended).toBe(true);
+  });
+
+  test('nothing is read from the source before the result is read', async () => {
+    const source = sourceOf('abc');
+    const read = jest.spyOn(source, 'read');
+    const output = endAfterSecureConnect(source, () => undefined);
+
+    await tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(source.listenerCount('data')).toBe(0);
+
+    const state = collect(output);
+    await tick();
+    expect(state.data).toBe('abc');
+  });
+
+  test('an error of the source fails the result', async () => {
+    const source = new PassThrough();
+    const state = collect(endAfterSecureConnect(source, () => undefined));
+
+    await tick();
+    source.emit('error', new Error('read failed'));
+    await tick();
+    expect(state.error).toEqual(new Error('read failed'));
+    expect(state.ended).toBe(false);
+  });
+
+  test('a source destroyed before its end fails the result instead of hanging', async () => {
+    const source = new PassThrough();
+    const state = collect(endAfterSecureConnect(source, () => undefined));
+
+    await tick();
+    source.destroy();
+    await tick();
+    expect(state.error).toBeDefined();
+    expect(state.ended).toBe(false);
+  });
+
+  test('destroying the result destroys the source', async () => {
+    const source = new PassThrough();
+    const output = endAfterSecureConnect(source, () => undefined);
+    collect(output);
+
+    await tick();
+    output.destroy();
+    await tick();
+    expect(source.destroyed).toBe(true);
+  });
+});
+
+describe('FTPFileSystem.put', () => {
+  test('uploads through the handshake gate of the current data socket', async () => {
+    const { fs, client } = createFs();
+    const socket = Object.assign(new EventEmitter(), { secureConnecting: true, destroyed: false });
+    (client as any).ftp = { dataSocket: socket };
+    let ended = false;
+    client.uploadFrom.mockImplementation(
+      (source: Readable) =>
+        new Promise(resolve => {
+          source.on('data', () => undefined);
+          source.on('end', () => {
+            ended = true;
+            resolve({ code: 226, message: '226 File successfully transferred' });
+          });
+        })
+    );
+    const input = new PassThrough();
+    input.end();
+
+    const put = fs.put(input, '/www/empty.txt');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(client.uploadFrom).toHaveBeenCalledWith(expect.any(Readable), '/www/empty.txt');
+    expect(ended).toBe(false);
+
+    socket.emit('secureConnect');
+    await expect(put).resolves.toBeUndefined();
+    expect(ended).toBe(true);
   });
 });
