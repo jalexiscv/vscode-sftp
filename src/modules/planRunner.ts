@@ -62,6 +62,11 @@ import {
  *   reports the recovery) or, failing that, on a timer that follows the
  *   gate's hold, up to {@link MAX_AUTOMATIC_RESUMES} times; then it waits
  *   for the user. One warning per service and outage, not one per file;
+ * - an item whose upload is the one the connection dies on
+ *   {@link MAX_ITEM_INTERRUPTIONS} times running is `failed` instead of held
+ *   once more: it is more likely the cause than a victim, and the plan goes
+ *   on without it. An automatic resume only runs what is on hold, so that
+ *   item waits for the user;
  * - `Cancel All Transfers` puts every item whose task did not finish — not
  *   only the ones that were running — back to `pending`, so the plan closes
  *   cleanly and can be run again;
@@ -106,6 +111,11 @@ const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform ===
 export const MAX_AUTOMATIC_RESUMES = 10;
 // a resume never comes sooner than this after the loss, whatever the gate says
 const MIN_RESUME_DELAY_MS = 5 * 1000;
+// an item in flight when the connection goes is held with the rest; one that
+// is in flight every time it goes (a file the server answers by dropping the
+// session) would keep the whole plan from ever getting past it, so after this
+// many interruptions without a clean run in between it fails instead
+export const MAX_ITEM_INTERRUPTIONS = 3;
 
 interface HeldPlan {
   planId: string;
@@ -121,6 +131,9 @@ interface HeldPlan {
 const running = new Map<string, Promise<PlanSummary>>();
 const runningListeners: Array<() => void> = [];
 const held = new Map<string, HeldPlan>();
+// plan id -> path key -> uploads of that item interrupted by a lost
+// connection since the plan last got through
+const interruptions = new Map<string, Map<string, number>>();
 // services already warned about the current outage; cleared when a plan of
 // theirs gets through again
 const outageNotified = new Set<string>();
@@ -143,6 +156,17 @@ function notifyRunning() {
       logger.error(error, 'planRunner listener');
     }
   });
+}
+
+function countInterruption(planId: string, localPath: string): number {
+  let counts = interruptions.get(planId);
+  if (!counts) {
+    counts = new Map<string, number>();
+    interruptions.set(planId, counts);
+  }
+  const count = (counts.get(pathKey(localPath)) || 0) + 1;
+  counts.set(pathKey(localPath), count);
+  return count;
 }
 
 function selectItems(plan: UploadPlan, itemPaths?: string[]): UploadPlanItem[] {
@@ -509,6 +533,21 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<GroupRes
     if (item) {
       settled.add(item);
       if (isConnectionLostError(error)) {
+        const interrupted = countInterruption(plan.id, item.localPath);
+        if (interrupted >= MAX_ITEM_INTERRUPTIONS) {
+          logger.warn(
+            `[plan ${plan.id}] ${item.localPath} failed: the connection was lost ` +
+              `${interrupted} times while uploading it; the plan goes on without it`
+          );
+          updateItem(plan.id, item.localPath, {
+            status: 'failed',
+            attempts: task.attempts,
+            error:
+              `connection lost ${interrupted} times while uploading this file: ` +
+              (error.message || String(error)),
+          });
+          return;
+        }
         // interrupted, not refused: due again once the connection is back
         updateItem(plan.id, item.localPath, {
           status: 'pending',
@@ -701,6 +740,7 @@ function releaseHold(planId: string) {
     clearTimeout(entry.timer);
   }
   held.delete(planId);
+  interruptions.delete(planId);
 }
 
 /**
@@ -768,7 +808,13 @@ function notifyOutage(entry: HeldPlan, count: number, reason: string) {
 }
 
 function resumeHeld(entry: HeldPlan) {
-  if (!getPlan(entry.planId)) {
+  const plan = getPlan(entry.planId);
+  // only what is on hold: an item that failed meanwhile — the one that kept
+  // interrupting the connection among them — waits for the user
+  const waiting = plan
+    ? selectItems(plan, entry.itemPaths).filter(item => item.status !== 'failed')
+    : [];
+  if (waiting.length === 0) {
     releaseHold(entry.planId);
     return;
   }
@@ -776,7 +822,7 @@ function resumeHeld(entry: HeldPlan) {
     clearTimeout(entry.timer);
     entry.timer = undefined;
   }
-  runPlan(entry.planId, { itemPaths: entry.itemPaths }).catch(error =>
+  runPlan(entry.planId, { itemPaths: waiting.map(item => item.localPath) }).catch(error =>
     logger.error(error, `plan ${entry.planId} resume`)
   );
 }
@@ -950,6 +996,7 @@ export function __resetForTest() {
     }
   });
   held.clear();
+  interruptions.clear();
   outageNotified.clear();
   if (recoverySubscription) {
     recoverySubscription();
