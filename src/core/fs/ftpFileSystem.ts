@@ -80,6 +80,85 @@ export function parseFtpDigest(message: string, algorithm: HashAlgorithm): strin
   return token ? token.toLowerCase() : undefined;
 }
 
+// resolves once `socket` has finished its TLS handshake; at once for a plain
+// socket, one that is already secure and one that is gone (the transfer then
+// fails on its own)
+function whenSecure(socket: any): Promise<void> {
+  if (!socket || socket.secureConnecting !== true || socket.destroyed) {
+    return Promise.resolve();
+  }
+  return new Promise<void>(resolve => {
+    const done = () => {
+      socket.removeListener('secureConnect', done);
+      socket.removeListener('close', done);
+      resolve();
+    };
+    socket.once('secureConnect', done);
+    socket.once('close', done);
+  });
+}
+
+/**
+ * `input`, with its end held back until the data socket of the upload has
+ * finished its TLS handshake.
+ *
+ * basic-ftp starts piping the source as soon as the data socket reports a
+ * cipher, which a socket resuming the TLS session of the control connection
+ * does before the handshake is over. Bytes written meanwhile wait for the
+ * handshake; the end of an empty source does not: the socket is shut down in
+ * the middle of it, and the server answers with a TLS alert (Pure-FTPd:
+ * `decode error`) or a FIN that closes the whole client. Every upload of a
+ * 0-byte file over FTPS died that way.
+ *
+ * Nothing is read from `input` until basic-ftp reads from the result, which
+ * it does once the server has accepted the STOR: a rejected one leaves
+ * `input` untouched for the retry in {@link FTPFileSystem.put}.
+ */
+export function endAfterSecureConnect(input: Readable, dataSocket: () => any): Readable {
+  let started = false;
+  let ended = false;
+  let destroyed = false;
+  const output = new Readable({
+    read() {
+      if (started) {
+        input.resume();
+        return;
+      }
+      started = true;
+      input.on('data', chunk => {
+        if (!output.push(chunk)) {
+          input.pause();
+        }
+      });
+      input.once('end', () => {
+        ended = true;
+        whenSecure(dataSocket()).then(() => {
+          if (!destroyed) {
+            output.push(null);
+          }
+        });
+      });
+      input.once('error', error => output.destroy(error));
+      // destroyed without an 'end' or an 'error': the upload must not wait
+      // for the rest of the file for ever
+      input.once('close', () => {
+        if (!ended) {
+          output.destroy(new Error('Upload source closed before its end'));
+        }
+      });
+    },
+    destroy(error, callback) {
+      destroyed = true;
+      // what stream.pipeline did to the source when it was piped directly
+      if (typeof input.destroy === 'function') {
+        input.destroy();
+      }
+      callback(error || undefined);
+    },
+  });
+  return output;
+}
+
 // `HASH SHA-1*;SHA-256;SHA-512;MD5` -> the names, the `*` (current default) dropped
 function hashNamesOf(featValue: string): string[] {
   return featValue
@@ -474,7 +553,13 @@ export default class FTPFileSystem extends RemoteFileSystem {
   }
 
   private atomicPut(input: Readable, path: string): Promise<void> {
-    return this.run(() => this.ftp.uploadFrom(input, path).then(() => undefined));
+    const dataSocket = () => {
+      const context = (this.ftp as any).ftp;
+      return context ? context.dataSocket : undefined;
+    };
+    return this.run(() =>
+      this.ftp.uploadFrom(endAfterSecureConnect(input, dataSocket), path).then(() => undefined)
+    );
   }
 
   private atomicDeleteFile(path: string): Promise<void> {
