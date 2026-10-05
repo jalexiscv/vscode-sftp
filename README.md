@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 887 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 901 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -167,6 +167,8 @@ La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo co
 | **`externalChanges.compareContent`** | Clave nueva, `true` por defecto. Apagada, no se lee ningún archivo ni se anota huella alguna y la extensión se comporta exactamente como la 1.28.0 |
 | **Índices existentes** | Las entradas anteriores no tienen huella y siguen la regla vieja hasta que una subida, un rebuild o un dar por subido se la anoten. Para cubrir de golpe un proyecto ya sincronizado, ejecuta una vez `SFTP: Mark Local Files as Uploaded` (o `Rebuild Sync Index`) por servidor |
 
+**v1.29.1 (corrección).** Los archivos de 0 bytes vuelven a subir por FTPS: contra un servidor con TLS 1.3 (Pure-FTPd, por ejemplo) cada uno cerraba la sesión con una alerta `decode error` en el socket de datos y dejaba el plan en espera una y otra vez. Además, un archivo en cuya subida la conexión se cae tres veces seguidas pasa a `failed` y el plan continúa con el resto en lugar de quedarse retenido en él.
+
 ## Qué esperamos de esta versión
 
 - **Un reemplazo directo (drop-in).** El mismo formato de `sftp.json`, los mismos comandos, los mismos flujos de trabajo — las configuraciones existentes funcionan sin ninguna migración.
@@ -191,7 +193,7 @@ La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo co
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.29.0.vsix
+code --install-extension sftp-1.29.1.vsix
 ```
 
 ## Documentación

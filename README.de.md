@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 887 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 901 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -167,6 +167,8 @@ v1.29.0 antwortet auf ein konkretes Symptom: Die Erweiterung schlug weiterhin Da
 | **`externalChanges.compareContent`** | Neuer Schlüssel, standardmäßig `true`. Ausgeschaltet wird keine Datei gelesen und kein Fingerabdruck gespeichert; die Erweiterung verhält sich genau wie 1.28.0 |
 | **Bestehende Indizes** | Früher geschriebene Einträge haben keinen Fingerabdruck und folgen der alten Regel, bis ein Upload, ein Rebuild oder ein „als hochgeladen markieren“ einen einträgt. Um ein bereits synchronisiertes Projekt auf einmal abzudecken, `SFTP: Mark Local Files as Uploaded` (oder `Rebuild Sync Index`) einmal pro Server ausführen |
 
+**v1.29.1 (Korrektur).** 0-Byte-Dateien lassen sich wieder über FTPS hochladen: Gegen einen Server mit TLS 1.3 (etwa Pure-FTPd) schloss jede von ihnen die Sitzung mit einem `decode error`-Alert auf dem Daten-Socket und versetzte den Plan immer wieder in Wartestellung. Außerdem wird eine Datei, bei deren Upload die Verbindung dreimal in Folge abbricht, jetzt als `failed` markiert, und der Plan fährt mit dem Rest fort, statt an ihr hängen zu bleiben.
+
 ## Was wir von dieser Version erwarten
 
 - **Ein direkter Ersatz (drop-in).** Dasselbe `sftp.json`-Format, dieselben Befehle, dieselben Arbeitsabläufe — bestehende Konfigurationen funktionieren ohne jegliche Migration.
@@ -191,7 +193,7 @@ v1.29.0 antwortet auf ein konkretes Symptom: Die Erweiterung schlug weiterhin Da
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.29.0.vsix
+code --install-extension sftp-1.29.1.vsix
 ```
 
 ## Dokumentation
