@@ -46,7 +46,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 957 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 971 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -180,6 +180,8 @@ A v1.30.0 fecha uma lacuna da distribuição fora do Marketplace: o VS Code só 
 | **`SFTP: Check for Updates`** | Comando novo que consulta agora mesmo, independentemente da configuração, e responde em todos os casos: em dia, sem vsix ou sem rede. Uma versão pulada com `Skip this version` deixa de ser anunciada sozinha, mas o comando continua a oferecê-la |
 | **O que não faz** | Nada é instalado em segundo plano nem a janela é recarregada sem a sua confirmação. As releases anteriores à 1.30.0 não têm checksum: o aviso aparecerá a partir da primeira release publicada depois de instalar esta |
 
+**v1.30.1 (correção).** Um certificado FTPS que o cliente recusa (cadeia incompleta, autoassinado, vencido ou emitido para outro nome) já não marca cada arquivo como falho nem abre um diálogo por salvamento com o erro bruto do OpenSSL: é tratado como falha de conexão, os planos ficam em espera, as tentativas são retidas por um minuto e um único aviso por servidor diz o que há e a saída (cadeia completa no servidor, ou `"secureOptions": { "rejectUnauthorized": false }` para aceitá-lo sem verificação).
+
 ## O que esperamos desta versão
 
 - **Um substituto direto (drop-in).** O mesmo formato de `sftp.json`, os mesmos comandos, os mesmos fluxos de trabalho — as configurações existentes funcionam sem nenhuma migração.
@@ -204,7 +206,7 @@ A v1.30.0 fecha uma lacuna da distribuição fora do Marketplace: o VS Code só 
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.30.0.vsix
+code --install-extension sftp-1.30.1.vsix
 ```
 
 ## Documentação

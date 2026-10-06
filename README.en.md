@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 957 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 971 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -180,6 +180,8 @@ v1.30.0 closes a gap of being distributed outside the Marketplace: VS Code only 
 | **`SFTP: Check for Updates`** | New command that asks right now, whatever the setting says, and answers in every case: up to date, no vsix, no network. A version skipped with `Skip this version` stops being announced on its own, but the command still offers it |
 | **What it does not do** | Nothing is installed in the background and the window is never reloaded without your confirmation. Releases before 1.30.0 carry no checksum: the notice will show up from the first release published after this one is installed |
 
+**v1.30.1 (fix).** An FTPS certificate the client refuses (incomplete chain, self-signed, expired or issued for another name) no longer marks every file as failed nor opens a dialog per save with the bare OpenSSL error: it is treated as a connection failure, plans go on hold, attempts are held for a minute and a single notice per server says what is wrong and the way out (a complete chain on the server, or `"secureOptions": { "rejectUnauthorized": false }` to accept it unverified).
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -204,7 +206,7 @@ v1.30.0 closes a gap of being distributed outside the Marketplace: VS Code only 
 Or from the command line:
 
 ```
-code --install-extension sftp-1.30.0.vsix
+code --install-extension sftp-1.30.1.vsix
 ```
 
 ## Documentation

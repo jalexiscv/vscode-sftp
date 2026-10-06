@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、957 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、971 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -180,6 +180,8 @@ v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自
 | **`SFTP: Check for Updates`** | 新命令，无论设置如何都立即查询，并在所有情况下给出答复：已是最新、没有 vsix 或没有网络。用 `Skip this version` 跳过的版本不再自动提醒，但该命令仍会提供它 |
 | **它不会做的事** | 不会在后台安装任何东西，也不会在未经你确认的情况下重新加载窗口。1.30.0 之前的 release 没有校验和：提醒会从安装本版本之后发布的第一个 release 开始出现 |
 
+**v1.30.1（修复）。** 客户端拒绝的 FTPS 证书（证书链不完整、自签名、已过期或签发给其他主机名）不再把每个文件标记为失败，也不再每次保存都弹出带有原始 OpenSSL 错误的对话框：它被当作连接失败处理，计划进入等待，连接尝试被延后一分钟，每台服务器只提示一次，说明问题所在和解决办法（在服务器上配置完整的证书链，或用 `"secureOptions": { "rejectUnauthorized": false }` 不经验证地接受它）。
+
 ## 我们对这个版本的期望
 
 - **直接替换（drop-in）。** 相同的 `sftp.json` 格式、相同的命令、相同的工作流——现有配置无需任何迁移即可使用。
@@ -204,7 +206,7 @@ v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.30.0.vsix
+code --install-extension sftp-1.30.1.vsix
 ```
 
 ## 文档

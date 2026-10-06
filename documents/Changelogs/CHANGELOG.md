@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 72 | 2026-10-06 | Release 1.30.1: un certificado FTPS rechazado se trata como fallo de conexión | [Ver detalle](2026-10-06_release_1_30_1.md) |
 | 71 | 2026-10-06 | Un certificado FTPS rechazado se trata como fallo de conexión, con aviso y salida | [Ver detalle](2026-10-06_fix_certificado_rechazado.md) |
 | 70 | 2026-10-05 | Release 1.30.0: actualización desde las releases de GitHub | [Ver detalle](2026-10-05_release_1_30_0.md) |
 | 69 | 2026-10-05 | Actualización desde las releases de GitHub: `sftp.updates.check` y `SFTP: Check for Updates` | [Ver detalle](2026-10-05_feat_actualizacion_desde_github.md) |
