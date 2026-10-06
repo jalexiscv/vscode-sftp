@@ -29,7 +29,9 @@ import { vol } from 'memfs';
 import FileService from '../../../core/fileService';
 import { TransferFailedError, ETRANSFER_FAILED } from '../../../core';
 import { setRetryBaseDelayForTest } from '../../../core/transferTask';
+import { ConnectionGate } from '../../../core/connectionHealth';
 import { isReported } from '../../../helper';
+import { setResumeDelayForTest, __resetResumeStateForTest } from '../resume';
 import RemoteFs from '../../../../test/helper/localRemoteFs';
 import { refreshRemoteExplorer } from '../../shared';
 // through the package index, like the rest of the extension: the handlers sit
@@ -57,6 +59,8 @@ function createService(remoteFs: FailingFs): FileService {
   const service = new FileService('/local', '/local', {} as any);
   // the real method opens an ssh/ftp connection
   (service as any).getRemoteFileSystem = () => Promise.resolve(remoteFs);
+  const gate = new ConnectionGate('example.test');
+  (service as any).getConnectionGate = () => gate;
   return service;
 }
 
@@ -104,15 +108,18 @@ async function rejectionOf(promise: Promise<unknown>): Promise<any> {
 describe('transfer handlers', () => {
   beforeAll(() => {
     setRetryBaseDelayForTest(FAST_RETRY_DELAY_MS);
+    setResumeDelayForTest(FAST_RETRY_DELAY_MS);
   });
 
   afterAll(() => {
     setRetryBaseDelayForTest();
+    setResumeDelayForTest();
   });
 
   beforeEach(() => {
     vol.reset();
     (refreshRemoteExplorer as jest.Mock).mockClear();
+    __resetResumeStateForTest();
   });
 
   test('uploadFile rejects with an already-reported aggregate when a file fails', async () => {
@@ -166,10 +173,16 @@ describe('transfer handlers', () => {
     const error = await rejectionOf(downloadFile(contextFor(service, '/local/x.txt', '/remote/x.txt')));
 
     expect(error).toBeInstanceOf(TransferFailedError);
-    // a lost connection is the one aggregate that is not pre-reported per
-    // file, so it must carry the direction and the reason itself
-    expect(error.message).toMatch(/^Connection lost while trying to download \(read ECONNRESET\): 0 done, 1 interrupted/);
+    // the connection goes every time this file is in flight: after three
+    // holds it is given up and the aggregate names it, in its own direction.
+    // The per-file hook stays quiet for a lost connection, so this one is not
+    // pre-reported
+    expect(error.message).toBe('1 of 1 file(s) failed to download: x.txt (ECONNRESET)');
     expect(error.failures).toHaveLength(1);
+    expect(error.failures[0].error.message).toBe(
+      'connection lost 3 times while downloading this file: read ECONNRESET'
+    );
+    expect(isReported(error)).toBe(false);
   });
 
   test('a failure on a live connection is summarised per file, in its own direction', async () => {

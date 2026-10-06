@@ -64,6 +64,7 @@ function fakeFs(seen: boolean[]) {
 function contextFor(remoteFs: any, localFs: any) {
   const scheduler = {
     add: jest.fn(),
+    stop: jest.fn(),
     run: jest.fn(async () => ({ succeeded: [], failed: [], cancelled: [] })),
   };
   return {
@@ -157,11 +158,13 @@ describe('transfer handlers and automatic-sync suppression', () => {
   test('a download that fails still releases after the tail', async () => {
     const seen: boolean[] = [];
     const remoteFs = fakeFs(seen);
+    // a failure on a live connection: a lost one would hold the handler and
+    // wait for the connection, which the fake timers here never advance
     remoteFs.lstat = jest.fn(async () => {
-      throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      throw Object.assign(new Error('Permission denied'), { code: 'EACCES' });
     });
 
-    await expect(downloadFile(contextFor(remoteFs, fakeFs(seen)))).rejects.toThrow('ECONNREFUSED');
+    await expect(downloadFile(contextFor(remoteFs, fakeFs(seen)))).rejects.toThrow('Permission denied');
 
     expect(isSuppressed()).toBe(true);
     jest.advanceTimersByTime(PAST_THE_TAIL);
