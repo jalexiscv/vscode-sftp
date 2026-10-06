@@ -28,6 +28,12 @@ export const STATE_KEY_UNBUILT_INDEX_NOTICE_DISMISSED = 'sftp.state.unbuiltIndex
 // cuando no coincide con la instalada, se descartan al activar
 export const STATE_KEY_STORAGE_VERSION = 'sftp.state.storageVersion';
 
+// claves de globalState (comunes a todas las ventanas) del comprobador de
+// actualizaciones: cuándo se consultó GitHub por última vez (ms) y qué
+// versión pidió el usuario no volver a ofrecer
+export const STATE_KEY_UPDATE_LAST_CHECK = 'sftp.state.updateLastCheck';
+export const STATE_KEY_UPDATE_SKIPPED_VERSION = 'sftp.state.updateSkippedVersion';
+
 // command not in package.json
 export const COMMAND_TOGGLE_OUTPUT = 'sftp.toggleOutput';
 
@@ -38,6 +44,7 @@ export const COMMAND_SET_PROFILE = 'sftp.setProfile';
 export const COMMAND_CANCEL_ALL_TRANSFER = 'sftp.cancelAllTransfer';
 export const COMMAND_OPEN_CONNECTION_IN_TERMINAL = 'sftp.openConnectInTerminal';
 export const COMMAND_FORGET_SAVED_PASSWORDS = 'sftp.forgetSavedPasswords';
+export const COMMAND_CHECK_FOR_UPDATES = 'sftp.checkForUpdates';
 
 export const COMMAND_FORCE_UPLOAD = 'sftp.forceUpload';
 export const COMMAND_UPLOAD = 'sftp.upload';

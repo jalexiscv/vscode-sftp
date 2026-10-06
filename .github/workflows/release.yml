@@ -27,19 +27,24 @@ jobs:
       - name: Test
         run: npm test
 
+      # The checksum is what the extension's own update check verifies the
+      # downloaded vsix against (sftp.updates.check); `sha256sum -c` format
       - name: Package extension
-        run: npx --yes @vscode/vsce package
+        run: |
+          npx --yes @vscode/vsce package
+          for vsix in *.vsix; do sha256sum "$vsix" > "$vsix.sha256"; done
+          cat *.sha256
 
       # A release may already exist for the tag (created by hand, with curated
-      # notes and the locally built vsix): then only the asset is refreshed,
+      # notes and the locally built vsix): then only the assets are refreshed,
       # so the run is idempotent instead of failing on "already exists"
-      - name: Create GitHub Release with the vsix attached
+      - name: Create GitHub Release with the vsix and its checksum attached
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME exists: uploading the vsix"
-            gh release upload "$GITHUB_REF_NAME" *.vsix --clobber
+            echo "release $GITHUB_REF_NAME exists: uploading the vsix and its checksum"
+            gh release upload "$GITHUB_REF_NAME" *.vsix *.sha256 --clobber
           else
-            gh release create "$GITHUB_REF_NAME" *.vsix --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$GITHUB_REF_NAME" *.vsix *.sha256 --title "$GITHUB_REF_NAME" --generate-notes
           fi
         env:
           GH_TOKEN: ${{ github.token }}
