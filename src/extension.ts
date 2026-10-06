@@ -33,6 +33,7 @@ import { flushNow as flushPendingChanges } from './modules/changeCollector';
 import { whenIdle as whenNoPlanRuns } from './modules/planRunner';
 import { refreshContext as refreshUploadExclusions } from './modules/uploadExclusions';
 import { discardStorageOnVersionChange, extensionVersionOf } from './modules/storageReset';
+import * as updateChecker from './modules/updateChecker';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -112,6 +113,14 @@ export async function activate(context: vscode.ExtensionContext) {
     initCommands(context);
   } catch (error) {
     reportError(error, 'initCommands');
+  }
+
+  // before the workspace check: a window without sftp.json activated by the
+  // command still gets its offer. Never blocks: the check runs on a timer.
+  try {
+    updateChecker.init(context);
+  } catch (error) {
+    reportError(error, 'update checker');
   }
 
   const workspaceFolders = getWorkspaceFolders();
@@ -224,6 +233,7 @@ export async function deactivate(): Promise<void> {
   fileActivityMonitor.destory();
   localDeleteMonitor.destroy();
   externalChangeScanner.destroy();
+  updateChecker.destroy();
   if (activityView) {
     activityView.dispose();
     activityView = undefined;

@@ -224,6 +224,23 @@ export function openFolder(uri?: vscode.Uri, newWindow?: boolean) {
   return executeCommand('vscode.openFolder', uri, newWindow);
 }
 
+/** Opens `url` in the user's browser. */
+export function openExternal(url: string) {
+  return vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+/**
+ * Installs a vsix through VS Code's own command, the one behind
+ * `Extensions: Install from VSIX…`; the window has to be reloaded afterwards.
+ */
+export function installExtensionFromVsix(fsPath: string) {
+  return executeCommand('workbench.extensions.installExtension', vscode.Uri.file(fsPath));
+}
+
+export function reloadWindow() {
+  return executeCommand('workbench.action.reloadWindow');
+}
+
 export function registerCommand(
   context: vscode.ExtensionContext,
   name: string,

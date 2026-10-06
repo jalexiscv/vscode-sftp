@@ -30,6 +30,7 @@
   "activationEvents": [
     "onCommand:sftp.config",
     "onCommand:sftp.openConnectionManager",
+    "onCommand:sftp.checkForUpdates",
     "workspaceContains:.vscode/sftp.json"
   ],
   "icon": "resources/icon.png",
@@ -86,6 +87,21 @@
           "type": "boolean",
           "default": true,
           "description": "Show the SFTP Activity view with the history of transfers, deletions and renames."
+        },
+        "sftp.updates.check": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "startup",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Look for a newer release once a day, shortly after the extension activates.",
+            "Look for a newer release every time the extension activates.",
+            "Never look on its own; \"SFTP: Check for Updates\" still works."
+          ],
+          "default": "daily",
+          "description": "When to look for a newer release of this extension on GitHub (jalexiscv/vscode-sftp). A newer version is offered, never installed on its own; installing it ends with a window reload."
         }
       }
     },
@@ -485,6 +501,12 @@
         "title": "Manage Upload Exclusions",
         "category": "SFTP",
         "icon": "$(list-filter)"
+      },
+      {
+        "command": "sftp.checkForUpdates",
+        "title": "Check for Updates",
+        "category": "SFTP",
+        "icon": "$(cloud-download)"
       }
     ],
     "menus": {

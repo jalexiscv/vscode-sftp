@@ -132,6 +132,9 @@ Stop the current transfers (upload and download). Items of an upload plan that h
 Open a terminal in VSCode and auto login to a specific server.
 
 
+### SFTP: Check for Updates
+Ask GitHub for the latest release of this extension ([jalexiscv/vscode-sftp](https://github.com/jalexiscv/vscode-sftp/releases)) now, whatever `sftp.updates.check` says, and offer it when it is newer than the installed version (`Install`, `Release notes`, `Skip this version`). Says so when the installed version is current, when the latest release has no vsix, or when GitHub could not be reached. A version skipped on the automatic notice is still offered here. See [updates.check](setting.md#updatescheck) for what `Install` does.
+
 ## Alt commands
 An alternative command can be found when pressing `Alt` while opening a menu.
 
