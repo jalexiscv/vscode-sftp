@@ -1,13 +1,12 @@
-import { TransferResult, TransferFailedError, FileSystem, FileType } from '../../core';
-import { markReported, simplifyPath } from '../../helper';
+import { FileSystem, FileType } from '../../core';
+import { simplifyPath } from '../../helper';
 import { showInformationMessage } from '../../host';
 import logger from '../../logger';
 import { suppressAutoSync } from '../../modules/syncControl';
 import { refreshRemoteExplorer } from '../shared';
 import createFileHandler, { FileHandlerContext } from '../createFileHandler';
 import { transfer, sync, TransferOption, SyncOption, TransferDirection } from './transfer';
-
-type TransferAction = 'upload' | 'download' | 'sync';
+import { runResumable } from './resume';
 
 /**
  * Whether the target of an upload handler is itself kept off the server by
@@ -33,34 +32,6 @@ async function isTargetUploadExcluded(
   return option.uploadExclude(localFsPath, isDirectory);
 }
 
-/**
- * Turns a batch with failures into a rejection, so a handler can no longer
- * resolve after a failed put. Cancelled tasks are not failures.
- *
- * Each failed task was already reported by the service's `afterTransfer` hook,
- * so the aggregate is flagged as reported: callers log it, they do not show
- * it again.
- */
-function assertTransferSucceeded(result: TransferResult, action: TransferAction) {
-  if (result.failed.length === 0) {
-    return;
-  }
-
-  const total = result.succeeded.length + result.failed.length + result.cancelled.length;
-  const error = new TransferFailedError(result.failed, total, action);
-  if (result.connectionLost) {
-    // the per-file hook stays quiet for a lost connection (every task in
-    // flight fails with it), so this aggregate is the one notice the user
-    // gets: it is not flagged as reported, and it says the rest was not tried
-    error.message =
-      `Connection lost while trying to ${action} (${result.connectionLost.message}): ` +
-      `${result.succeeded.length} done, ${result.failed.length} interrupted; ` +
-      'the remaining files were not attempted. Run the command again once the server is back.';
-    throw error;
-  }
-  throw markReported(error);
-}
-
 function createTransferHandle(direction: TransferDirection) {
   async function run(this: FileHandlerContext, option) {
     const localFs = this.fileService.getLocalFileSystem();
@@ -81,38 +52,39 @@ function createTransferHandle(direction: TransferDirection) {
       return;
     }
 
-    const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
-    const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-    let transferConfig;
-
-    if (direction === TransferDirection.REMOTE_TO_LOCAL) {
-      transferConfig = {
-        srcFsPath: remoteFsPath,
-        srcFs: remoteFs,
-        targetFsPath: localFsPath,
-        targetFs: localFs,
-        transferOption: option,
-        transferDirection: TransferDirection.REMOTE_TO_LOCAL,
-      };
-    } else {
-      transferConfig = {
-        srcFsPath: localFsPath,
-        srcFs: localFs,
-        targetFsPath: remoteFsPath,
-        targetFs: remoteFs,
-        transferOption: option,
-        filePerm: this.config.filePerm,
-        dirPerm: this.config.dirPerm,
-        transferDirection: TransferDirection.LOCAL_TO_REMOTE,
-      };
-    }
-    // todo: abort at here. we should stop collect task
-    await transfer(transferConfig, t => scheduler.add(t));
-    const result = await scheduler.run();
-    assertTransferSucceeded(
-      result,
-      direction === TransferDirection.REMOTE_TO_LOCAL ? 'download' : 'upload'
-    );
+    // a lost connection holds the command and walks the target again over a
+    // fresh connection, skipping what already went through (see ./resume)
+    await runResumable<TransferOption>({
+      ctx: this,
+      action: direction === TransferDirection.REMOTE_TO_LOCAL ? 'download' : 'upload',
+      option,
+      walk: (remoteFs, attemptOption, collect) => {
+        let transferConfig;
+        if (direction === TransferDirection.REMOTE_TO_LOCAL) {
+          transferConfig = {
+            srcFsPath: remoteFsPath,
+            srcFs: remoteFs,
+            targetFsPath: localFsPath,
+            targetFs: localFs,
+            transferOption: attemptOption,
+            transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+          };
+        } else {
+          transferConfig = {
+            srcFsPath: localFsPath,
+            srcFs: localFs,
+            targetFsPath: remoteFsPath,
+            targetFs: remoteFs,
+            transferOption: attemptOption,
+            filePerm: this.config.filePerm,
+            dirPerm: this.config.dirPerm,
+            transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+          };
+        }
+        // todo: abort at here. we should stop collect task
+        return transfer(transferConfig, collect);
+      },
+    });
   }
 
   if (direction === TransferDirection.LOCAL_TO_REMOTE) {
@@ -134,26 +106,28 @@ export const sync2Remote = createFileHandler<SyncOption>({
   name: 'sync local ➞ remote',
   handle(option) {
     const run = async () => {
-      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
       const localFs = this.fileService.getLocalFileSystem();
       const { localFsPath, remoteFsPath } = this.target;
-      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
       // Attach filePerm and dirPerm to transferOption
       option.filePerm = this.config.filePerm;
       option.dirPerm = this.config.dirPerm;
-      await sync(
-        {
-          srcFsPath: localFsPath,
-          srcFs: localFs,
-          targetFsPath: remoteFsPath,
-          targetFs: remoteFs,
-          transferOption: option,
-          transferDirection: TransferDirection.LOCAL_TO_REMOTE,
-        },
-        t => scheduler.add(t)
-      );
-      const result = await scheduler.run();
-      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'upload');
+      await runResumable<SyncOption>({
+        ctx: this,
+        action: option.bothDiretions ? 'sync' : 'upload',
+        option,
+        walk: (remoteFs, attemptOption, collect) =>
+          sync(
+            {
+              srcFsPath: localFsPath,
+              srcFs: localFs,
+              targetFsPath: remoteFsPath,
+              targetFs: remoteFs,
+              transferOption: attemptOption,
+              transferDirection: TransferDirection.LOCAL_TO_REMOTE,
+            },
+            collect
+          ).then(() => undefined),
+      });
     };
 
     // both directions also downloads, and those writes must not be mirrored
@@ -189,23 +163,25 @@ export const sync2Local = createFileHandler<SyncOption>({
     // everything this writes (and, with syncOption.delete, removes) locally is
     // the extension's doing, not an edit to upload or a deletion to mirror
     return suppressAutoSync(async () => {
-      const remoteFs = await this.fileService.getRemoteFileSystem(this.config);
       const localFs = this.fileService.getLocalFileSystem();
       const { localFsPath, remoteFsPath } = this.target;
-      const scheduler = this.fileService.createTransferScheduler(this.config.concurrency);
-      await sync(
-        {
-          srcFsPath: remoteFsPath,
-          srcFs: remoteFs,
-          targetFsPath: localFsPath,
-          targetFs: localFs,
-          transferOption: option,
-          transferDirection: TransferDirection.REMOTE_TO_LOCAL,
-        },
-        t => scheduler.add(t)
-      );
-      const result = await scheduler.run();
-      assertTransferSucceeded(result, option.bothDiretions ? 'sync' : 'download');
+      await runResumable<SyncOption>({
+        ctx: this,
+        action: option.bothDiretions ? 'sync' : 'download',
+        option,
+        walk: (remoteFs, attemptOption, collect) =>
+          sync(
+            {
+              srcFsPath: remoteFsPath,
+              srcFs: remoteFs,
+              targetFsPath: localFsPath,
+              targetFs: localFs,
+              transferOption: attemptOption,
+              transferDirection: TransferDirection.REMOTE_TO_LOCAL,
+            },
+            collect
+          ).then(() => undefined),
+      });
     });
   },
   transformOption() {
