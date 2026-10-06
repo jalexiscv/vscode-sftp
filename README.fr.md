@@ -46,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 901 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 920 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -169,6 +169,8 @@ La v1.29.0 répond à un symptôme précis : l'extension continuait à proposer 
 
 **v1.29.1 (correctif).** Les fichiers de 0 octet se téléversent de nouveau en FTPS : face à un serveur en TLS 1.3 (Pure-FTPd, par exemple), chacun d'eux fermait la session avec une alerte `decode error` sur le socket de données et remettait le plan en attente, encore et encore. De plus, un fichier dont le téléversement perd la connexion trois fois de suite passe à `failed` et le plan continue avec le reste au lieu de rester bloqué dessus.
 
+**v1.29.2 (correctif).** Une commande de dossier (`Upload Folder`, `Sync…`, `Download Folder`) interrompue par une perte de connexion ne s'arrête plus là, avec le reste de l'arborescence non envoyé et un dialogue par dossier sélectionné : elle attend le retour de la connexion, se reconnecte et reprend là où elle en était, sans renvoyer les fichiers déjà vérifiés, jusqu'à dix fois, comme le fait un plan. De plus, un dossier sélectionné avec l'un de ses sous-dossiers n'est parcouru qu'une fois ; auparavant chaque fichier sous les deux était envoyé deux fois en même temps.
+
 ## Ce que nous attendons de cette version
 
 - **Un remplacement direct (drop-in).** Le même format de `sftp.json`, les mêmes commandes, les mêmes flux de travail — les configurations existantes fonctionnent sans aucune migration.
@@ -193,7 +195,7 @@ La v1.29.0 répond à un symptôme précis : l'extension continuait à proposer 
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.29.1.vsix
+code --install-extension sftp-1.29.2.vsix
 ```
 
 ## Documentation

@@ -46,7 +46,7 @@ Rather than letting a tool used by thousands of developers degrade, we forked it
 
 ## What we updated
 
-Every fix was verified (clean webpack build, 901 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Every fix was verified (clean webpack build, 920 tests, linter with no errors) before being published. The details of each change live in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — foundations and critical fixes
 
@@ -169,6 +169,8 @@ v1.29.0 answers one specific symptom: the extension kept proposing as "modified"
 
 **v1.29.1 (fix).** 0-byte files upload over FTPS again: against a server with TLS 1.3 (Pure-FTPd, for one) each of them closed the session with a `decode error` alert on the data socket and put the plan on hold over and over. And a file whose upload loses the connection three times in a row is now marked `failed`, so the plan goes on with the rest instead of staying held on it.
 
+**v1.29.2 (fix).** A folder command (`Upload Folder`, `Sync…`, `Download Folder`) interrupted by a lost connection no longer ends there, with the rest of the tree untouched and one dialog per selected folder: it waits for the connection to come back, reconnects and goes on where it was, without sending the already verified files again, up to ten times, as a plan does. And a folder selected together with one of its subfolders is walked once; every file under both used to be uploaded twice at the same time.
+
 ## What we expect from this release
 
 - **A drop-in replacement.** The same `sftp.json` format, the same commands, the same workflows — existing configurations work without any migration.
@@ -193,7 +195,7 @@ v1.29.0 answers one specific symptom: the extension kept proposing as "modified"
 Or from the command line:
 
 ```
-code --install-extension sftp-1.29.1.vsix
+code --install-extension sftp-1.29.2.vsix
 ```
 
 ## Documentation
