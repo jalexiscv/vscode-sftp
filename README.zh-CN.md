@@ -19,7 +19,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 - [为什么会有这个分支](#为什么会有这个分支)
 - [我们更新了什么](#我们更新了什么)
-- [v1.29.0 新功能](#v1290-新功能)
+- [v1.30.0 新功能](#v1300-新功能)
 - [我们对这个版本的期望](#我们对这个版本的期望)
 - [安装](#安装)
 - [文档](#文档)
@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、920 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、957 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -156,12 +156,10 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 | **更少的 FTP 连接** | 五分钟没有命令的 FTP 连接会被关闭（`NOOP` 不算），下次使用时重新打开；此前每个配置文件、每个 `sftp.json` 条目、每个窗口各保持一条连接直到会话结束。随套接字一起中断的命令会立即报告，而不是等到下一次 keepalive；切换配置文件会关闭前一个配置文件的连接；已断开的 SSH 客户端迟到的 `close` 不再拆掉替代它的连接 |
 | **更少的误报更改** | `.git`、`.svn` 和 `.hg` 在任何深度默认被忽略（编辑器的 git 集成每次 `status` 都会重写 `.git/index` 和 `FETCH_HEAD`；在 `ignore` 中写 `"!.git"` 可恢复），对大小和 mtime（精确到秒）与索引已验证版本一致的文件，watcher 事件或保存不再规划上传：事件不等于编辑 |
 
-## v1.29.0 新功能
+### [v1.29.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.29.0) — 内容指纹
 
-v1.29.0 针对一个具体症状：扩展仍然把内容没有变化的文件当作"已修改"提出上传。原因在于索引的规则——大小加精确到秒的 mtime——而 mtime 会因很多并非编辑的原因而变化：内容完全相同的 `git checkout`、`stash` 或 `pull`，一次复制或从备份恢复，重新写出相同文本的格式化工具或构建步骤，一次 `touch`。现在索引保存内容指纹，只有字节真正变化的文件才算作已修改。
-
-| 新功能 | 作用 |
-|--------|------|
+| 领域 | 变更 |
+|------|------|
 | **内容指纹** | 每次经过验证的上传都会在索引中记录所发送字节的 SHA-1，直接在数据流上计算（任何文件都不会被读两次）；下载同样如此。扫描、watcher 事件、轮询或预览发现一个大小相同但 mtime 不同的文件时，会读取一次并比较指纹：一致则不再处理，并把索引条目移到新的 mtime，以免再次读取；只有字节不同才算 `modified`。大小不同仍然无需读取即视为变更；超过 64 MB 的文件保留大小加 mtime 的规则 |
 | **带指纹的索引播种** | `SFTP: Rebuild Sync Index` 和 `SFTP: Mark Local Files as Uploaded` 会读取它们记录的文件（进度显示 `N fingerprinted`，可取消），计划中的 `Mark as uploaded` 和 `Skip` 对各自的文件也一样：从此以后 `touch` 或内容相同的 checkout 不再是变更。输出通道会统计识别出的数量（`N file(s) rewritten with the same content, not planned`） |
 | **`externalChanges.compareContent`** | 新配置项，默认 `true`。关闭后不读取任何文件，也不记录任何指纹，扩展的行为与 1.28.0 完全一致 |
@@ -170,6 +168,17 @@ v1.29.0 针对一个具体症状：扩展仍然把内容没有变化的文件当
 **v1.29.1（修复）。** 0 字节的文件可以重新通过 FTPS 上传：面对使用 TLS 1.3 的服务器（例如 Pure-FTPd），每个空文件都会让数据套接字收到 `decode error` 警报并关闭会话，使计划一次又一次进入等待。此外，如果某个文件在上传时连续三次导致连接中断，它会被标记为 `failed`，计划继续处理其余文件，而不再被它卡住。
 
 **v1.29.2（修复）。** 被连接中断打断的文件夹命令（`Upload Folder`、`Sync…`、`Download Folder`）不再就此终止、留下其余目录树未上传并为每个选中的文件夹弹出一个对话框：它会等待连接恢复，重新连接并从中断处继续，不会重新发送已经验证过的文件，最多重试十次，与计划的行为一致。此外，与其子文件夹一同选中的文件夹只会被遍历一次；以前两者之下的每个文件都会被同时上传两次。
+
+## v1.30.0 新功能
+
+v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自动更新来自 Marketplace 的扩展，从 vsix 安装的扩展会永远保持原样。现在扩展会自行向 GitHub 查询最新 release，在有新版本时提醒你，并在你确认后下载、校验并安装。
+
+| 新功能 | 作用 |
+|--------|------|
+| **新版本提醒** | 按照 `sftp.updates.check`（默认 `daily`：每 24 小时一次；`startup`：每次激活；`off`），扩展在激活 15 秒后查询 [jalexiscv/vscode-sftp](https://github.com/jalexiscv/vscode-sftp/releases) 的最新 release，并把标签与已安装版本比较。若有更新的版本，会提供 `Install`、`Release notes` 和 `Skip this version`。未经你同意不会安装任何东西；网络故障只会在输出通道留下一行 `[updates]` |
+| **经过校验的安装** | `Install` 把 release 的 vsix 下载到扩展的全局存储，用每个 release 现在发布的 `.sha256` 校验其 SHA-256（没有校验和的 release 会在警告后不经校验地安装），通过与 *Install from VSIX…* 相同的机制安装，并提示重新加载窗口。只接受本仓库 release 中发布的 vsix；草稿和预发布版本会被忽略，更新的本地构建也不会被降级 |
+| **`SFTP: Check for Updates`** | 新命令，无论设置如何都立即查询，并在所有情况下给出答复：已是最新、没有 vsix 或没有网络。用 `Skip this version` 跳过的版本不再自动提醒，但该命令仍会提供它 |
+| **它不会做的事** | 不会在后台安装任何东西，也不会在未经你确认的情况下重新加载窗口。1.30.0 之前的 release 没有校验和：提醒会从安装本版本之后发布的第一个 release 开始出现 |
 
 ## 我们对这个版本的期望
 
@@ -195,7 +204,7 @@ v1.29.0 针对一个具体症状：扩展仍然把内容没有变化的文件当
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.29.2.vsix
+code --install-extension sftp-1.30.0.vsix
 ```
 
 ## 文档

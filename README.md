@@ -19,7 +19,7 @@ VSCode-SFTP te permite agregar, editar o eliminar archivos en un directorio loca
 
 - [Por qué existe este fork](#por-qué-existe-este-fork)
 - [Qué actualizamos](#qué-actualizamos)
-- [Novedades de la v1.29.0](#novedades-de-la-v1290)
+- [Novedades de la v1.30.0](#novedades-de-la-v1300)
 - [Qué esperamos de esta versión](#qué-esperamos-de-esta-versión)
 - [Instalación](#instalación)
 - [Documentación](#documentación)
@@ -46,7 +46,7 @@ En lugar de dejar que una herramienta usada por miles de desarrolladores se degr
 
 ## Qué actualizamos
 
-Cada corrección fue verificada (build de webpack limpio, 920 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada corrección fue verificada (build de webpack limpio, 957 tests, linter sin errores) antes de publicarse. El detalle de cada cambio vive en [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — cimientos y correcciones críticas
 
@@ -156,12 +156,10 @@ Cada corrección fue verificada (build de webpack limpio, 920 tests, linter sin 
 | **Menos conexiones FTP** | Una conexión FTP sin comandos durante cinco minutos se cierra (el `NOOP` no cuenta) y se reabre con el siguiente uso; antes se mantenía viva una por perfil, por entrada de `sftp.json` y por ventana durante toda la sesión. Un comando que muere con el socket lo avisa al instante, no en el siguiente tick del keepalive; al cambiar de perfil se cierra la conexión del anterior; un `close` tardío de un cliente SSH muerto ya no tumba la conexión que lo reemplazó |
 | **Menos falsos cambios** | `.git`, `.svn` y `.hg` se ignoran por defecto a cualquier profundidad (la integración git del editor reescribe `.git/index` y `FETCH_HEAD` en cada `status`; `"!.git"` en `ignore` lo recupera), y un evento del watcher o un guardado sobre un archivo cuyo tamaño y mtime (al segundo) son los que el índice verificó ya no se planifica: un evento no es una edición |
 
-## Novedades de la v1.29.0
+### [v1.29.0](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.29.0) — huella de contenido
 
-La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo como "modificados" archivos cuyo contenido no había cambiado. La causa era la regla del índice —tamaño y mtime al segundo—, y el mtime se mueve por muchos motivos que no son una edición: un `git checkout`, `stash` o `pull` que deja el contenido idéntico, una copia o una restauración de copia de seguridad, un formateador o un paso de build que reescribe el mismo texto, un `touch`. Ahora el índice guarda una huella del contenido y un archivo solo cuenta como modificado si cambiaron sus bytes.
-
-| Novedad | Qué aporta |
-|---------|------------|
+| Área | Cambio |
+|------|--------|
 | **Huella de contenido** | Cada subida verificada guarda en el índice el SHA-1 de los bytes que envió, calculado sobre el propio flujo (nada se lee dos veces); las descargas también. Un escaneo, un evento del watcher, un sondeo o una vista previa que encuentra un archivo con el mismo tamaño y otro mtime lo lee una vez, compara la huella y, si coincide, lo deja en paz y mueve la entrada al mtime nuevo para no volver a leerlo; solo bytes distintos lo hacen `modified`. Un tamaño distinto sigue siendo cambio sin lectura; los archivos de más de 64 MB conservan la regla de tamaño y mtime |
 | **Siembra con huella** | `SFTP: Rebuild Sync Index` y `SFTP: Mark Local Files as Uploaded` leen los archivos que registran (progreso `N fingerprinted`, cancelable), y `Mark as uploaded` y `Skip` en un plan hacen lo mismo con los suyos: a partir de ahí un `touch` o un checkout idéntico ya no es un cambio. El canal de salida cuenta lo reconocido (`N file(s) rewritten with the same content, not planned`) |
 | **`externalChanges.compareContent`** | Clave nueva, `true` por defecto. Apagada, no se lee ningún archivo ni se anota huella alguna y la extensión se comporta exactamente como la 1.28.0 |
@@ -170,6 +168,17 @@ La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo co
 **v1.29.1 (corrección).** Los archivos de 0 bytes vuelven a subir por FTPS: contra un servidor con TLS 1.3 (Pure-FTPd, por ejemplo) cada uno cerraba la sesión con una alerta `decode error` en el socket de datos y dejaba el plan en espera una y otra vez. Además, un archivo en cuya subida la conexión se cae tres veces seguidas pasa a `failed` y el plan continúa con el resto en lugar de quedarse retenido en él.
 
 **v1.29.2 (corrección).** Un comando de carpeta (`Upload Folder`, `Sync…`, `Download Folder`) interrumpido por una pérdida de conexión ya no termina ahí con el resto del árbol sin subir y un diálogo por carpeta seleccionada: espera a que la conexión vuelva, reconecta y continúa donde iba, sin reenviar los archivos ya verificados, hasta diez veces, como hace un plan. Además, una carpeta seleccionada junto con una de sus subcarpetas se recorre una sola vez; antes cada archivo bajo ambas se subía dos veces a la vez.
+
+## Novedades de la v1.30.0
+
+La v1.30.0 cierra un hueco de la distribución fuera del Marketplace: VS Code solo actualiza por su cuenta las extensiones que vienen de allí, y una instalada desde un vsix se quedaba como estaba para siempre. Ahora la propia extensión consulta la última release de GitHub, avisa cuando hay una versión más nueva y, si se lo pides, la descarga, la verifica y la instala.
+
+| Novedad | Qué aporta |
+|---------|------------|
+| **Aviso de versión nueva** | Según `sftp.updates.check` (`daily` por defecto: una vez cada 24 h; `startup`: en cada activación; `off`), la extensión consulta la última release de [jalexiscv/vscode-sftp](https://github.com/jalexiscv/vscode-sftp/releases) 15 s después de activarse y compara el tag con la versión instalada. Si hay una mayor, ofrece `Install`, `Release notes` y `Skip this version`. Nada se instala sin que lo pidas; un fallo de red solo deja una línea `[updates]` en el canal de salida |
+| **Instalación verificada** | `Install` descarga el vsix de la release al almacenamiento global de la extensión, comprueba su SHA-256 contra el `.sha256` que ahora publica cada release (una release sin él se instala sin verificar y se avisa), lo instala con el mismo mecanismo que *Install from VSIX…* y ofrece recargar la ventana. Solo se acepta un vsix publicado en las releases de este repositorio; borradores y prereleases se ignoran, y un build local más nuevo no se degrada |
+| **`SFTP: Check for Updates`** | Comando nuevo que consulta ahora mismo, diga lo que diga el ajuste, y responde en todos los casos: al día, sin vsix o sin red. Una versión omitida con `Skip this version` deja de avisar sola, pero el comando la sigue ofreciendo |
+| **Lo que no hace** | No se instala nada en segundo plano ni se recarga la ventana sin tu confirmación. Las releases anteriores a la 1.30.0 no tienen checksum: el aviso aparecerá a partir de la siguiente release que se publique después de instalar esta |
 
 ## Qué esperamos de esta versión
 
@@ -195,7 +204,7 @@ La v1.29.0 responde a un síntoma concreto: la extensión seguía proponiendo co
 O desde la línea de comandos:
 
 ```
-code --install-extension sftp-1.29.2.vsix
+code --install-extension sftp-1.30.0.vsix
 ```
 
 ## Documentación
