@@ -1,12 +1,18 @@
 import {
   isConnectionLostError,
+  isCertificateError,
+  describeCertificateError,
+  connectionFailureReason,
   markConnectionLost,
   ConnectionGate,
   ConnectionOnHoldError,
+  CertificateRejectedError,
+  CERTIFICATE_HINT,
   ERROR_CODE_CONNECTION_ON_HOLD,
   BASE_BACKOFF_MS,
   MAX_BACKOFF_MS,
   SERVICE_UNAVAILABLE_BACKOFF_MS,
+  CERTIFICATE_BACKOFF_MS,
   getConnectionGate,
   onConnectionRecovered,
   onConnectionAttemptFailed,
@@ -96,6 +102,32 @@ describe('isConnectionLostError', () => {
     expect(error.message).toBe(
       '[example.test]: connection is down (connect ECONNREFUSED); next attempt in 4 s'
     );
+  });
+
+  test.each([
+    ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'unable to verify the first certificate'],
+    ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'unable to get local issuer certificate'],
+    ['SELF_SIGNED_CERT_IN_CHAIN', 'self signed certificate in certificate chain'],
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self signed certificate'],
+    ['CERT_HAS_EXPIRED', 'certificate has expired'],
+    [
+      'ERR_TLS_CERT_ALTNAME_INVALID',
+      'Hostname/IP does not match certificate\'s altnames: Host: ftp.example.test. is not in the cert\'s altnames: DNS:server.example.net',
+    ],
+  ])('a refused certificate (%s) is a failure of the connection too', (code, message) => {
+    const error = withCode(code, message);
+    expect(isCertificateError(error)).toBe(true);
+    expect(isConnectionLostError(error)).toBe(true);
+  });
+
+  test('a refused certificate is told apart by message when the code was dropped; nothing else is one', () => {
+    expect(isCertificateError(new Error('unable to verify the first certificate'))).toBe(true);
+    expect(isCertificateError(new Error('certificate has expired'))).toBe(true);
+    expect(isCertificateError('self-signed certificate')).toBe(true);
+    expect(isCertificateError(withCode('ECONNRESET', 'read ECONNRESET'))).toBe(false);
+    expect(isCertificateError(withCode(530, '530 Login incorrect.'))).toBe(false);
+    expect(isCertificateError(new Error('All configured authentication methods failed'))).toBe(false);
+    expect(isCertificateError(null)).toBe(false);
   });
 });
 
@@ -190,6 +222,70 @@ describe('ConnectionGate', () => {
     expect(gate.reason).toBe('read failed (ECONNRESET)');
     gate.recordFailure(withCode('ECONNRESET', 'read ECONNRESET'));
     expect(gate.reason).toBe('read ECONNRESET');
+  });
+});
+
+describe('a refused certificate', () => {
+  // what node says for a server that sends its leaf certificate without the
+  // intermediate that issued it; the hint is about a flag of the node binary
+  const nodeError = withCode(
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca'
+  );
+  const reason =
+    'certificate rejected: unable to verify the first certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE)';
+
+  test('is described in one line, without node\'s hint, with the code when the message lost it', () => {
+    expect(describeCertificateError(nodeError)).toBe(reason);
+    expect(describeCertificateError(withCode('CERT_HAS_EXPIRED', 'certificate has expired'))).toBe(
+      'certificate rejected: certificate has expired (CERT_HAS_EXPIRED)'
+    );
+    expect(describeCertificateError(new Error('certificate has expired'))).toBe(
+      'certificate rejected: certificate has expired'
+    );
+  });
+
+  test('CertificateRejectedError names the host, keeps the code and says the way out', () => {
+    const error = new CertificateRejectedError(nodeError, 'ftp.example.test');
+    expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe('UNABLE_TO_VERIFY_LEAF_SIGNATURE');
+    expect(error.host).toBe('ftp.example.test');
+    expect(error.cause).toBe(nodeError);
+    expect(error.reason).toBe(reason);
+    expect(error.message).toBe(`[ftp.example.test]: ${reason}. ${CERTIFICATE_HINT}`);
+    expect(error.message).not.toContain('--use-system-ca');
+    expect(CERTIFICATE_HINT).toContain('"secureOptions": { "rejectUnauthorized": false }');
+    expect(isCertificateError(error)).toBe(true);
+    expect(isConnectionLostError(error)).toBe(true);
+  });
+
+  test('the gate holds for a minute at least: nothing a retry fixes', () => {
+    let now = 1_000_000;
+    const gate = new ConnectionGate('ftp.example.test', () => now);
+    gate.recordFailure(new CertificateRejectedError(nodeError, 'ftp.example.test'));
+    expect(gate.consecutiveFailures).toBe(1);
+    expect(gate.retryAfter()).toBe(CERTIFICATE_BACKOFF_MS);
+    expect(gate.reason).toBe(reason);
+
+    // the bare node error, before the connection layer wrapped it, is held the same
+    const bare = new ConnectionGate('ftp.example.test', () => now);
+    bare.recordFailure(nodeError);
+    expect(bare.retryAfter()).toBe(CERTIFICATE_BACKOFF_MS);
+    expect(bare.reason).toBe(reason);
+
+    now += CERTIFICATE_BACKOFF_MS;
+    expect(gate.retryAfter()).toBe(0);
+    expect(() => gate.assertMayAttempt()).not.toThrow();
+  });
+
+  test('connectionFailureReason: the short form of a certificate, the hold error as it is, the code otherwise', () => {
+    expect(connectionFailureReason(new CertificateRejectedError(nodeError, 'h'))).toBe(reason);
+    expect(connectionFailureReason(nodeError)).toBe(reason);
+    const hold = new ConnectionOnHoldError('example.test', 4000, 'read ECONNRESET');
+    expect(connectionFailureReason(hold)).toBe(hold.message);
+    expect(connectionFailureReason(withCode('ECONNRESET', 'boom'))).toBe('boom (ECONNRESET)');
+    expect(connectionFailureReason(withCode('ECONNRESET', 'read ECONNRESET'))).toBe('read ECONNRESET');
+    expect(connectionFailureReason('plain text')).toBe('plain text');
   });
 });
 

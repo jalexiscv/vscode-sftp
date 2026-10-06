@@ -2,6 +2,7 @@
 
 | #  | Fecha      | Descripción breve                                    | Detalle                                              |
 |----|------------|------------------------------------------------------|------------------------------------------------------|
+| 71 | 2026-10-06 | Un certificado FTPS rechazado se trata como fallo de conexión, con aviso y salida | [Ver detalle](2026-10-06_fix_certificado_rechazado.md) |
 | 70 | 2026-10-05 | Release 1.30.0: actualización desde las releases de GitHub | [Ver detalle](2026-10-05_release_1_30_0.md) |
 | 69 | 2026-10-05 | Actualización desde las releases de GitHub: `sftp.updates.check` y `SFTP: Check for Updates` | [Ver detalle](2026-10-05_feat_actualizacion_desde_github.md) |
 | 68 | 2026-10-05 | Release 1.29.2: comandos de carpeta que sobreviven a la pérdida de conexión | [Ver detalle](2026-10-05_release_1_29_2.md) |

@@ -6,7 +6,10 @@ import {
   TransferFailedError,
 } from '../../core';
 import {
+  CERTIFICATE_HINT,
   ConnectionGate,
+  connectionFailureReason,
+  isCertificateError,
   isConnectionLostError,
   markConnectionLost,
 } from '../../core/connectionHealth';
@@ -94,7 +97,7 @@ const ACTION_GERUND: { [action in TransferAction]: string } = {
 // forgets them when they come back
 const outageNotified = new Map<ConnectionGate, () => void>();
 
-function notifyOutage(gate: ConnectionGate, action: TransferAction, label: string, reason: string) {
+function notifyOutage(gate: ConnectionGate, action: TransferAction, label: string, lost: Error) {
   if (outageNotified.has(gate)) {
     return;
   }
@@ -103,6 +106,15 @@ function notifyOutage(gate: ConnectionGate, action: TransferAction, label: strin
     outageNotified.delete(gate);
   });
   outageNotified.set(gate, unsubscribe);
+  const reason = connectionFailureReason(lost);
+  if (isCertificateError(lost)) {
+    // not an outage: nothing comes back on its own, the user has to act
+    showWarningMessage(
+      `SFTP: ${gate.label}: ${reason}. The ${action} of ${label} is on hold until the ` +
+        `certificate or the configuration is fixed. ${CERTIFICATE_HINT}`
+    );
+    return;
+  }
   showWarningMessage(
     `SFTP: connection to ${gate.label} lost (${reason}). The ${action} of ${label} ` +
       'is on hold and will resume when it is back.'
@@ -180,12 +192,15 @@ export function assertTransferSucceeded(
   const error = new TransferFailedError(result.failed, total, action);
   if (result.connectionLost) {
     // not flagged as reported, and it says the rest was not tried
-    error.message =
-      `Connection lost while trying to ${action} (${result.connectionLost.message}): ` +
+    const outcome =
       `${result.succeeded.length} done, ${result.failed.length} interrupted; ` +
       'the remaining files were not attempted' +
-      (resumes > 0 ? `, after ${resumes} attempt(s) to resume` : '') +
-      '. Run the command again once the server is back.';
+      (resumes > 0 ? `, after ${resumes} attempt(s) to resume` : '');
+    const reason = connectionFailureReason(result.connectionLost);
+    error.message = isCertificateError(result.connectionLost)
+      ? `Could not ${action} (${reason}): ${outcome}. ${CERTIFICATE_HINT}`
+      : `Connection lost while trying to ${action} (${reason}): ${outcome}. ` +
+        'Run the command again once the server is back.';
     // flagged as a loss too, so a command over several selections reports
     // one outage, not one dialog per selection
     throw markConnectionLost(error);
@@ -305,11 +320,11 @@ export async function runResumable<O extends IgnoreOption>(run: ResumableRun<O>)
     const gate = ctx.fileService.getConnectionGate(ctx.config);
     const delay = Math.max(minResumeDelayMs, gate.retryAfter());
     logger.warn(
-      `[${action}] ${label} on hold: ${lost.message}; resuming in ${Math.ceil(delay / 1000)} s ` +
+      `[${action}] ${label} on hold: ${connectionFailureReason(lost)}; resuming in ${Math.ceil(delay / 1000)} s ` +
         `(${resumes}/${MAX_RESUMES}, ${succeeded.length} file(s) done so far)`
     );
     app.sftpBarItem.showMsg(`${action} on hold: ${label}`, label, delay);
-    notifyOutage(gate, action, label, lost.message);
+    notifyOutage(gate, action, label, lost);
     await waitForConnection(gate, delay);
     logger.info(`[${action}] ${label}: resuming (${resumes}/${MAX_RESUMES})`);
   }
