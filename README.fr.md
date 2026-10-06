@@ -46,7 +46,7 @@ Plutôt que de laisser se dégrader un outil utilisé par des milliers de dével
 
 ## Ce que nous avons mis à jour
 
-Chaque correction a été vérifiée (build webpack propre, 957 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Chaque correction a été vérifiée (build webpack propre, 971 tests, linter sans erreurs) avant publication. Le détail de chaque changement se trouve dans [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — fondations et corrections critiques
 
@@ -180,6 +180,8 @@ La v1.30.0 comble une lacune de la distribution hors Marketplace : VS Code ne me
 | **`SFTP: Check for Updates`** | Nouvelle commande qui interroge tout de suite, quel que soit le réglage, et répond dans tous les cas : à jour, pas de vsix, pas de réseau. Une version ignorée avec `Skip this version` n'est plus annoncée d'elle-même, mais la commande la propose toujours |
 | **Ce qu'elle ne fait pas** | Rien n'est installé en arrière-plan et la fenêtre n'est jamais rechargée sans votre confirmation. Les releases antérieures à la 1.30.0 n'ont pas de somme de contrôle : l'avis apparaîtra à partir de la première release publiée après l'installation de celle-ci |
 
+**v1.30.1 (correctif).** Un certificat FTPS que le client refuse (chaîne incomplète, auto-signé, expiré ou émis pour un autre nom) ne marque plus chaque fichier comme échoué et n'ouvre plus une boîte de dialogue par enregistrement avec l'erreur brute d'OpenSSL : il est traité comme une perte de connexion, les plans sont mis en attente, les tentatives sont retenues une minute et un seul avis par serveur dit ce qui ne va pas et la sortie (une chaîne complète sur le serveur, ou `"secureOptions": { "rejectUnauthorized": false }` pour l'accepter sans vérification).
+
 ## Ce que nous attendons de cette version
 
 - **Un remplacement direct (drop-in).** Le même format de `sftp.json`, les mêmes commandes, les mêmes flux de travail — les configurations existantes fonctionnent sans aucune migration.
@@ -204,7 +206,7 @@ La v1.30.0 comble une lacune de la distribution hors Marketplace : VS Code ne me
 Ou depuis la ligne de commande :
 
 ```
-code --install-extension sftp-1.30.0.vsix
+code --install-extension sftp-1.30.1.vsix
 ```
 
 ## Documentation
