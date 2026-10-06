@@ -33,7 +33,11 @@ import { vol } from 'memfs';
 import FileService from '../../../core/fileService';
 import { TransferFailedError } from '../../../core';
 import { setRetryBaseDelayForTest } from '../../../core/transferTask';
-import { ConnectionGate, ConnectionOnHoldError } from '../../../core/connectionHealth';
+import {
+  CertificateRejectedError,
+  ConnectionGate,
+  ConnectionOnHoldError,
+} from '../../../core/connectionHealth';
 import { isReported } from '../../../helper';
 import { showWarningMessage } from '../../../host';
 import logger from '../../../logger';
@@ -262,6 +266,41 @@ describe('transfer handlers: a lost connection holds the command and resumes it'
     expect(isReported(error)).toBe(false);
     expect(warn.mock.calls.map(call => call[0])).toContainEqual(
       expect.stringMatching(/^\[upload\] .*dir not resumed any more after 10 attempt\(s\): Client is closed/)
+    );
+  });
+
+  test('a refused certificate holds the command the same way; the notices say what to do, not that the server is down', async () => {
+    const nodeError = Object.assign(
+      new Error(
+        'unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca'
+      ),
+      { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }
+    );
+    const rejected = new CertificateRejectedError(nodeError, 'example.test');
+    const reason =
+      'certificate rejected: unable to verify the first certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE)';
+    const hint =
+      'Have the server send its complete certificate chain, issued for this host name, ' +
+      'or accept the certificate unverified with "secureOptions": { "rejectUnauthorized": false } in sftp.json.';
+    const { service, getRemoteFileSystem } = createService(rejected);
+
+    const error = await rejectionOf(uploadFolder(contextFor(service, '/local/dir', '/remote/dir')));
+
+    expect(getRemoteFileSystem).toHaveBeenCalledTimes(MAX_RESUMES + 1);
+    expect(error).toBeInstanceOf(TransferFailedError);
+    expect(error.message).toBe(
+      `Could not upload (${reason}): 0 done, 0 interrupted; the remaining files were not attempted, ` +
+        `after ${MAX_RESUMES} attempt(s) to resume. ${hint}`
+    );
+    expect((error as any).connectionLost).toBe(true);
+    expect(warned()).toEqual([
+      `SFTP: example.test: ${reason}. The upload of /local/dir is on hold until the certificate or the ` +
+        `configuration is fixed. ${hint}`,
+    ]);
+    expect(warn.mock.calls.map(call => call[0])).toContainEqual(
+      expect.stringMatching(
+        /^\[upload\] .*dir on hold: certificate rejected: unable to verify the first certificate \(UNABLE_TO_VERIFY_LEAF_SIGNATURE\); resuming in 1 s \(1\/10, 0 file\(s\) done so far\)$/
+      )
     );
   });
 

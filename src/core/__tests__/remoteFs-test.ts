@@ -44,6 +44,8 @@ jest.mock('../fs', () => {
 
 import { createRemoteIfNoneExist, removeRemoteFs, connectionGateOf } from '../remoteFs';
 import {
+  CERTIFICATE_BACKOFF_MS,
+  CertificateRejectedError,
   ERROR_CODE_CONNECTION_ON_HOLD,
   onConnectionRecovered,
   __resetConnectionGatesForTest,
@@ -139,6 +141,42 @@ describe('createRemoteIfNoneExist under a failing network', () => {
 
     FakeRemoteFs.connectImpl = () => Promise.resolve();
     await expect(createRemoteIfNoneExist(option)).resolves.toBe(FakeRemoteFs.instances[1]);
+  });
+
+  test('a refused certificate is told with the host and the way out, and holds the attempts for a minute', async () => {
+    FakeRemoteFs.connectImpl = () =>
+      Promise.reject(
+        networkError(
+          'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+          'unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca'
+        )
+      );
+
+    const first = await rejectionOf(createRemoteIfNoneExist(option));
+    expect(first).toBeInstanceOf(CertificateRejectedError);
+    expect(first.code).toBe('UNABLE_TO_VERIFY_LEAF_SIGNATURE');
+    expect(first.host).toBe('example.test');
+    expect(first.message).toMatch(
+      /^\[example\.test\]: certificate rejected: unable to verify the first certificate \(UNABLE_TO_VERIFY_LEAF_SIGNATURE\)\. Have the server send its complete certificate chain/
+    );
+    expect(first.message).not.toContain('--use-system-ca');
+    expect(FakeRemoteFs.instances[0].ended).toBe(1);
+
+    // nothing a retry fixes: held for a minute, with the reason in short form
+    const held = await rejectionOf(createRemoteIfNoneExist(option));
+    expect(held.code).toBe(ERROR_CODE_CONNECTION_ON_HOLD);
+    expect(held.message).toBe(
+      '[example.test]: connection is down (certificate rejected: unable to verify the first certificate ' +
+        '(UNABLE_TO_VERIFY_LEAF_SIGNATURE)); next attempt in 60 s'
+    );
+    expect(connectionGateOf(option).retryAfter()).toBe(CERTIFICATE_BACKOFF_MS);
+    expect(FakeRemoteFs.instances).toHaveLength(1);
+
+    // a corrected configuration is another identity, with a gate of its own
+    FakeRemoteFs.connectImpl = () => Promise.resolve();
+    const accepted = { ...option, secureOptions: { rejectUnauthorized: false } };
+    await expect(createRemoteIfNoneExist(accepted)).resolves.toBe(FakeRemoteFs.instances[1]);
+    removeRemoteFs(accepted);
   });
 });
 

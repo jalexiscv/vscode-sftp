@@ -33,5 +33,9 @@ Additional options to be passed to `tls.connect()`.
 }
 ```
 
+| 💡 Note |
+| :--- |
+| *A certificate the TLS layer refuses — an incomplete chain (`unable to verify the first certificate`), a self-signed or expired one, a name it was not issued for — is reported once per server with what to do, and the connection is held like a lost one: see [Connection loss and reconnection](common_configuration.md#connection-loss-and-reconnection). `"rejectUnauthorized": false` accepts any certificate; `"ca": ["-----BEGIN CERTIFICATE-----…"]` with the missing intermediate and the root in PEM keeps the check strict.* |
+
 ### Idle connections
 Since 1.28.0 an FTP control connection that has not run a command for **five minutes** is closed (the keepalive `NOOP` does not count as use) and reopened, at the cost of one login, by the next operation. Shared hosts cap the sessions per IP — often 4 to 8 — and a connection per profile, per `sftp.json` entry and per window kept alive for the whole session is what used that cap up and earned `421 Too many connections`. A command that fails because the socket died reports the drop at once, and new attempts are then held for a growing delay (a minute at least after a `421`): see [Connection loss and reconnection](common_configuration.md#connection-loss-and-reconnection).

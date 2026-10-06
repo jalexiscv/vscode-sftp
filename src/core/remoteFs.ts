@@ -17,7 +17,12 @@ import {
   FTPFileSystem,
 } from './fs';
 import localFs from './localFs';
-import { ConnectionGate, getConnectionGate } from './connectionHealth';
+import {
+  CertificateRejectedError,
+  ConnectionGate,
+  getConnectionGate,
+  isCertificateError,
+} from './connectionHealth';
 
 function hashOption(opiton) {
   return Object.keys(opiton)
@@ -172,10 +177,20 @@ class KeepAliveRemoteFs {
         this.pendingPromise = null;
         this.isValid = false;
         fs.end();
-        // a network failure starts the hold; a wrong password or a cancelled
-        // prompt does not (the gate ignores those)
-        this.gate.recordFailure(err);
-        throw err;
+        // a refused server certificate is told as what it is, with the way
+        // out, in place of the bare OpenSSL error and node's hint about
+        // `--use-system-ca` (which nobody can act on from an extension host)
+        const failure =
+          isCertificateError(err) && !(err instanceof CertificateRejectedError)
+            ? new CertificateRejectedError(err, String(connectOption.host || this.gate.label))
+            : err;
+        if (failure instanceof CertificateRejectedError) {
+          logger.warn(`[connection] ${this.gate.label}: ${failure.reason}`);
+        }
+        // a network failure (or a refused certificate) starts the hold; a
+        // wrong password or a cancelled prompt does not (the gate ignores those)
+        this.gate.recordFailure(failure);
+        throw failure;
       }
     );
 

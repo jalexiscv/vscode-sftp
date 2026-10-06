@@ -511,6 +511,37 @@ describe('runPlan', () => {
       expect(getHeldPlanIds().sort()).toEqual([plan.id, other.id].sort());
     });
 
+    test('a refused certificate holds the plan too; the notice says what to do instead of announcing an outage', async () => {
+      vol.fromJSON({ '/local/a.txt': 'a' }, '/');
+      const service = createService(createRemoteFs());
+      (service as any).getRemoteFileSystem = () =>
+        Promise.reject(
+          Object.assign(
+            new Error(
+              'unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca'
+            ),
+            { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }
+          )
+        );
+      const plan = planOf([draft('/local/a.txt')]);
+
+      const summary = await runPlan(plan.id);
+
+      expect(summary).toMatchObject({ pending: 1, failed: 0, verified: 0 });
+      expect(itemOf(plan, 'a.txt').status).toBe('pending');
+      expect(itemOf(plan, 'a.txt').error).toBe(
+        'on hold: certificate rejected: unable to verify the first certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE)'
+      );
+      expect(getHeldPlanIds()).toEqual([plan.id]);
+      expect(showWarningMessageMock).toHaveBeenCalledTimes(1);
+      expect(showWarningMessageMock.mock.calls[0][0]).toBe(
+        'SFTP: example.test: certificate rejected: unable to verify the first certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE). ' +
+          '1 upload(s) of staging are on hold until the certificate or the configuration is fixed. ' +
+          'Have the server send its complete certificate chain, issued for this host name, ' +
+          'or accept the certificate unverified with "secureOptions": { "rejectUnauthorized": false } in sftp.json.'
+      );
+    });
+
     describe('an item the connection dies on every time', () => {
       // b.txt is a file the server answers by dropping the session
       function dropSessionOnB(remoteFs: TestFs) {

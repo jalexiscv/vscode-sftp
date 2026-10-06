@@ -6,7 +6,10 @@ import logger from '../logger';
 import fsPromises from '../helper/fsPromises';
 import { FileService, ServiceConfig, UResource, TransferDirection, FileSystem } from '../core';
 import {
+  CERTIFICATE_HINT,
   ConnectionGate,
+  connectionFailureReason,
+  isCertificateError,
   isConnectionLostError,
   onConnectionRecovered,
 } from '../core/connectionHealth';
@@ -327,7 +330,7 @@ function failAll(plan: UploadPlan, items: UploadPlanItem[], message: string) {
 // the connection went, not the files: they are due again, and the reason is
 // kept on the item so the view says why they wait
 function holdAll(plan: UploadPlan, items: UploadPlanItem[], error: any) {
-  const message = `on hold: ${error && error.message ? error.message : String(error)}`;
+  const message = `on hold: ${connectionFailureReason(error)}`;
   items.forEach(item => {
     if (item.status === 'uploading' || item.status === 'pending' || item.status === 'stale') {
       updateItem(plan.id, item.localPath, { status: 'pending', error: message });
@@ -582,7 +585,7 @@ async function runGroup(plan: UploadPlan, group: ServiceGroup): Promise<GroupRes
         plan.id,
         item.localPath,
         connectionLost
-          ? { status: 'pending', error: `on hold: ${connectionLost.message}` }
+          ? { status: 'pending', error: `on hold: ${connectionFailureReason(connectionLost)}` }
           : { status: 'pending' }
       );
     }
@@ -771,9 +774,9 @@ function holdPlan(plan: UploadPlan, lost: GroupResult, options: RunPlanOptions) 
   held.set(plan.id, entry);
   ensureRecoverySubscription();
 
-  const reason = lost.connectionLost ? lost.connectionLost.message : 'connection lost';
+  const reason = lost.connectionLost ? connectionFailureReason(lost.connectionLost) : 'connection lost';
   logger.warn(`[plan ${plan.id}] ${waiting.length} file(s) on hold: ${reason}`);
-  notifyOutage(entry, waiting.length, reason);
+  notifyOutage(entry, waiting.length, reason, lost.connectionLost);
 
   if (entry.resumes >= MAX_AUTOMATIC_RESUMES) {
     logger.warn(
@@ -795,11 +798,19 @@ function holdPlan(plan: UploadPlan, lost: GroupResult, options: RunPlanOptions) 
   }
 }
 
-function notifyOutage(entry: HeldPlan, count: number, reason: string) {
+function notifyOutage(entry: HeldPlan, count: number, reason: string, lost?: Error) {
   if (outageNotified.has(entry.serviceName)) {
     return;
   }
   outageNotified.add(entry.serviceName);
+  if (lost && isCertificateError(lost)) {
+    // not an outage: nothing comes back on its own, the user has to act
+    showWarningMessage(
+      `SFTP: ${entry.host || entry.serviceName}: ${reason}. ${count} upload(s) of ${entry.serviceName} ` +
+        `are on hold until the certificate or the configuration is fixed. ${CERTIFICATE_HINT}`
+    );
+    return;
+  }
   const where = entry.host ? ` to ${entry.host}` : '';
   showWarningMessage(
     `SFTP: connection${where} lost (${reason}). ${count} upload(s) of ${entry.serviceName} ` +
