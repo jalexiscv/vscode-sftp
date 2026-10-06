@@ -46,7 +46,7 @@ Statt zuzulassen, dass ein von Tausenden Entwicklern genutztes Werkzeug verfäll
 
 ## Was wir aktualisiert haben
 
-Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 901 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Jede Korrektur wurde vor der Veröffentlichung verifiziert (sauberer Webpack-Build, 920 Tests, Linter ohne Fehler). Die Details zu jeder Änderung finden sich in [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — Fundament und kritische Korrekturen
 
@@ -169,6 +169,8 @@ v1.29.0 antwortet auf ein konkretes Symptom: Die Erweiterung schlug weiterhin Da
 
 **v1.29.1 (Korrektur).** 0-Byte-Dateien lassen sich wieder über FTPS hochladen: Gegen einen Server mit TLS 1.3 (etwa Pure-FTPd) schloss jede von ihnen die Sitzung mit einem `decode error`-Alert auf dem Daten-Socket und versetzte den Plan immer wieder in Wartestellung. Außerdem wird eine Datei, bei deren Upload die Verbindung dreimal in Folge abbricht, jetzt als `failed` markiert, und der Plan fährt mit dem Rest fort, statt an ihr hängen zu bleiben.
 
+**v1.29.2 (Korrektur).** Ein Ordnerbefehl (`Upload Folder`, `Sync…`, `Download Folder`), den ein Verbindungsabbruch unterbricht, endet nicht mehr an dieser Stelle mit dem Rest des Baums unberührt und einem Dialog pro ausgewähltem Ordner: Er wartet, bis die Verbindung zurück ist, verbindet sich neu und macht dort weiter, wo er war, ohne die bereits bestätigten Dateien erneut zu senden, bis zu zehnmal, wie ein Plan. Außerdem wird ein Ordner, der zusammen mit einem seiner Unterordner ausgewählt wurde, nur einmal durchlaufen; bisher wurde jede Datei unter beiden zweimal gleichzeitig hochgeladen.
+
 ## Was wir von dieser Version erwarten
 
 - **Ein direkter Ersatz (drop-in).** Dasselbe `sftp.json`-Format, dieselben Befehle, dieselben Arbeitsabläufe — bestehende Konfigurationen funktionieren ohne jegliche Migration.
@@ -193,7 +195,7 @@ v1.29.0 antwortet auf ein konkretes Symptom: Die Erweiterung schlug weiterhin Da
 Oder über die Kommandozeile:
 
 ```
-code --install-extension sftp-1.29.1.vsix
+code --install-extension sftp-1.29.2.vsix
 ```
 
 ## Dokumentation

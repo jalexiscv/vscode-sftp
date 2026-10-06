@@ -46,7 +46,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、901 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、920 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -169,6 +169,8 @@ v1.29.0 针对一个具体症状：扩展仍然把内容没有变化的文件当
 
 **v1.29.1（修复）。** 0 字节的文件可以重新通过 FTPS 上传：面对使用 TLS 1.3 的服务器（例如 Pure-FTPd），每个空文件都会让数据套接字收到 `decode error` 警报并关闭会话，使计划一次又一次进入等待。此外，如果某个文件在上传时连续三次导致连接中断，它会被标记为 `failed`，计划继续处理其余文件，而不再被它卡住。
 
+**v1.29.2（修复）。** 被连接中断打断的文件夹命令（`Upload Folder`、`Sync…`、`Download Folder`）不再就此终止、留下其余目录树未上传并为每个选中的文件夹弹出一个对话框：它会等待连接恢复，重新连接并从中断处继续，不会重新发送已经验证过的文件，最多重试十次，与计划的行为一致。此外，与其子文件夹一同选中的文件夹只会被遍历一次；以前两者之下的每个文件都会被同时上传两次。
+
 ## 我们对这个版本的期望
 
 - **直接替换（drop-in）。** 相同的 `sftp.json` 格式、相同的命令、相同的工作流——现有配置无需任何迁移即可使用。
@@ -193,7 +195,7 @@ v1.29.0 针对一个具体症状：扩展仍然把内容没有变化的文件当
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.29.1.vsix
+code --install-extension sftp-1.29.2.vsix
 ```
 
 ## 文档
