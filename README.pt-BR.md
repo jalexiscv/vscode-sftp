@@ -1,7 +1,9 @@
-# SFTP — extensão de sincronização para VS Code (fork corrigido)
+# SFTP Forge — extensão de sincronização para VS Code (fork corrigido)
 
 🌍 [Español](README.md) (base) · [English](README.en.md) · [中文（简体）](README.zh-CN.md) · **Português (BR)** · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/jalexiscv.sftp-forge?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/jalexiscv.sftp-forge)](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)
 [![Release](https://img.shields.io/github/v/release/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/releases)
 [![Licença: MIT](https://img.shields.io/badge/Licença-MIT-yellow.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/issues)
@@ -9,7 +11,8 @@
 **Fork corrigido e mantido por [@jalexiscv](https://github.com/jalexiscv)** da popular extensão de sincronização SFTP/FTP.<br>
 Linhagem: fork de [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp), por sua vez um fork do já não mantido [plugin SFTP do liximomo](https://github.com/liximomo/vscode-sftp.git).
 
-- 📦 **Instalação (releases VSIX):** https://github.com/jalexiscv/vscode-sftp/releases
+- 🛒 **Instalação (Visual Studio Marketplace):** https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge
+- 📦 **Releases VSIX (instalação manual):** https://github.com/jalexiscv/vscode-sftp/releases
 - 🐛 **Relatar problemas:** https://github.com/jalexiscv/vscode-sftp/issues
 - 📄 **Histórico completo de mudanças:** [CHANGELOG.md](CHANGELOG.md)
 
@@ -46,7 +49,7 @@ Em vez de deixar que uma ferramenta usada por milhares de desenvolvedores se deg
 
 ## O que atualizamos
 
-Cada correção foi verificada (build do webpack limpo, 971 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
+Cada correção foi verificada (build do webpack limpo, 979 testes, linter sem erros) antes de ser publicada. O detalhe de cada mudança está em [documents/Changelogs](documents/Changelogs/CHANGELOG.md).
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — alicerces e correções críticas
 
@@ -182,6 +185,8 @@ A v1.30.0 fecha uma lacuna da distribuição fora do Marketplace: o VS Code só 
 
 **v1.30.1 (correção).** Um certificado FTPS que o cliente recusa (cadeia incompleta, autoassinado, vencido ou emitido para outro nome) já não marca cada arquivo como falho nem abre um diálogo por salvamento com o erro bruto do OpenSSL: é tratado como falha de conexão, os planos ficam em espera, as tentativas são retidas por um minuto e um único aviso por servidor diz o que há e a saída (cadeia completa no servidor, ou `"secureOptions": { "rejectUnauthorized": false }` para aceitá-lo sem verificação).
 
+**v1.30.2 (Marketplace).** A extensão agora está no [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge) com o nome **SFTP Forge** (`jalexiscv.sftp-forge`), pois o nome "SFTP" já estava em uso lá; a partir de agora ela é instalada e atualizada por lá. A configuração não muda (`sftp.json` e as configurações `sftp.*`). Se você tinha o build anterior (`jalexiscv.sftp`), o SFTP Forge o desinstala ao ser ativado e pede para recarregar a janela.
+
 ## O que esperamos desta versão
 
 - **Um substituto direto (drop-in).** O mesmo formato de `sftp.json`, os mesmos comandos, os mesmos fluxos de trabalho — as configurações existentes funcionam sem nenhuma migração.
@@ -196,7 +201,22 @@ A v1.30.0 fecha uma lacuna da distribuição fora do Marketplace: o VS Code só 
 
 > ⚠️ **Desinstale ou desabilite primeiro qualquer outra extensão SFTP** (a do liximomo ou a do Natizyskunk): elas registram os mesmos comandos `sftp.*` e entrarão em conflito com esta.
 
-1. Baixe o `sftp-x.y.z.vsix` mais recente na [página de Releases](https://github.com/jalexiscv/vscode-sftp/releases).
+### Pelo Visual Studio Marketplace (recomendado)
+
+1. No VS Code, abra Extensões (Ctrl + Shift + X).
+2. Pesquise **SFTP Forge** (publisher: `jalexiscv`) e clique em **Instalar**.
+
+Ou pela linha de comando:
+
+```
+code --install-extension jalexiscv.sftp-forge
+```
+
+Você também pode abrir diretamente a [página do SFTP Forge no Marketplace](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge).
+
+### Instalação manual a partir do VSIX
+
+1. Baixe o `sftp-forge-x.y.z.vsix` mais recente na [página de Releases](https://github.com/jalexiscv/vscode-sftp/releases).
 2. No VS Code, abra Extensões (Ctrl + Shift + X).
 3. Abra o menu "Mais ações" (as reticências no topo) e escolha "Instalar do VSIX…".
 4. Localize o arquivo VSIX e selecione-o.
@@ -206,7 +226,7 @@ A v1.30.0 fecha uma lacuna da distribuição fora do Marketplace: o VS Code só 
 Ou pela linha de comando:
 
 ```
-code --install-extension sftp-1.30.1.vsix
+code --install-extension sftp-forge-1.30.2.vsix
 ```
 
 ## Documentação
