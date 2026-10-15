@@ -1,7 +1,9 @@
-# SFTP — VS Code 同步扩展（修复版分支）
+# SFTP Forge — VS Code 同步扩展（修复版分支）
 
 🌍 [Español](README.md) (base) · [English](README.en.md) · **中文（简体）** · [Português (BR)](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/jalexiscv.sftp-forge?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/jalexiscv.sftp-forge)](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)
 [![发布版本](https://img.shields.io/github/v/release/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/releases)
 [![许可证: MIT](https://img.shields.io/badge/Licencia-MIT-yellow.svg)](LICENSE)
 [![问题](https://img.shields.io/github/issues/jalexiscv/vscode-sftp)](https://github.com/jalexiscv/vscode-sftp/issues)
@@ -9,7 +11,8 @@
 **由 [@jalexiscv](https://github.com/jalexiscv) 修复并维护的分支**，源自广受欢迎的 SFTP/FTP 同步扩展。<br>
 渊源：派生自 [Natizyskunk/vscode-sftp](https://github.com/Natizyskunk/vscode-sftp)，后者又派生自已停止维护的 [liximomo 的 SFTP 插件](https://github.com/liximomo/vscode-sftp.git)。
 
-- 📦 **安装（VSIX 发布版）：** https://github.com/jalexiscv/vscode-sftp/releases
+- 🛒 **安装（Visual Studio Marketplace）：** https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge
+- 📦 **VSIX 发布版（手动安装）：** https://github.com/jalexiscv/vscode-sftp/releases
 - 🐛 **报告问题：** https://github.com/jalexiscv/vscode-sftp/issues
 - 📄 **完整更新历史：** [CHANGELOG.md](CHANGELOG.md)
 
@@ -46,7 +49,7 @@ VSCode-SFTP 允许你在本地目录中添加、编辑或删除文件，并通�
 
 ## 我们更新了什么
 
-每项修复在发布前都经过验证（webpack 构建干净、971 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
+每项修复在发布前都经过验证（webpack 构建干净、979 项测试通过、代码检查无错误）。每个变更的详细信息见 [documents/Changelogs](documents/Changelogs/CHANGELOG.md)。
 
 ### [v1.16.4](https://github.com/jalexiscv/vscode-sftp/releases/tag/v1.16.4) — 根基与关键修复
 
@@ -182,6 +185,8 @@ v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自
 
 **v1.30.1（修复）。** 客户端拒绝的 FTPS 证书（证书链不完整、自签名、已过期或签发给其他主机名）不再把每个文件标记为失败，也不再每次保存都弹出带有原始 OpenSSL 错误的对话框：它被当作连接失败处理，计划进入等待，连接尝试被延后一分钟，每台服务器只提示一次，说明问题所在和解决办法（在服务器上配置完整的证书链，或用 `"secureOptions": { "rejectUnauthorized": false }` 不经验证地接受它）。
 
+**v1.30.2（Marketplace）。** 扩展现已上架 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)，名称为 **SFTP Forge**（`jalexiscv.sftp-forge`），因为那里的 "SFTP" 名称已被占用；今后可直接从 Marketplace 安装和更新。配置不变（`sftp.json` 与 `sftp.*` 设置）。如果你安装过之前的版本（`jalexiscv.sftp`），SFTP Forge 会在激活时将其卸载并提示重新加载窗口。
+
 ## 我们对这个版本的期望
 
 - **直接替换（drop-in）。** 相同的 `sftp.json` 格式、相同的命令、相同的工作流——现有配置无需任何迁移即可使用。
@@ -196,7 +201,22 @@ v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自
 
 > ⚠️ **请先卸载或禁用任何其他 SFTP 扩展**（liximomo 或 Natizyskunk 的版本）：它们注册相同的 `sftp.*` 命令，会与本扩展冲突。
 
-1. 从 [Releases 页面](https://github.com/jalexiscv/vscode-sftp/releases)下载最新的 `sftp-x.y.z.vsix`。
+### 从 Visual Studio Marketplace 安装（推荐）
+
+1. 在 VS Code 中打开扩展视图（Ctrl + Shift + X）。
+2. 搜索 **SFTP Forge**（发布者：`jalexiscv`），点击 **安装**。
+
+或者通过命令行：
+
+```
+code --install-extension jalexiscv.sftp-forge
+```
+
+也可以直接打开 [Marketplace 上的 SFTP Forge 页面](https://marketplace.visualstudio.com/items?itemName=jalexiscv.sftp-forge)。
+
+### 通过 VSIX 手动安装
+
+1. 从 [Releases 页面](https://github.com/jalexiscv/vscode-sftp/releases)下载最新的 `sftp-forge-x.y.z.vsix`。
 2. 在 VS Code 中打开扩展面板（Ctrl + Shift + X）。
 3. 打开"更多操作"菜单（顶部的省略号），选择"从 VSIX 安装…"。
 4. 找到该 VSIX 文件并选中它。
@@ -206,7 +226,7 @@ v1.30.0 补上了在 Marketplace 之外分发的一个缺口：VS Code 只会自
 或者通过命令行：
 
 ```
-code --install-extension sftp-1.30.1.vsix
+code --install-extension sftp-forge-1.30.2.vsix
 ```
 
 ## 文档
