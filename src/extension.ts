@@ -34,6 +34,7 @@ import { whenIdle as whenNoPlanRuns } from './modules/planRunner';
 import { refreshContext as refreshUploadExclusions } from './modules/uploadExclusions';
 import { discardStorageOnVersionChange, extensionVersionOf } from './modules/storageReset';
 import * as updateChecker from './modules/updateChecker';
+import { extensionIdOf, retireLegacyBuild } from './modules/legacyBuild';
 
 // kept module-local rather than on `app`: nothing outside activation needs to
 // reach the view, and `app` is built at import time, before the context exists
@@ -122,6 +123,12 @@ export async function activate(context: vscode.ExtensionContext) {
   } catch (error) {
     reportError(error, 'update checker');
   }
+
+  // the build distributed before the Marketplace (jalexiscv.sftp) registers
+  // the same commands; never blocks the activation
+  retireLegacyBuild(extensionIdOf(context)).catch(error =>
+    reportError(error, 'legacy build')
+  );
 
   const workspaceFolders = getWorkspaceFolders();
   if (!workspaceFolders) {
